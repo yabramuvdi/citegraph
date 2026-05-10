@@ -1,0 +1,92 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Common commands
+
+```bash
+pip install -e ".[dev]"            # editable install with test/lint deps
+pip install -e ".[dev,crossref]"   # add CrossRef/OpenAlex enrichment
+
+pytest                              # full test suite
+pytest tests/test_dedup.py          # one file
+pytest tests/test_dedup.py::test_name -v   # one test
+pytest --cov=citegraph              # with coverage (pytest-cov is installed)
+
+ruff check .                        # lint (CI runs this)
+ruff check --fix .                  # autofix
+
+# CLI smoke test (requires GOOGLE_API_KEY in env or .env)
+citegraph run ./pdfs --out ./out
+
+# Per-stage / progressive runs (each reads prior artifacts from --out):
+citegraph convert ./pdfs --out ./out      # stage 1: PDFs -> markdown/
+citegraph metadata --out ./out            # stage 2: -> papers.csv
+citegraph references --out ./out          # stage 3: -> references_raw.csv
+citegraph dedup --out ./out               # stage 4: -> references.csv, citation_graph.csv
+citegraph enrich --out ./out              # stage 5 (optional): CrossRef/OpenAlex
+citegraph estimate --out ./out            # pre-flight token/cost estimate (no API calls)
+citegraph status --out ./out              # report which artifacts exist
+```
+
+`citegraph run` runs `convert` first, prints a cost estimate, then prompts before any LLM call. Pass `--yes`/`-y` to skip the prompt (useful in CI/automation).
+
+The library mirrors the CLI: every `Pipeline` stage method accepts its input
+explicitly *or* loads it from `out_dir` if called with no arguments. Missing
+upstream artifacts raise `StageNotReadyError` with a hint at the prior step.
+
+`GOOGLE_API_KEY` is required for any path that calls Gemini. Tests avoid the network entirely (see "Testing without network" below).
+
+## Architecture
+
+`citegraph` turns a folder of academic PDFs into three CSVs (`papers.csv`, `references.csv`, `citation_graph.csv`). The whole flow is orchestrated by `Pipeline.run()` in [pipeline.py](src/citegraph/pipeline.py); everything else is a stage it composes.
+
+### Stage pipeline (each stage is checkpointed on disk)
+
+1. **PDFs → markdown** — [pdf_to_markdown.py](src/citegraph/pdf_to_markdown.py) calls `docling`. Output cached as `out_dir/markdown/<stem>.md`. Idempotent: re-runs skip files unless `overwrite_markdown=True`. Docling is imported lazily inside the function so `import citegraph` stays cheap. Pass `recursive=True` (Pipeline kwarg / `--recursive` CLI flag) to walk subdirectories of `pdf_dir`; in that mode cache stems carry the relative path via `cache_stem_for` (e.g. `journal_X/paper.pdf` → `journal_X__paper`) so same-named PDFs in different folders don't clobber each other. Hidden directories (names starting with `.`) are skipped, and a stem-collision pre-check raises a clear `ValueError` before docling is ever invoked.
+2. **markdown → paper metadata** — [extract_metadata.py](src/citegraph/extract_metadata.py) sends each markdown to Gemini with `PaperMetadata` as the structured-output schema. Cached as `out_dir/metadata/<stem>.json`.
+3. **markdown → reference list** — [extract_references.py](src/citegraph/extract_references.py) extracts `list[Reference]` per paper. Cached as `out_dir/references/<stem>.json`. Three non-obvious behaviors wrap the LLM call: (a) before sending, `slice_to_references_section` cuts the markdown to its bibliography section using a strict `##`-style header regex (falls back to the full file when no header matches, so the paper is never dropped); (b) after the response arrives, `response_was_truncated` triggers a one-shot retry at 2× output cap when the bibliography hit `max_output_tokens`, hard-capped at 80k tokens; (c) `estimate_inline_citations` over the body warns at WARNING level when the LLM returned <50% of the references the body appears to cite (gated on ≥10 distinct citations and successful slicing — small bodies and unsliced papers skip the check to avoid noise).
+4. **fuzzy dedup → canonical references + edges** — [dedup.py](src/citegraph/dedup.py) clusters references with a weighted rapidfuzz score over title/authors/journal plus a year window. The `compare_papers` function fails *closed* on genuinely unparseable year data (e.g. a non-numeric string) — preserve that behavior. Missing-year sentinels (the schema's `Year=0`, `None`, or empty string) are treated as "year unknown" and do *not* reject the cluster; title+authors fuzzy carries the decision instead, so a reference cited with a year in one paper still merges with the same reference cited without a year in another. Output: `references.csv` (canonical, indexed by `id`) and `citation_graph.csv` (`citing_id`, `cited_id` edges).
+5. **optional enrichment** — [enrich.py](src/citegraph/enrich.py) hits CrossRef then OpenAlex over the deduplicated references. Gated behind `enrich=True` *and* the `[crossref]` extra (httpx is imported via `_try_import_httpx` so the base install stays light).
+
+The cache layout is owned by `OutLayout` in [io.py](src/citegraph/io.py). If you add a new artifact, add it to `OutLayout` rather than hardcoding paths.
+
+### `CitationGraph` query view
+
+[graph.py](src/citegraph/graph.py) defines `CitationGraph`, a small read-only wrapper over the three output DataFrames (papers, references, edges). It exists to deliver on the package name — without it, the library produces edges in a CSV but offers nothing to traverse. Two constructors: `CitationGraph.from_out_dir(out_dir)` (loads CSVs) and `CitationGraph.from_pipeline_result(result)`. Methods are deliberately scope-tight: `n_papers` / `n_references` / `n_edges`, `top_cited(n)`, `cited_by(paper_id)`, `citers_of(reference_id)`, `to_networkx()`. `networkx` is a *lazy* import so the base install stays light; the import-error message tells the user how to install. Note the asymmetry it preserves: `papers` keeps `id` as a column (matching `papers.csv`), `references` is indexed by `id` (matching `references.csv`) — methods do the right thing on each side, callers rarely need to think about it.
+
+### Per-paper failure isolation
+
+Both per-paper extraction loops (`Pipeline.extract_paper_metadata` and `Pipeline.extract_paper_references`) wrap the per-paper body in `try/except Exception`. A single bad PDF — or one Gemini error after retries are exhausted — is recorded as a `PaperFailure` row and the loop continues with the rest. Failures are persisted as JSONL via `_write_failures` to `out_dir/metadata_failures.jsonl` / `references_failures.jsonl`; the file is *removed* when there are no failures so `path.exists()` <=> failures occurred. The cache is never written for a failed paper, so re-runs naturally retry it. Counts are surfaced in `run_summary.json` (`n_metadata_failures`, `n_references_failures`) and the `citegraph run` CLI emits a yellow warning line with the file paths when either is non-empty.
+
+### Stable IDs
+
+[ids.py](src/citegraph/ids.py) builds slug-style IDs from `(first-author-surname, year, title)` — `p-` prefix for source papers, `r-` for references. IDs must be deterministic across runs (the dedup step assumes the *first* row in a cluster names the cluster), so don't introduce hash-based or row-index-based IDs.
+
+### Gemini wrapper
+
+All provider-specific code lives in [llm.py](src/citegraph/llm.py). Other modules speak Pydantic models, not Gemini types. Three non-obvious behaviors:
+
+- `tenacity` retry with exponential backoff wraps every call.
+- `response_was_truncated(response)` inspects `candidates[*].finish_reason` for `MAX_TOKENS` (defensive against SDK shape variation — works whether `finish_reason` is an enum or a plain string). The references stage uses this to retry once with a 2× output cap *before* falling back to JSON repair; metadata calls don't bother (they're capped at 500 output tokens).
+- `fix_incomplete_json_string` is the last-resort safety net used by `parse_structured_response` when the JSON itself fails to parse (e.g. response truncated despite the retry). If you change the JSON shape that references come back as, also update the repair function.
+
+### Schemas double as DTOs *and* response schemas
+
+`PaperMetadata` / `Reference` in [schemas.py](src/citegraph/schemas.py) are passed to Gemini as `response_schema` and also used as the in-memory record format and the JSON cache format. Renaming fields (`Title`, `Authors_List`, `Journal`, `Year`) breaks both the LLM contract and the on-disk cache simultaneously — bump cache compatibility deliberately. `Authors` is *not* part of the LLM contract: it's a derived `@property` (`", ".join(Authors_List)`) added back in via a `model_dump()` override so CSV/cache writers and downstream consumers (e.g. `dedup.py`) still see a single human-readable string. Old caches that contain an `Authors` key load fine because `extra="ignore"` drops it during validation; the property recomputes on access.
+
+### Configuration
+
+Runtime settings flow through `pydantic-settings` in [config.py](src/citegraph/config.py) (env vars + `.env`). User-facing knobs (dedup weights, threshold, year window, model, enrich) are exposed both on `Pipeline(...)` and on the `citegraph run` CLI in [cli.py](src/citegraph/cli.py); keep those two surfaces in sync when adding a knob.
+
+### Cost estimation
+
+[cost_estimation.py](src/citegraph/cost_estimation.py) gives a pre-flight token + USD estimate for stages 2 and 3 *without making any API calls*. It walks `out_dir/markdown/`, skips files whose `metadata/<stem>.json` and `references/<stem>.json` caches already exist, and runs the same `slice_to_references_section` slicer to size the references-stage input. Surfaced as `Pipeline.estimate_extraction_cost()` and `citegraph estimate`; `citegraph run` calls it after stage 1 and prompts before any LLM call (`--yes` skips). The heuristic constants at the top of the module (`_CHARS_PER_TOKEN`, `_METADATA_OVERHEAD_CHARS`, `_TOKENS_PER_REFERENCE`, etc.) are deliberately rough — adjust them if benchmarks drift. The `_PRICING` table is dated (mid-2025 Gemini rates); update it from https://ai.google.dev/pricing rather than trusting it as ground truth. Unknown models return `cost_usd() == None` and the summary degrades gracefully rather than failing.
+
+### `research/` is not part of the package
+
+Scripts under [research/](research/) are kept for historical context, not installed by pip, excluded from CI, and lint-loosened in `pyproject.toml`. Don't import from `research/` in `src/`.
+
+## Testing without network
+
+Tests must never hit Gemini. The pattern is in [test_pipeline.py](tests/test_pipeline.py): subclass `GeminiClient` with a `_FakeClient` that overrides `generate_structured`, distinguishing metadata vs. references requests by sniffing the prompt text (`"references or bibliography section" in prompt`). Pass it via `Pipeline(client=_FakeClient())`. If you change the prompt strings in `extract_metadata.py` / `extract_references.py`, update the sniff in `_FakeClient` too.

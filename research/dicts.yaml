@@ -1,0 +1,57 @@
+es_main:
+  - recursos de uso común
+  - RUC
+  - bienes públicos
+  - bienes de uso común 
+  - Recursos colectivos
+  - Recursos de propiedad común
+  - Recursos comunitarios
+  - juego de extracción
+  - juego de bienes públicos
+  - Juego del recurso común
+  - Juego de pesca
+  - Juego de la pesca
+  - Juego de riego
+  - Juego de bosques
+  - Juego de agua
+  - Juego de extracción de recursos
+  - Juego de coordinación
+es_context:
+  - Acción colectiva
+  - Gobernanza de recursos
+  - Autogestión
+  - Arreglos institucionales
+  - Dilemas sociales
+  - Tragedia de los comunes
+  - Cooperación
+  - Instituciones informales
+  - Gestión comunitaria
+  - Participación local
+  - Descentralización
+en_main:
+  - Commons
+  - Public goods
+  - Social goods
+  - Shared resources
+  - Collective resources
+  - Collective goods
+  - Common property resources
+  - Common-Pool Resources
+  - Common-Pool Resource Game
+  - Fishing Game 
+  - Forest Management Game
+  - Tragedy of the Commons Game
+  - Threshold Public Goods Game
+  - Voluntary Contribution Mechanism
+  - VCM
+  - Trust Game
+  - Coordination Games
+en_context:
+  - Collective action
+  - Resource governance
+  - Self-governance
+  - Institutional arrangements
+  - Social dilemmas
+  - Tragedy of the commons
+  - Cooperative behavior
+  - Informal institutions
