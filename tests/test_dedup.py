@@ -156,6 +156,81 @@ def test_dedup_collapses_missing_year_duplicates():
     assert mapping.iloc[0] == mapping.iloc[1]
 
 
+def test_compare_papers_merges_first_author_vs_full_author_list():
+    """One record lists only the first author, the other lists all of them."""
+    cfg = DedupConfig()
+    a = {
+        "Title": "Fairness in Simple Bargaining Experiments",
+        "Authors": "Forsythe, R.",
+        "Journal": "Games and Economic Behavior",
+        "Year": 1994,
+    }
+    b = {
+        "Title": "Fairness in Simple Bargaining Experiments",
+        "Authors": "Forsythe, Robert, Horowitz, Joel L., Savin, N. E.",
+        "Journal": "Games and Economic Behavior",
+        "Year": 1994,
+    }
+    assert compare_papers(a, b, cfg) is True
+
+
+def test_compare_papers_merges_title_with_subtitle():
+    """One record has a subtitle, the other doesn't — token_set should still match."""
+    cfg = DedupConfig()
+    a = {
+        "Title": "A Behavioral Approach to the Rational Choice Theory of Collective Action",
+        "Authors": "Ostrom, Elinor",
+        "Journal": "American Political Science Review",
+        "Year": 1998,
+    }
+    b = {
+        "Title": (
+            "A Behavioral approach to the rational choice theory of collective action: "
+            "presidential address, American Political Science Association"
+        ),
+        "Authors": "OSTROM, ELINOR",
+        "Journal": "The American Political Science Review",
+        "Year": 1998,
+    }
+    assert compare_papers(a, b, cfg) is True
+
+
+def test_compare_papers_merges_abbreviated_journal_and_partial_authors():
+    """Abbreviated journal + first-author-only — the classic 'looks like a dup' pattern."""
+    cfg = DedupConfig()
+    a = {
+        "Title": "Public Goods Provision in an Experimental Environment",
+        "Authors": "Isaac, R. Mark, Kenneth F. McCue, Charles R. Plott",
+        "Journal": "Journal of Public Economics",
+        "Year": 1985,
+    }
+    b = {
+        "Title": "Public Goods Provision in an Experimental Environment",
+        "Authors": "R. Mark Isaac",
+        "Journal": "J. Pub. Econ.",
+        "Year": 1985,
+    }
+    assert compare_papers(a, b, cfg) is True
+
+
+def test_compare_papers_rejects_different_papers_by_same_author_same_year():
+    """Guard against the looser scorer accidentally merging distinct works."""
+    cfg = DedupConfig()
+    a = {
+        "Title": "A Behavioral Approach to the Rational Choice Theory of Collective Action",
+        "Authors": "Ostrom, Elinor",
+        "Journal": "American Political Science Review",
+        "Year": 1998,
+    }
+    b = {
+        "Title": "Scaling Up: The Challenge of Self-Governance for Collective Action",
+        "Authors": "Ostrom, Elinor",
+        "Journal": "World Development",
+        "Year": 1998,
+    }
+    assert compare_papers(a, b, cfg) is False
+
+
 def test_dedup_references_returns_stable_ids(sample_references):
     canonical, mapping = dedup_references(sample_references, DedupConfig())
     for cluster_id in mapping.unique():

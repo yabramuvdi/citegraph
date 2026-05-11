@@ -25,8 +25,9 @@ import re
 from dataclasses import dataclass
 
 import pandas as pd
-from rapidfuzz.fuzz import ratio
+from rapidfuzz.fuzz import token_set_ratio
 
+from citegraph._progress import iter_with_progress
 from citegraph.ids import make_reference_id
 
 logger = logging.getLogger(__name__)
@@ -51,9 +52,9 @@ def normalize_text(text: object) -> str:
 class DedupConfig:
     """Tunable thresholds for fuzzy deduplication."""
 
-    title_weight: float = 0.7
-    authors_weight: float = 0.3
-    journal_weight: float = 0.0
+    title_weight: float = 0.65
+    authors_weight: float = 0.25
+    journal_weight: float = 0.10
     year_window: int = 1
     threshold: float = 85.0
 
@@ -95,11 +96,20 @@ def compare_papers(paper1: dict, paper2: dict, cfg: DedupConfig) -> bool:
     Genuinely unparseable values (e.g. a stray non-numeric string) still
     fail closed — see :func:`_read_year`.
     """
-    title_score = ratio(normalize_text(paper1.get("Title")), normalize_text(paper2.get("Title")))
-    authors_score = ratio(
+    # token_set_ratio (rather than plain Levenshtein ratio or token_sort_ratio)
+    # tolerates the two most common citation-style mismatches: a record listing
+    # only the first author ("Bowles, S.") vs the full list ("Samuel Bowles, ..."),
+    # and a title with a subtitle ("...: presidential address, APSA") vs the
+    # bare title. Both patterns scored 77-85 with the previous scorer mix and
+    # slipped under the 85 threshold; token_set_ratio scores them ~100 while
+    # still rejecting genuinely different papers that share only a few tokens.
+    title_score = token_set_ratio(
+        normalize_text(paper1.get("Title")), normalize_text(paper2.get("Title"))
+    )
+    authors_score = token_set_ratio(
         normalize_text(paper1.get("Authors")), normalize_text(paper2.get("Authors"))
     )
-    journal_score = ratio(
+    journal_score = token_set_ratio(
         normalize_text(paper1.get("Journal")), normalize_text(paper2.get("Journal"))
     )
 
@@ -133,6 +143,8 @@ def _row_to_dict(row: pd.Series) -> dict:
 def dedup_references(
     df: pd.DataFrame,
     cfg: DedupConfig | None = None,
+    *,
+    show_progress: bool = True,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Cluster duplicate references and return canonical rows + mapping.
 
@@ -164,7 +176,12 @@ def dedup_references(
     cluster_ids: list[str | None] = [None] * len(df)
     representatives: list[tuple[str, dict]] = []
 
-    for i in range(len(df)):
+    for i in iter_with_progress(
+        list(range(len(df))),
+        show_progress=show_progress,
+        description="Deduplicating references",
+        item_label=lambda idx: f"row {idx + 1}/{len(df)}",
+    ):
         if cluster_ids[i] is not None:
             continue
         paper_i = _row_to_dict(df.iloc[i])
