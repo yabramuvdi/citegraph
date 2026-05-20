@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>citegraph — Build Status</title>
+<style>
+  :root {
+    --paper: #f4ecd9;
+    --paper-edge: #e6d9b6;
+    --ink: #1b1610;
+    --ink-soft: #4a3f2f;
+    --ink-mute: #7a6a52;
+    --card: #fbf5e6;
+    --card-edge: #d8c79e;
+    --rule: #e3d5b0;
+    --accent: #2c5f5a;    /* scholar teal */
+    --accent-2: #a64523;  /* book-cloth red */
+    --accent-3: #b89039;  /* faded gold */
+    --accent-4: #2a3f6e;  /* library navy */
+    --done: #2c5f5a;
+    --wip: #b89039;
+    --scaf: #8a6b2d;
+    --idle: #968870;
+    --block: #a64523;
+    --shadow: 0 1px 0 #fff8e6 inset, 0 2px 0 var(--card-edge), 0 8px 18px rgba(60,40,15,0.10);
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--paper); color: var(--ink); }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    background-image:
+      radial-gradient(circle at 15% 8%, rgba(184,144,57,0.07), transparent 42%),
+      radial-gradient(circle at 85% 55%, rgba(44,95,90,0.05), transparent 50%),
+      repeating-linear-gradient(45deg, rgba(120,90,40,0.02) 0 2px, transparent 2px 6px);
+  }
+  .display {
+    font-family: ui-serif, "Iowan Old Style", "Apple Garamond", Georgia, "Times New Roman", serif;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+
+  header.hero {
+    background: linear-gradient(180deg, #fcf5e0, #f4ecd9);
+    border: 1px solid var(--card-edge);
+    border-radius: 22px;
+    padding: 28px 28px 22px;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+  header.hero::before {
+    content: "";
+    position: absolute; right: -40px; top: -40px; width: 200px; height: 200px;
+    background: conic-gradient(from 210deg, var(--accent-3), var(--accent-2), var(--accent), var(--accent-4), var(--accent-3));
+    filter: blur(46px); opacity: .16; border-radius: 50%;
+  }
+  header .eyebrow {
+    text-transform: uppercase; letter-spacing: .18em; font-size: 12px; font-weight: 600;
+    color: var(--ink-mute);
+  }
+  header h1 {
+    font-size: clamp(30px, 4.4vw, 48px);
+    margin: 6px 0 8px;
+    line-height: 1.05;
+  }
+  header p.tag { margin: 0 0 18px; max-width: 70ch; color: var(--ink-soft); }
+  header .meta {
+    display: flex; flex-wrap: wrap; gap: 10px 18px;
+    font-size: 13px; color: var(--ink-soft);
+  }
+  header .meta b { color: var(--ink); font-weight: 600; }
+  header .meta code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; background: #efe2c4; padding: 1px 6px; border-radius: 6px;
+  }
+
+  .progress {
+    margin-top: 20px;
+    background: #efe2c4; border-radius: 999px; height: 18px;
+    display: flex; overflow: hidden; border: 1px solid var(--card-edge);
+  }
+  .progress span { display: block; height: 100%; }
+  .progress .done { background: var(--done); }
+  .progress .wip  { background: var(--wip); }
+  .progress .scaf { background: var(--scaf); }
+  .progress .idle { background: var(--idle); }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; font-size: 12px;
+    color: var(--ink-soft);
+  }
+  .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+  section { margin-top: 36px; }
+  section > h2 {
+    font-size: 24px; margin: 0 0 12px;
+  }
+  section > p.lede {
+    margin: -4px 0 16px; color: var(--ink-soft); max-width: 72ch;
+  }
+
+  /* Wave bars */
+  .waves {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+  .wave-card {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 16px;
+    padding: 14px 16px 16px;
+    box-shadow: var(--shadow);
+    position: relative;
+  }
+  .wave-card .num {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 36px; font-weight: 700; color: var(--accent);
+    line-height: 1;
+  }
+  .wave-card h3 { margin: 6px 0 4px; font-size: 16px; }
+  .wave-card small { color: var(--ink-mute); }
+  .wave-card .bar { height: 8px; border-radius: 999px; background: #efe2c4; margin-top: 12px; overflow: hidden; display: flex; }
+  .wave-card .bar span { display: block; height: 100%; }
+
+  /* Filters */
+  .toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin-bottom: 14px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--card-edge);
+    background: #fbf5e6;
+    font-size: 13px; color: var(--ink-soft);
+    cursor: pointer; user-select: none;
+  }
+  .pill:hover { border-color: #c9b585; color: var(--ink); }
+  .pill[aria-pressed="true"] {
+    background: var(--ink); color: #fbf5e6; border-color: var(--ink);
+  }
+  .pill .count { font-variant-numeric: tabular-nums; opacity: .75; }
+
+  /* Milestones grid */
+  .milestones {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+  .ms {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 16px;
+    padding: 14px 14px 12px;
+    box-shadow: var(--shadow);
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  .ms .row1 {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; margin-bottom: 6px;
+  }
+  .ms .id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; letter-spacing: .04em;
+    color: var(--ink-mute);
+  }
+  .ms h4 { margin: 0 0 6px; font-size: 16px; line-height: 1.25; }
+  .ms p.why { margin: 0; font-size: 13px; color: var(--ink-soft); }
+  .ms .files {
+    margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed var(--rule);
+    font-size: 12px; color: var(--ink-mute);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    word-break: break-all;
+  }
+  .ms .files b { color: var(--ink-soft); font-weight: 600; }
+  .ms code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; background: #efe2c4; padding: 0 4px; border-radius: 4px;
+  }
+
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .badge.done  { background: #d8e6df; color: var(--done); border: 1px solid #aec5bb; }
+  .badge.wip   { background: #f5e6c0; color: #8a6712; border: 1px solid #e0c485; }
+  .badge.scaf  { background: #ecdcb6; color: var(--scaf); border: 1px solid #d2b97f; }
+  .badge.idle  { background: #ece3d0; color: #6b5d49; border: 1px solid #cdbf9f; }
+  .badge.block { background: #f3d8c8; color: var(--block); border: 1px solid #e2ad95; }
+  .badge.ok    { background: #d8e6df; color: var(--done); border: 1px solid #aec5bb; }
+
+  /* Two-column inserts */
+  .grid-2 {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  }
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 16px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .panel h3 { margin: 0 0 8px; font-size: 17px; }
+  .panel ul { padding-left: 18px; margin: 0; }
+  .panel li { margin: 4px 0; color: var(--ink-soft); }
+  .panel li b { color: var(--ink); }
+  .panel code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; background: #efe2c4; padding: 0 4px; border-radius: 4px;
+  }
+
+  /* Open questions table-ish */
+  .oq-list {
+    display: grid; gap: 8px;
+  }
+  .oq {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-left: 4px solid var(--accent-3);
+    border-radius: 12px;
+    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: 70px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    font-size: 14px;
+  }
+  .oq.blocker { border-left-color: var(--accent-2); }
+  .oq .oqid {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; font-weight: 600; color: var(--ink);
+  }
+  .oq .blocks {
+    font-size: 12px; color: var(--ink-mute); white-space: nowrap;
+  }
+
+  /* Invariant cards */
+  .risk {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 14px;
+    padding: 12px 14px;
+    box-shadow: var(--shadow);
+  }
+  .risk h4 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .risk p { margin: 0; font-size: 13px; color: var(--ink-soft); }
+  .risk .where {
+    margin-top: 6px; font-size: 12px; color: var(--ink-mute);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  /* How-to footer */
+  .howto {
+    margin-top: 36px;
+    background: linear-gradient(180deg, #fcf5e0, #f4ecd9);
+    border: 1px solid var(--card-edge);
+    border-radius: 18px;
+    padding: 22px 24px;
+    box-shadow: var(--shadow);
+  }
+  .howto h2 { margin: 0 0 8px; }
+  .howto code {
+    background: #efe2c4; padding: 1px 6px; border-radius: 6px;
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  footer.foot {
+    margin-top: 30px; color: var(--ink-mute); font-size: 12px; text-align: center;
+  }
+
+  /* Marbled accent row */
+  .colorbar {
+    display: flex; height: 6px; border-radius: 999px; overflow: hidden;
+    margin: 16px 0 4px;
+    border: 1px solid var(--card-edge);
+  }
+  .colorbar > span { flex: 1; }
+
+  @media (max-width: 600px) {
+    .wrap { padding: 18px 14px 60px; }
+    header.hero { padding: 20px 18px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Source of truth · last updated <span id="updated">2026-05-20</span></div>
+    <h1 class="display">citegraph — Build Status</h1>
+    <p class="tag">A folder of academic PDFs in, a deduplicated citation graph out. The library half is shipped; the human-in-the-loop review surface is the next product step. Agents and humans share this file — edits to plan, status, or blockers happen here first.</p>
+
+    <div class="meta">
+      <span><b>Repo:</b> <code>/Users/yabra/repos/citegraph</code></span>
+      <span><b>Status:</b> pipeline shipped, review-UI pre-implementation</span>
+      <span><b>Pipeline stages live:</b> 6 / 6</span>
+      <span><b>Tests:</b> ~173 across 15 files, no network</span>
+    </div>
+
+    <div class="colorbar" aria-hidden="true">
+      <span style="background:var(--accent)"></span>
+      <span style="background:var(--accent-3)"></span>
+      <span style="background:var(--accent-2)"></span>
+      <span style="background:var(--accent-4)"></span>
+    </div>
+
+    <div class="progress" role="img" aria-label="Overall milestone progress: 9 done, 2 in progress, 1 scaffolded, 13 not started">
+      <span class="done" style="width:36%"></span>
+      <span class="wip"  style="width:8%"></span>
+      <span class="scaf" style="width:4%"></span>
+      <span class="idle" style="width:52%"></span>
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--done)"></i>Done · 9</span>
+      <span><i class="dot" style="background:var(--wip)"></i>In progress · 2</span>
+      <span><i class="dot" style="background:var(--scaf)"></i>Scaffolded · 1</span>
+      <span><i class="dot" style="background:var(--idle)"></i>Not started · 13</span>
+      <span style="margin-left:auto">25 milestones total</span>
+    </div>
+  </header>
+
+  <section>
+    <h2 class="display">Waves</h2>
+    <p class="lede">Five waves, built roughly in order. Waves 0 &amp; 1 are shipped — the library produces all three output CSVs end-to-end. Waves 2 and 3 are pipeline / enrichment refinements. Wave 4 is the human-in-the-loop review UI, which carries the most design weight and is the next real product step.</p>
+    <div class="waves">
+
+      <div class="wave-card">
+        <div class="num">0</div>
+        <h3>Core pipeline</h3>
+        <small>M01 – M06 · PDFs → markdown → metadata → references → dedup → enrich → authors</small>
+        <div class="bar"><span class="done" style="width:67%;background:var(--done)"></span><span class="wip" style="width:33%;background:var(--wip)"></span></div>
+      </div>
+
+      <div class="wave-card">
+        <div class="num">1</div>
+        <h3>Library surface</h3>
+        <small>M07 – M11 · CLI, query view, sidecars, costs, tests</small>
+        <div class="bar"><span class="done" style="width:100%;background:var(--done)"></span></div>
+      </div>
+
+      <div class="wave-card">
+        <div class="num">2</div>
+        <h3>Pipeline refinements</h3>
+        <small>M12 – M15 · concurrency, normalization, ground-truth, canonical-row merging</small>
+        <div class="bar"><span class="idle" style="width:100%;background:var(--idle)"></span></div>
+      </div>
+
+      <div class="wave-card">
+        <div class="num">3</div>
+        <h3>Enrichment expansion</h3>
+        <small>M16 – M19 · Semantic Scholar, fields, source papers, year penalty + retry</small>
+        <div class="bar"><span class="idle" style="width:100%;background:var(--idle)"></span></div>
+      </div>
+
+      <div class="wave-card">
+        <div class="num">4</div>
+        <h3>Review UI</h3>
+        <small>M20 – M25 · eval modes, web shell, four checkpoint views</small>
+        <div class="bar">
+          <span class="scaf" style="width:17%;background:var(--scaf)"></span>
+          <span class="idle" style="width:83%;background:var(--idle)"></span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="display">Milestones</h2>
+    <p class="lede">Click a filter to focus. Each card lists verdict, why, and the file we used to verify. Update both the badge and the <code>data-status</code> attribute when status changes.</p>
+
+    <div class="toolbar" role="tablist" aria-label="Filter milestones by status">
+      <button class="pill" data-filter="all" aria-pressed="true">All <span class="count">25</span></button>
+      <button class="pill" data-filter="done" aria-pressed="false"><i class="dot" style="background:var(--done)"></i>Done <span class="count">9</span></button>
+      <button class="pill" data-filter="wip" aria-pressed="false"><i class="dot" style="background:var(--wip)"></i>In progress <span class="count">2</span></button>
+      <button class="pill" data-filter="scaf" aria-pressed="false"><i class="dot" style="background:var(--scaf)"></i>Scaffolded <span class="count">1</span></button>
+      <button class="pill" data-filter="idle" aria-pressed="false"><i class="dot" style="background:var(--idle)"></i>Not started <span class="count">13</span></button>
+      <button class="pill" data-filter="block" aria-pressed="false" style="margin-left:auto"><i class="dot" style="background:var(--block)"></i>Blocked</button>
+    </div>
+
+    <div class="milestones" id="ms-grid">
+
+      <!-- Wave 0 — Core pipeline -->
+      <article class="ms" data-status="done" data-wave="0">
+        <div class="row1"><span class="id">M01 · W0</span><span class="badge done">Done</span></div>
+        <h4>PDF → markdown (docling)</h4>
+        <p class="why">Lazy <code>docling</code> import keeps <code>import citegraph</code> cheap. Recursive walk with relative-path cache stems prevents same-name collisions; full-page OCR via EasyOCR for scanned PDFs; image-only detection writes <code>conversion_warnings.json</code> when output looks like a bitmap dump.</p>
+        <div class="files"><b>files:</b> src/citegraph/pdf_to_markdown.py · src/citegraph/pipeline.py (_check_conversion_quality)</div>
+      </article>
+
+      <article class="ms" data-status="done" data-wave="0">
+        <div class="row1"><span class="id">M02 · W0</span><span class="badge done">Done</span></div>
+        <h4>Metadata extraction (Gemini)</h4>
+        <p class="why"><code>PaperMetadata</code> doubles as response schema and on-disk cache format. Per-paper cache under <code>metadata/&lt;stem&gt;.json</code>; source-duplicate detection runs over the batch via <code>compare_papers</code> and writes <code>source_duplicates.json</code>.</p>
+        <div class="files"><b>files:</b> src/citegraph/extract_metadata.py · src/citegraph/schemas.py</div>
+      </article>
+
+      <article class="ms" data-status="done" data-wave="0">
+        <div class="row1"><span class="id">M03 · W0</span><span class="badge done">Done</span></div>
+        <h4>Reference extraction (Gemini)</h4>
+        <p class="why">Three non-obvious behaviours: bibliography-section slicing, one-shot truncation retry at 2× output cap on <code>MAX_TOKENS</code> finish, and inline-citation sanity check that warns when extracted refs &lt; 50% of body citations. <code>papers_no_references.json</code> records papers that came back empty.</p>
+        <div class="files"><b>files:</b> src/citegraph/extract_references.py</div>
+      </article>
+
+      <article class="ms" data-status="done" data-wave="0">
+        <div class="row1"><span class="id">M04 · W0</span><span class="badge done">Done</span></div>
+        <h4>Fuzzy deduplication</h4>
+        <p class="why">Rapidfuzz <code>token_set_ratio</code> over title / authors / journal plus a year window. Fails closed on unparseable years; missing-year sentinels (<code>Year=0</code>) don't reject a cluster. First-row-wins names the cluster, preserving ID stability across runs.</p>
+        <div class="files"><b>files:</b> src/citegraph/dedup.py</div>
+      </article>
+
+      <article class="ms" data-status="wip" data-wave="0">
+        <div class="row1"><span class="id">M05 · W0</span><span class="badge wip">In progress</span></div>
+        <h4>CrossRef / OpenAlex enrichment</h4>
+        <p class="why">Code shipped + unit-tested (19 OpenAlex-touching assertions in <code>test_enrich.py</code> — happy path, HTTP error, empty-title guard, CrossRef→OpenAlex fallback, all offline via mocked <code>httpx</code>). <em>Not demonstrated on a real corpus yet:</em> the 93-paper run in <code>out/</code> was done without <code>--enrich</code>, <code>out/enrichment/</code> is empty, no <code>enriched_references.csv</code> exists. Production validation against live OpenAlex + a real match-rate measurement is the remaining step.</p>
+        <div class="files"><b>files:</b> src/citegraph/enrich.py · tests/test_enrich.py</div>
+      </article>
+
+      <article class="ms" data-status="wip" data-wave="0">
+        <div class="row1"><span class="id">M06 · W0</span><span class="badge wip">In progress</span></div>
+        <h4>Author normalization</h4>
+        <p class="why">Code shipped + unit-tested (26 tests in <code>test_authors.py</code>, the largest test file). Surname blocking, precision-first clustering (full-first-name anchors; initial-only merges only when unambiguous), OpenAlex / ORCID IDs override string evidence, <code>author_aliases.csv</code> applied last, low-confidence clusters surfaced in <code>author_review.json</code>. <em>Not demonstrated on a real corpus yet:</em> <code>out/</code> has no <code>authors.csv</code> / <code>author_citations.csv</code> — the stage has never been run end-to-end on the 93-paper corpus. Depends on M05 running first to take advantage of OpenAlex IDs.</p>
+        <div class="files"><b>files:</b> src/citegraph/authors.py · tests/test_authors.py</div>
+      </article>
+
+      <!-- Wave 1 — Library surface -->
+      <article class="ms" data-status="done" data-wave="1">
+        <div class="row1"><span class="id">M07 · W1</span><span class="badge done">Done</span></div>
+        <h4>CLI surface</h4>
+        <p class="why"><code>citegraph run</code> orchestrates the full pipeline with a pre-flight cost prompt; per-stage entry points (<code>convert</code>, <code>metadata</code>, <code>references</code>, <code>dedup</code>, <code>enrich</code>, <code>authors</code>) all read prior artifacts from <code>--out</code>. <code>estimate</code> and <code>status</code> are read-only helpers.</p>
+        <div class="files"><b>files:</b> src/citegraph/cli.py</div>
+      </article>
+
+      <article class="ms" data-status="done" data-wave="1">
+        <div class="row1"><span class="id">M08 · W1</span><span class="badge done">Done</span></div>
+        <h4>CitationGraph query view</h4>
+        <p class="why">Read-only wrapper delivering on the package name. <code>from_out_dir</code> / <code>from_pipeline_result</code> constructors, scope-tight methods (<code>top_cited</code>, <code>cited_by</code>, <code>citers_of</code>), and lazy <code>networkx</code> export. Loads author tables when present and unlocks <code>top_cited_authors</code> / <code>find_author</code> / <code>citations_of</code>.</p>
+        <div class="files"><b>files:</b> src/citegraph/graph.py</div>
+      </article>
+
+      <article class="ms" data-status="done" data-wave="1">
+        <div class="row1"><span class="id">M09 · W1</span><span class="badge done">Done</span></div>
+        <h4>Failure isolation &amp; sidecars</h4>
+        <p class="why">Per-paper try/except in both extraction loops; failures recorded to <code>metadata_failures.jsonl</code> / <code>references_failures.jsonl</code> without writing cache, so re-runs retry. Six sidecar files (conversion warnings, source duplicates, no-references, two failure logs, author review) all follow the "absent = clean" convention.</p>
+        <div class="files"><b>files:</b> src/citegraph/pipeline.py (_write_failures, _write_no_references)</div>
+      </article>
+
+      <article class="ms" data-status="done" data-wave="1">
+        <div class="row1"><span class="id">M10 · W1</span><span class="badge done">Done</span></div>
+        <h4>Cost estimation (pre-flight)</h4>
+        <p class="why">Token + USD estimate for stages 2-3 without API calls. Honours the cache (already-extracted papers don't count) and uses the same bibliography slicer as stage 3 for accurate input sizing. Pricing table at top of module needs periodic refresh against ai.google.dev/pricing.</p>
+        <div class="files"><b>files:</b> src/citegraph/cost_estimation.py</div>
+      </article>
+
+      <article class="ms" data-status="done" data-wave="1">
+        <div class="row1"><span class="id">M11 · W1</span><span class="badge done">Done</span></div>
+        <h4>Test suite (no network)</h4>
+        <p class="why">~173 tests across 15 files, every test runs offline. Pattern: subclass <code>GeminiClient</code> with a <code>_FakeClient</code> that sniffs the prompt to distinguish metadata from references. CI runs <code>ruff check</code> + <code>pytest</code> on Python 3.10 / 3.11 / 3.12.</p>
+        <div class="files"><b>files:</b> tests/ · tests/test_pipeline.py (_FakeClient)</div>
+      </article>
+
+      <!-- Wave 2 — Pipeline refinements -->
+      <article class="ms" data-status="idle" data-wave="2">
+        <div class="row1"><span class="id">M12 · W2</span><span class="badge idle">Not started</span></div>
+        <h4>Concurrent LLM calls</h4>
+        <p class="why">Both extraction stages are sequential — round-trips dominate wall-clock on large corpora. Add a thread/async pool around the per-paper loops, capped via <code>CITEGRAPH_LLM_CONCURRENCY</code>. Cache layer already isolates per-paper failures, so a worker error is contained. Highest-leverage productivity item in Wave 2.</p>
+        <div class="files"><b>blocked by:</b> OQ-05 (concurrency default)</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="2">
+        <div class="row1"><span class="id">M13 · W2</span><span class="badge idle">Not started</span></div>
+        <h4>Deterministic field normalization</h4>
+        <p class="why">Drop the "no dirty characters" instruction from the metadata prompt (unverifiable, model-dependent). Replace with Python-side NFC unicode normalization, control-char stripping, whitespace collapse, ligature fixes (<code>ﬁ</code>→<code>fi</code>). Apply uniformly to <code>PaperMetadata</code> and <code>Reference</code> fields.</p>
+        <div class="files"><b>files:</b> src/citegraph/extract_metadata.py · src/citegraph/schemas.py</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="2">
+        <div class="row1"><span class="id">M14 · W2</span><span class="badge idle">Not started</span></div>
+        <h4>PDF / DOI / arXiv ground-truth cross-check</h4>
+        <p class="why">Optional validation pass: pull PDF <code>/Title</code>+<code>/Author</code> during the docling stage, resolve DOIs via CrossRef where present, compare with the LLM result, log disagreements. PDF metadata is notoriously unreliable so use it as a cross-check, not a replacement.</p>
+        <div class="files"><b>files:</b> src/citegraph/pdf_to_markdown.py · src/citegraph/extract_metadata.py</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="2">
+        <div class="row1"><span class="id">M15 · W2</span><span class="badge idle">Not started</span></div>
+        <h4>Smarter canonical-record construction in dedup</h4>
+        <p class="why">Keep first-row-wins for the cluster <em>ID</em> (preserves stability), but build the canonical <em>record</em> by merging across all cluster members: prefer non-sentinel years, longest titles, non-empty journals. Particularly relevant now that missing-year tolerance lets weaker-data members into clusters.</p>
+        <div class="files"><b>files:</b> src/citegraph/dedup.py</div>
+      </article>
+
+      <!-- Wave 3 — Enrichment expansion -->
+      <article class="ms" data-status="idle" data-wave="3">
+        <div class="row1"><span class="id">M16 · W3</span><span class="badge idle">Not started</span></div>
+        <h4>Semantic Scholar as third source</h4>
+        <p class="why">Add <code>_semantic_scholar_lookup</code> as a third fallback after OpenAlex. S2 returns abstracts directly (no inverted-index reconstruction), citation counts, and influence scores. Better coverage for preprints + CS/ML workshop papers where OpenAlex is thin.</p>
+        <div class="files"><b>files:</b> src/citegraph/enrich.py</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="3">
+        <div class="row1"><span class="id">M17 · W3</span><span class="badge idle">Not started</span></div>
+        <h4>Additional enriched fields</h4>
+        <p class="why">Capture <code>cited_by_count</code> (rank refs by influence), <code>oa_url</code> (direct OA PDF link), <code>abstract</code> (reconstructed from OpenAlex <code>abstract_inverted_index</code> or fetched directly from S2). Additive — only on <code>enriched_references.csv</code>, not on the dedup schema.</p>
+        <div class="files"><b>files:</b> src/citegraph/enrich.py (_normalize_record)</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="3">
+        <div class="row1"><span class="id">M18 · W3</span><span class="badge idle">Not started</span></div>
+        <h4>Source-paper enrichment</h4>
+        <p class="why">Same pass over <code>papers.csv</code>, output to <code>enriched_papers.csv</code>. Source papers are typically easier to resolve (higher-quality LLM extraction, more likely to have DOIs in the PDF). Reuse <code>enrich_references</code>; DataFrame schema is compatible.</p>
+        <div class="files"><b>files:</b> src/citegraph/enrich.py · src/citegraph/pipeline.py</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="3">
+        <div class="row1"><span class="id">M19 · W3</span><span class="badge idle">Not started</span></div>
+        <h4>Year-penalized matching + retry/rate-limit</h4>
+        <p class="why">Two enrichment-quality items bundled. (a) Subtract a year-difference penalty in <code>_best_match</code> so same-title-different-year papers (annual reports, recurring workshops) stop passing the threshold. (b) Wrap HTTP calls with <code>tenacity</code> for 429/503 backoff so rate limits don't silently look like no-match.</p>
+        <div class="files"><b>files:</b> src/citegraph/enrich.py</div>
+      </article>
+
+      <!-- Wave 4 — Review UI -->
+      <article class="ms" data-status="idle" data-wave="4">
+        <div class="row1"><span class="id">M20 · W4</span><span class="badge idle">Not started</span></div>
+        <h4>eval_mode infrastructure</h4>
+        <p class="why">Foundational. A unified <code>eval_mode</code> parameter on <code>Pipeline(...)</code> + <code>--eval</code> on the CLI: <code>auto</code> (default) / <code>terminal</code> / <code>web</code>. Decisions persist to <code>eval_decisions.jsonl</code> keyed by file stem and item index; re-runs replay decisions instead of re-prompting. Checkpoints fire after each batch completes, before CSVs are written.</p>
+        <div class="files"><b>blocked by:</b> OQ-01 (decision schema), OQ-04 (sample sizes), OQ-07 (re-extraction strategy)</div>
+      </article>
+
+      <article class="ms" data-status="scaf" data-wave="4">
+        <div class="row1"><span class="id">M21 · W4</span><span class="badge scaf">Scaffolded</span></div>
+        <h4>Web UI shell, design system &amp; keyboard grammar</h4>
+        <p class="why">The full design is locked in the previous roadmap: justadesignlist.com aesthetic — <code>#f5f4f1</code> paper, <code>#111</code> ink, <code>#999</code> secondary, <code>#e0e0df</code> hairlines, Geist body + JetBrains Mono numerals + optional Instrument Serif for display headings only. Keyboard grammar: <code>j/k</code> nav, <code>a/r/e/u</code> actions. Single "reading line" hairline animates above the active row — only animation on the page. No code yet.</p>
+        <div class="files"><b>blocked by:</b> M20 · OQ-02 (server framework)</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="4">
+        <div class="row1"><span class="id">M22 · W4</span><span class="badge idle">Not started</span></div>
+        <h4>Checkpoint 1 — Metadata review</h4>
+        <p class="why">Smallest checkpoint, validates the framework. Random sample of N papers after <code>extract_paper_metadata</code> finishes; list-of-rows layout with filename left, extracted fields right; inline edit on any value. Corrections overwrite the per-paper <code>metadata/&lt;stem&gt;.json</code> cache.</p>
+        <div class="files"><b>blocked by:</b> M20, M21</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="4">
+        <div class="row1"><span class="id">M23 · W4</span><span class="badge idle">Not started</span></div>
+        <h4>Checkpoint 2 — References (broadsheet-fold)</h4>
+        <p class="why">Two-column "book spread" layout: left renders the paper's bibliography section (loaded from cached markdown, sliced with <code>slice_to_references_section</code>) as flowing prose; right lists extracted <code>Reference</code> objects, one per row, with inline edit. Correspondence highlight — translucent amber wash on the matching span when a row is focused. Primary verification affordance.</p>
+        <div class="files"><b>blocked by:</b> M20, M21</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="4">
+        <div class="row1"><span class="id">M24 · W4</span><span class="badge idle">Not started</span></div>
+        <h4>Checkpoint 3 — Dedup borderline review</h4>
+        <p class="why">Scope-limit the prompts: only borderline pairs (weighted score within ±5 of threshold, year diff at the edge of the window, or missing-year merges) are asked. Definite matches and non-matches stay automatic. Confidence bar (proportional black bar = score / 100) right of the data columns. Decisions to <code>dedup_decisions.jsonl</code>.</p>
+        <div class="files"><b>blocked by:</b> M20, M21 · OQ-03 (borderline window)</div>
+      </article>
+
+      <article class="ms" data-status="idle" data-wave="4">
+        <div class="row1"><span class="id">M25 · W4</span><span class="badge idle">Not started</span></div>
+        <h4>Checkpoint 4 — Author cluster review &amp; alias curation</h4>
+        <p class="why">Two views sharing the hairline list-row anatomy. (a) Cluster review: rows from <code>author_review.json</code> (low-confidence clusters with no full name + no co-author overlap + no external id) shown with raw author strings, surnames, initials, citation count — accept/reject/split. (b) Alias curation: pick two cluster ids, mark "same person", and the UI appends to <code>author_aliases.csv</code>.</p>
+        <div class="files"><b>blocked by:</b> M20, M21</div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="display">Next 3 things to do</h2>
+    <p class="lede">If you walk in cold, start here. M12 is a quick productivity win independent of everything else; M20+M21 are the foundation for the entire review-UI wave.</p>
+    <div class="grid-2">
+      <div class="panel">
+        <h3>1 — Ship M12 (concurrent LLM calls)</h3>
+        <p style="color:var(--ink-soft);margin:0 0 8px">Lowest-risk, highest-immediate-value item. The cache layer already isolates per-paper failures, so a thread/async pool around <code>extract_paper_metadata</code> and <code>extract_paper_references</code> is largely additive. Add a <code>CITEGRAPH_LLM_CONCURRENCY</code> setting (resolve OQ-05 default first — probably 4 or 8). On the ~93-paper corpus already in <code>out/</code> this should cut extraction wall-clock by &gt;5×.</p>
+        <p style="margin:0;font-size:13px;color:var(--ink-mute)">Touches: <code>src/citegraph/pipeline.py</code>, <code>src/citegraph/config.py</code>, <code>src/citegraph/cli.py</code>.</p>
+      </div>
+      <div class="panel">
+        <h3>2 — Ship M20 (eval_mode infrastructure)</h3>
+        <p style="color:var(--ink-soft);margin:0 0 8px">The foundation for Wave 4. <code>Pipeline(eval_mode="auto"|"terminal"|"web")</code> + <code>--eval</code> flag; a sampler that draws N items per checkpoint deterministically (seed in <code>out_dir</code>); a <code>eval_decisions.jsonl</code> reader/writer; and the hook in <code>Pipeline.run()</code> that fires checkpoints between stage batches and re-extracts only the affected per-paper caches. The terminal mode lands first because it doesn't need a server.</p>
+        <p style="margin:0;font-size:13px;color:var(--ink-mute)">Touches: <code>src/citegraph/pipeline.py</code>, new <code>src/citegraph/review/</code> package, <code>src/citegraph/cli.py</code>.</p>
+      </div>
+      <div class="panel">
+        <h3>3 — Ship M21 (web UI shell)</h3>
+        <p style="color:var(--ink-soft);margin:0 0 8px">Design is locked — see the M21 card. Decide OQ-02 first (FastAPI gives async + websockets cheaply; stdlib <code>http.server</code> keeps deps minimal but means polling). Build the entry page (item-count summary + Begin →), the fixed 40 px header, the 1200 px content frame, the row component, and the keyboard handler. <em>No checkpoint logic yet</em> — that's M22-M25. Land each checkpoint as a separate PR once the shell is in.</p>
+        <p style="margin:0;font-size:13px;color:var(--ink-mute)">Touches: new <code>src/citegraph/review/server.py</code>, <code>src/citegraph/review/static/</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="display">Open questions</h2>
+    <p class="lede">Deferred decisions, ordered by blast radius. Resolve at the top of the relevant milestone — don't paper over them.</p>
+
+    <div class="oq-list">
+      <div class="oq blocker"><span class="oqid">OQ-01</span><span><b>Decision schema for <code>eval_decisions.jsonl</code>.</b> Keying by file stem + item index is fine for metadata / references; dedup is naturally keyed by unordered cluster-pair id; author cluster review is keyed by cluster id. One unified schema or three? Compatibility on re-runs depends on this.</span><span class="blocks">M20, M22-M25</span></div>
+      <div class="oq blocker"><span class="oqid">OQ-02</span><span><b>Web UI server framework.</b> FastAPI (async, websockets, +deps) vs stdlib <code>http.server</code> (zero deps, polling). The "review-only" use case is small enough that stdlib could work; FastAPI is friendlier for the future.</span><span class="blocks">M21</span></div>
+      <div class="oq"><span class="oqid">OQ-03</span><span><b>Borderline-pair scope for dedup review.</b> The roadmap suggests ±5 around threshold, year diff at edge of window, missing-year merges. Pick concrete numbers and document the rationale before M24.</span><span class="blocks">M24</span></div>
+      <div class="oq"><span class="oqid">OQ-04</span><span><b>Default sample sizes per checkpoint.</b> Roadmap suggests 5 papers (metadata), 3 papers × 5 refs (references). Validate on the existing ~93-paper corpus — too low loses signal, too high becomes drudgery.</span><span class="blocks">M20, M22-M23</span></div>
+      <div class="oq"><span class="oqid">OQ-05</span><span><b><code>CITEGRAPH_LLM_CONCURRENCY</code> default.</b> Gemini's free tier has a per-minute cap; paid is generous. 4 is safe everywhere; 8-16 maximizes throughput on paid. Pick a default that doesn't surprise free-tier users.</span><span class="blocks">M12</span></div>
+      <div class="oq"><span class="oqid">OQ-06</span><span><b>Gemini pricing-table refresh policy.</b> The table in <code>cost_estimation.py</code> is dated mid-2025. Decide whether it's manually refreshed on each release or fetched at runtime (cached).</span><span class="blocks">M10 maintenance</span></div>
+      <div class="oq"><span class="oqid">OQ-07</span><span><b>Re-extraction strategy after a checkpoint edit.</b> When the user edits a metadata field, do we (a) just overwrite the cache, (b) re-validate by calling the LLM again, or (c) mark the paper and require explicit re-run? (a) is simplest, (c) is most defensive.</span><span class="blocks">M20, M22</span></div>
+      <div class="oq"><span class="oqid">OQ-08</span><span><b>Author cluster review confidence criteria.</b> <code>author_review.json</code> currently flags initial-only + several citations + no external id. Should also flag clusters where OpenAlex IDs <em>conflict</em> (same surname-name but different OpenAlex id across rows) — a stronger signal than "no id at all".</span><span class="blocks">M25, src/citegraph/authors.py</span></div>
+      <div class="oq"><span class="oqid">OQ-09</span><span><b>Source-paper dedup output.</b> M18 produces <code>enriched_papers.csv</code>, but should source papers ALSO go through a dedup pass against <code>references.csv</code> to detect "this source paper is also cited by another source paper"? Useful for author-graph completeness.</span><span class="blocks">M18 follow-up</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="display">Invariants &amp; safety nets in current code</h2>
+    <p class="lede">Properties the current pipeline depends on. Re-verify each time you touch the surrounding code — these are the things that fail silently if broken.</p>
+    <div class="grid-2">
+      <div class="risk">
+        <h4>AE-01 ID stability across runs <span class="badge ok">Held</span></h4>
+        <p>Stable slug IDs from <code>(surname, year, title)</code> for papers / references; <code>(surname_norm, given_token)</code> for authors with numeric suffix on genuine collisions. Hash-based or row-index IDs are forbidden — the dedup step assumes the <em>first</em> row in a cluster names the cluster.</p>
+        <div class="where">src/citegraph/ids.py · src/citegraph/authors.py (_make_author_id)</div>
+      </div>
+      <div class="risk">
+        <h4>AE-02 Cache compatibility on schema change <span class="badge ok">Held</span></h4>
+        <p>Pydantic <code>extra="ignore"</code> drops unknown keys (so old caches with a stored <code>Authors</code> field still load); <code>Authors</code> is a derived <code>@property</code> recomputed from <code>Authors_List</code>. Renaming a schema field breaks LLM contract + on-disk cache simultaneously — bump cache compatibility deliberately.</p>
+        <div class="where">src/citegraph/schemas.py</div>
+      </div>
+      <div class="risk">
+        <h4>AE-03 Per-paper failure isolation <span class="badge ok">Held</span></h4>
+        <p>Each per-paper extraction body is wrapped in <code>try/except Exception</code>. On failure: row appended to <code>metadata_failures.jsonl</code> / <code>references_failures.jsonl</code>, cache <em>not</em> written, loop continues. Sidecar file is removed when the run ends clean — <code>path.exists()</code> ⇔ failures occurred.</p>
+        <div class="where">src/citegraph/pipeline.py (extract_paper_metadata / extract_paper_references / _write_failures)</div>
+      </div>
+      <div class="risk">
+        <h4>AE-04 LLM truncation safety <span class="badge ok">Held</span></h4>
+        <p>References stage: <code>response_was_truncated</code> inspects <code>finish_reason</code> (enum or string, both shapes handled) and retries once at 2× output cap, capped at 80k. If JSON still fails to parse, <code>fix_incomplete_json_string</code> is the last-resort repair. Changing the JSON shape of references requires also updating the repair function.</p>
+        <div class="where">src/citegraph/llm.py · src/citegraph/extract_references.py</div>
+      </div>
+      <div class="risk">
+        <h4>AE-05 OpenAlex IDs preserved through dedup <span class="badge ok">Held</span></h4>
+        <p><code>OpenAlex_Authors</code> carries OpenAlex <code>author.id</code> + ORCID, positionally aligned with <code>Authors_List</code>, from the enrichment stage into <code>enriched_references.csv</code>. The author stage treats these as ground truth for identity (same id ⇒ same cluster; different ids ⇒ different clusters). Dropping the column degrades author normalization to string-only evidence.</p>
+        <div class="where">src/citegraph/enrich.py (_normalize_record) · src/citegraph/authors.py</div>
+      </div>
+      <div class="risk">
+        <h4>AE-06 Bibliography slice never drops the paper <span class="badge ok">Held</span></h4>
+        <p><code>slice_to_references_section</code> uses a strict <code>##</code>-style header regex but falls back to the full markdown when no header matches, so a paper with an oddly-styled bibliography section still gets processed end-to-end (just with more input tokens). The inline-citation sanity check is gated on successful slicing to avoid false-positive warnings on unsliced papers.</p>
+        <div class="where">src/citegraph/extract_references.py</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="display">Conventions worth surfacing</h2>
+    <div class="grid-2">
+      <div class="panel">
+        <h3>Code</h3>
+        <ul>
+          <li><b>Schemas are DTOs <em>and</em> LLM response schemas.</b> <code>PaperMetadata</code> / <code>Reference</code> are passed to Gemini as <code>response_schema</code> and used as the on-disk cache format. Renaming fields breaks both contracts at once.</li>
+          <li><b>Per-stage I/O lives in <code>OutLayout</code>.</b> Don't hardcode paths under <code>out_dir</code>; add to <code>src/citegraph/io.py</code>.</li>
+          <li><b>Provider isolation.</b> All Gemini-specific code lives in <code>src/citegraph/llm.py</code>. Other modules speak Pydantic, not Gemini types.</li>
+          <li><b>Lazy imports for heavy deps.</b> <code>docling</code> and <code>networkx</code> are imported inside their functions so <code>import citegraph</code> stays cheap.</li>
+          <li><b>Tests never hit Gemini.</b> Use a <code>_FakeClient</code> subclass that sniffs the prompt to distinguish metadata from references — update the sniff if you rewrite prompts.</li>
+          <li><b><code>research/</code> is not in the package.</b> Excluded from CI, lint-loosened. Don't import from it in <code>src/</code>.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Pipeline shape</h3>
+        <ul>
+          <li><b>Every stage is checkpointed.</b> Re-runs skip work that's already done; an interrupted LLM pass doesn't waste API calls.</li>
+          <li><b>Per-stage CLI mirrors <code>Pipeline</code> stage methods.</b> Both surfaces accept input explicitly <em>or</em> read prior artifacts from <code>out_dir</code>; missing upstream raises <code>StageNotReadyError</code> with a hint at the prior step.</li>
+          <li><b>Sidecar files: absent = clean.</b> Six files (<code>conversion_warnings.json</code>, <code>source_duplicates.json</code>, <code>papers_no_references.json</code>, two failure logs, <code>author_review.json</code>) only exist when their condition occurred.</li>
+          <li><b>Counts surface in <code>run_summary.json</code>.</b> Six matching count keys (<code>n_conversion_warnings</code>, <code>n_source_duplicates</code>, …); CLIs emit a yellow line when any are non-empty.</li>
+          <li><b>User-facing knobs live in two places.</b> <code>Pipeline(...)</code> kwargs and the matching CLI flags. Keep them in sync when adding one.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="howto">
+    <h2 class="display">How to use this file</h2>
+    <p style="color:var(--ink-soft); margin: 0 0 10px;">This HTML is the canonical surface for plan + status, replacing <code>ROADMAP.md</code>. Both the human owner and any agent working in the repo edit it directly.</p>
+    <ul style="color:var(--ink-soft); margin: 0; padding-left: 18px;">
+      <li>When a milestone status changes, edit <b>both</b> the badge class and the <code>data-status</code> attribute on the corresponding <code>&lt;article class="ms"&gt;</code>. Then update the counts in the toolbar pills and the header progress bar.</li>
+      <li>When an open question is resolved, remove its row and (if it affected a design decision) drop a one-line note into the relevant milestone's <code>p.why</code>.</li>
+      <li>When you add a new milestone, append an article card, increment the wave's progress bar, and bump the total in the header.</li>
+      <li>Bump <code>#updated</code> in the header to today's date on every meaningful edit.</li>
+      <li>Hold the visual language: warm paper background, hairline cards, monospace IDs, serif display headings. Don't switch the file to dark mode.</li>
+      <li>This file is single-HTML on purpose — open it in any browser, no build step, no deps.</li>
+    </ul>
+  </div>
+
+  <footer class="foot">
+    Generated for /Users/yabra/repos/citegraph. Open <code>STATUS.html</code> in any browser — single file, no build, no deps.
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var grid = document.getElementById('ms-grid');
+    var pills = document.querySelectorAll('.pill[data-filter]');
+    pills.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var f = btn.getAttribute('data-filter');
+        pills.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
+        var cards = grid.querySelectorAll('.ms');
+        cards.forEach(function (c) {
+          if (f === 'all') c.style.display = '';
+          else if (f === 'block') c.style.display = c.getAttribute('data-status') === 'block' ? '' : 'none';
+          else c.style.display = c.getAttribute('data-status') === f ? '' : 'none';
+        });
+      });
+    });
+  })();
+</script>
+</body>
+</html>
