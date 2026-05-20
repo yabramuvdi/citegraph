@@ -122,6 +122,27 @@ deferring it.
       used for status — use weight and position instead.
     - **Vibe.** Editorial / utilitarian. "A quiet page."
 
+## Author normalization in the UI
+
+The author-normalization stage (shipped — see `authors.py` and
+`Pipeline.normalize_authors`) is currently CLI-only. It belongs in the
+review UI for two reasons:
+
+- **Cluster review.** The stage writes `author_review.json` listing
+  low-confidence clusters (common surnames, no full-name evidence, no
+  co-author overlap). These are exactly the rows a human should
+  accept/reject/split — same row anatomy as the dedup review, just with
+  the cluster preview (raw author strings, surnames, initials, n
+  citations) on the right.
+- **Alias curation.** The hand-curated alias CSV that
+  `--aliases` already accepts should be editable in the UI: pick two
+  cluster ids, mark "same person", and the UI appends to the alias
+  file. This avoids the user having to write CSV rows by hand.
+
+Both views share the same hairline list-row design as dedup. The
+cluster-review tab fits naturally as a fourth checkpoint after Dedup in
+the linear evaluation flow (`Metadata → References → Dedup → Authors`).
+
 ## Evaluation Framework (human-in-the-loop)
 
 ### Overview: auto / terminal / web modes

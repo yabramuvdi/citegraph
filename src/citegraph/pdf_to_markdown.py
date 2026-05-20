@@ -76,12 +76,26 @@ def _detect_stem_collisions(pdfs: list[Path], pdf_dir: Path) -> None:
     )
 
 
+def _is_image_only(path: Path, min_text_chars: int = 200) -> bool:
+    """Return True if the markdown appears to contain only images with no real text.
+
+    Scanned PDFs converted by docling without OCR produce files that are mostly
+    ``<!-- image -->`` tags. This heuristic strips those tags and markdown
+    headers to check if any substantive text survives.
+    """
+    text = path.read_text(encoding="utf-8")
+    stripped = text.replace("<!-- image -->", "")
+    lines = [ln for ln in stripped.splitlines() if not ln.lstrip().startswith("#")]
+    return len("".join(lines).strip()) < min_text_chars
+
+
 def convert_pdf_to_markdown(
     pdf_path: Path | str,
     markdown_dir: Path | str,
     *,
     overwrite: bool = False,
     cache_stem: str | None = None,
+    ocr: bool = False,
 ) -> Path:
     """Convert a single PDF to markdown and write it to ``markdown_dir``.
 
@@ -93,6 +107,9 @@ def convert_pdf_to_markdown(
     own ``stem`` is used. Pass an explicit stem (e.g. one produced by
     :func:`cache_stem_for`) to disambiguate same-named PDFs in different
     subdirectories.
+
+    With ``ocr=True``, configures docling to force full-page OCR via EasyOCR,
+    which is needed for scanned PDFs where each page is a bitmap image.
     """
     pdf_path = Path(pdf_path)
     markdown_dir = Path(markdown_dir)
@@ -104,12 +121,26 @@ def convert_pdf_to_markdown(
         logger.debug("Skipping %s (cached at %s)", pdf_path.name, out_path)
         return out_path
 
-    logger.info("Converting %s -> markdown", pdf_path.name)
+    logger.info("Converting %s -> markdown%s", pdf_path.name, " (OCR)" if ocr else "")
     # Imported lazily so ``import citegraph`` stays cheap and so docling is
     # only required when this function is actually called.
     from docling.document_converter import DocumentConverter
 
-    converter = DocumentConverter()
+    if ocr:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import EasyOcrOptions, PdfPipelineOptions
+        from docling.document_converter import PdfFormatOption
+
+        pipeline_options = PdfPipelineOptions(
+            do_ocr=True,
+            ocr_options=EasyOcrOptions(force_full_page_ocr=True),
+        )
+        converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+        )
+    else:
+        converter = DocumentConverter()
+
     result = converter.convert(str(pdf_path))
     out_path.write_text(result.document.export_to_markdown(), encoding="utf-8")
     return out_path
@@ -122,6 +153,7 @@ def convert_directory(
     overwrite: bool = False,
     recursive: bool = False,
     show_progress: bool = True,
+    ocr: bool = False,
 ) -> list[Path]:
     """Convert every PDF under ``pdf_dir`` to markdown.
 
@@ -133,6 +165,8 @@ def convert_directory(
     With ``show_progress=True`` (default) a rich progress bar is rendered
     while the per-PDF loop runs. Pass ``False`` for headless runs / tests
     where the extra stderr output is unwanted.
+
+    With ``ocr=True``, forces full-page OCR via EasyOCR for every PDF.
 
     Returns the list of written markdown files in stable (sorted) order.
     """
@@ -155,7 +189,7 @@ def convert_directory(
         stem = cache_stem_for(pdf, pdf_dir) if recursive else None
         out_paths.append(
             convert_pdf_to_markdown(
-                pdf, markdown_dir, overwrite=overwrite, cache_stem=stem
+                pdf, markdown_dir, overwrite=overwrite, cache_stem=stem, ocr=ocr
             )
         )
     return out_paths

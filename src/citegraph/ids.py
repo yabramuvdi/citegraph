@@ -22,6 +22,9 @@ def _first_author_token(authors: str | list[str]) -> str:
     """
     if isinstance(authors, list):
         first = authors[0] if authors else ""
+    elif not isinstance(authors, str):
+        # NaN or other non-string scalars from pandas
+        return "unknown"
     else:
         first = authors.split(";")[0] if authors else ""
         if "," not in first and " and " in first:
@@ -57,7 +60,8 @@ def make_paper_id(
     """
     author = _first_author_token(authors)
     year_token = str(year) if year not in (None, "") else "nd"
-    title_slug = slugify(title or "untitled", max_length=40, word_boundary=True) or "untitled"
+    title_str = title if isinstance(title, str) else ""
+    title_slug = slugify(title_str or "untitled", max_length=40, word_boundary=True) or "untitled"
     return f"{prefix}-{author}-{year_token}-{title_slug}"
 
 

@@ -11,6 +11,12 @@ See :class:`citegraph.Pipeline` for the high-level entry point::
 
 from __future__ import annotations
 
+from citegraph.authors import (
+    AuthorClusterConfig,
+    ParsedAuthor,
+    normalize_authors,
+    parse_author,
+)
 from citegraph.cost_estimation import ExtractionEstimate
 from citegraph.graph import CitationGraph
 from citegraph.pipeline import Pipeline
@@ -29,6 +35,10 @@ __all__ = [
     "PaperMetadata",
     "Reference",
     "CitationLink",
+    "AuthorClusterConfig",
+    "ParsedAuthor",
+    "normalize_authors",
+    "parse_author",
 ]
 
 __version__ = "0.1.0"

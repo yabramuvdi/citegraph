@@ -41,3 +41,6 @@ htmlcov/
 
 # Pipeline outputs (local runs)
 out/
+
+# specific notebooks
+examples/quickstart_paper4.ipynb

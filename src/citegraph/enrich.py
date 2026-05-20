@@ -153,11 +153,32 @@ def _candidate_title(item: dict, source: str) -> str:
 
 
 def _normalize_record(item: dict, source: str) -> dict:
+    """Flatten a CrossRef or OpenAlex hit into our DataFrame row shape.
+
+    The author lists are returned as parallel arrays:
+
+    - ``Authors_List`` — display names, preserved for backwards compat.
+    - ``OpenAlex_Authors`` — a list of ``{display_name, openalex_id,
+      orcid}`` dicts in the same positional order. Carries the
+      authoritative identifiers that the author-normalization stage
+      uses as ground truth. CrossRef populates ``orcid`` only when the
+      record explicitly carries one; ``openalex_id`` is always ``None``
+      from CrossRef.
+    """
     if source == "crossref":
-        authors = [
-            " ".join(filter(None, [a.get("given"), a.get("family")]))
-            for a in item.get("author", [])
-        ]
+        author_objs = []
+        for a in item.get("author", []):
+            given = a.get("given")
+            family = a.get("family")
+            display = " ".join(filter(None, [given, family]))
+            orcid = a.get("ORCID")
+            if isinstance(orcid, str) and orcid.startswith("http"):
+                # CrossRef returns ORCIDs as full URLs; keep just the id.
+                orcid = orcid.rstrip("/").rsplit("/", 1)[-1]
+            author_objs.append(
+                {"display_name": display, "openalex_id": None, "orcid": orcid}
+            )
+        authors = [a["display_name"] for a in author_objs if a["display_name"]]
         title = (item.get("title") or [""])[0]
         container = item.get("container-title") or [""]
         journal = container[0] if container else ""
@@ -168,11 +189,21 @@ def _normalize_record(item: dict, source: str) -> dict:
         )
         doi = item.get("DOI")
     else:  # openalex
-        authors = [
-            (a.get("author") or {}).get("display_name", "")
-            for a in item.get("authorships", [])
-        ]
-        authors = [a for a in authors if a]
+        author_objs = []
+        for a in item.get("authorships", []):
+            author = a.get("author") or {}
+            display = author.get("display_name", "")
+            oa_id = author.get("id")
+            if isinstance(oa_id, str) and oa_id.startswith("https://openalex.org/"):
+                oa_id = oa_id[len("https://openalex.org/"):]
+            orcid = author.get("orcid")
+            if isinstance(orcid, str) and orcid.startswith("http"):
+                orcid = orcid.rstrip("/").rsplit("/", 1)[-1]
+            if display:
+                author_objs.append(
+                    {"display_name": display, "openalex_id": oa_id, "orcid": orcid}
+                )
+        authors = [a["display_name"] for a in author_objs]
         title = item.get("title") or item.get("display_name") or ""
         journal = (item.get("primary_location") or {}).get("source", {}).get("display_name") or ""
         year = item.get("publication_year")
@@ -185,6 +216,7 @@ def _normalize_record(item: dict, source: str) -> dict:
         "Title": title,
         "Authors_List": authors,
         "Authors": ", ".join(authors),
+        "OpenAlex_Authors": author_objs,
         "Journal": journal,
         "Year": int(year) if year else None,
         "enrichment_source": source,
@@ -233,6 +265,11 @@ def _enrich_one(
         for field in ("Title", "Authors_List", "Authors", "Journal", "Year"):
             if match.get(field):
                 row_dict[field] = match[field]
+        # OpenAlex_Authors is a list-of-dicts; it may legitimately be []
+        # for entries that have no authorships, so we don't gate on
+        # truthiness — copy it through whenever the match carries it.
+        if "OpenAlex_Authors" in match:
+            row_dict["OpenAlex_Authors"] = match["OpenAlex_Authors"]
     else:
         row_dict.setdefault("doi", None)
         row_dict.setdefault("enrichment_source", None)

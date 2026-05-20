@@ -68,12 +68,40 @@ class OutLayout:
         return self.out_dir / "citation_graph.csv"
 
     @property
+    def authors_csv(self) -> Path:
+        return self.out_dir / "authors.csv"
+
+    @property
+    def author_citations_csv(self) -> Path:
+        return self.out_dir / "author_citations.csv"
+
+    @property
+    def author_review_json(self) -> Path:
+        return self.out_dir / "author_review.json"
+
+    @property
+    def author_aliases_csv(self) -> Path:
+        return self.out_dir / "author_aliases.csv"
+
+    @property
     def metadata_failures_jsonl(self) -> Path:
         return self.out_dir / "metadata_failures.jsonl"
 
     @property
     def references_failures_jsonl(self) -> Path:
         return self.out_dir / "references_failures.jsonl"
+
+    @property
+    def source_duplicates_json(self) -> Path:
+        return self.out_dir / "source_duplicates.json"
+
+    @property
+    def papers_no_references_json(self) -> Path:
+        return self.out_dir / "papers_no_references.json"
+
+    @property
+    def conversion_warnings_json(self) -> Path:
+        return self.out_dir / "conversion_warnings.json"
 
     def ensure(self) -> None:
         for d in (

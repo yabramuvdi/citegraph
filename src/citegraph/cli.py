@@ -17,6 +17,7 @@ import pandas as pd
 import typer
 from rich.logging import RichHandler
 
+from citegraph.authors import AuthorClusterConfig
 from citegraph.dedup import DedupConfig, dedup_references
 from citegraph.enrich import EnrichConfig
 from citegraph.io import OutLayout
@@ -104,6 +105,9 @@ def run(
         "-r",
         help="Walk subdirectories of PDF_DIR. Cache keys are disambiguated by relative path.",
     ),
+    ocr: bool = typer.Option(
+        False, "--ocr", help="Force full-page OCR via EasyOCR (for scanned PDFs)."
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip cost-estimate confirmation."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -120,6 +124,7 @@ def run(
         dedup_config=cfg,
         overwrite_markdown=overwrite_markdown,
         recursive=recursive,
+        ocr=ocr,
     )
 
     if not yes:
@@ -141,6 +146,32 @@ def run(
         f"{len(result.graph)} citation edges."
     )
     layout = pipeline.layout
+    if layout.conversion_warnings_json.exists():
+        import json as _json
+        warns = _json.loads(layout.conversion_warnings_json.read_text(encoding="utf-8"))
+        typer.secho(
+            f"{len(warns)} file(s) appear image-only (scanned PDFs?). "
+            "Re-run with --ocr for better results. See:",
+            fg=typer.colors.YELLOW,
+        )
+        typer.secho(f"  {layout.conversion_warnings_json}", fg=typer.colors.YELLOW)
+    if layout.papers_no_references_json.exists():
+        import json as _json
+        entries = _json.loads(layout.papers_no_references_json.read_text(encoding="utf-8"))
+        typer.secho(
+            f"{len(entries)} paper(s) yielded no references (image-only or unreadable PDF?). See:",
+            fg=typer.colors.YELLOW,
+        )
+        typer.secho(f"  {layout.papers_no_references_json}", fg=typer.colors.YELLOW)
+    if layout.source_duplicates_json.exists():
+        import json as _json
+        groups = _json.loads(layout.source_duplicates_json.read_text(encoding="utf-8"))
+        n_dup = sum(len(g.get("duplicate_source_files", [])) for g in groups)
+        typer.secho(
+            f"{n_dup} markdown file(s) are duplicate PDFs; remove the originals and re-run. See:",
+            fg=typer.colors.YELLOW,
+        )
+        typer.secho(f"  {layout.source_duplicates_json}", fg=typer.colors.YELLOW)
     if layout.metadata_failures_jsonl.exists() or layout.references_failures_jsonl.exists():
         typer.secho(
             "Some papers failed; re-running will retry them. See:",
@@ -185,6 +216,9 @@ def convert(
         "-r",
         help="Walk subdirectories of PDF_DIR. Cache keys are disambiguated by relative path.",
     ),
+    ocr: bool = typer.Option(
+        False, "--ocr", help="Force full-page OCR via EasyOCR (for scanned PDFs)."
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 1: convert PDFs to markdown via docling."""
@@ -194,9 +228,19 @@ def convert(
         out_dir=out,
         overwrite_markdown=overwrite_markdown,
         recursive=recursive,
+        ocr=ocr,
     )
     paths = pipeline.convert_pdfs()
     typer.echo(f"Converted {len(paths)} PDFs. Markdown in {pipeline.layout.markdown_dir}.")
+    if pipeline.layout.conversion_warnings_json.exists():
+        import json as _json
+        warns = _json.loads(pipeline.layout.conversion_warnings_json.read_text(encoding="utf-8"))
+        typer.secho(
+            f"{len(warns)} file(s) appear image-only (scanned PDFs?). "
+            "Re-run with --ocr for better results. See:",
+            fg=typer.colors.YELLOW,
+        )
+        typer.secho(f"  {pipeline.layout.conversion_warnings_json}", fg=typer.colors.YELLOW)
     _next_step_hint(f"`citegraph metadata --out {out}` (inspect markdown/ first if you want).")
 
 
@@ -213,6 +257,17 @@ def metadata(
     def _go() -> None:
         df = pipeline.extract_paper_metadata()
         typer.echo(f"Wrote {pipeline.layout.papers_csv} ({len(df)} papers).")
+        if pipeline.layout.source_duplicates_json.exists():
+            import json as _json
+            groups = _json.loads(
+                pipeline.layout.source_duplicates_json.read_text(encoding="utf-8")
+            )
+            n_dup = sum(len(g.get("duplicate_source_files", [])) for g in groups)
+            typer.secho(
+                f"{n_dup} markdown file(s) appear to be duplicate PDFs. See "
+                f"{pipeline.layout.source_duplicates_json}",
+                fg=typer.colors.YELLOW,
+            )
 
     _run_stage(_go, next_hint=f"`citegraph references --out {out}`.")
 
@@ -246,6 +301,16 @@ def references(
     def _go() -> None:
         df = pipeline.extract_paper_references()
         typer.echo(f"Wrote {pipeline.layout.references_raw_csv} ({len(df)} raw refs).")
+        if pipeline.layout.papers_no_references_json.exists():
+            import json as _json
+            entries = _json.loads(
+                pipeline.layout.papers_no_references_json.read_text(encoding="utf-8")
+            )
+            typer.secho(
+                f"{len(entries)} paper(s) yielded no references. See "
+                f"{pipeline.layout.papers_no_references_json}",
+                fg=typer.colors.YELLOW,
+            )
 
     _run_stage(_go, next_hint=f"`citegraph dedup --out {out}`.")
 
@@ -327,6 +392,77 @@ def enrich(
 
 
 @app.command()
+def authors(
+    out: Path = typer.Option(Path("./out"), "--out", "-o"),
+    merge_mode: str = typer.Option(
+        "strict",
+        "--merge-mode",
+        help="'strict' (precision-first, default) or 'loose' (collapse by surname+first-initial).",
+    ),
+    aliases: Path | None = typer.Option(
+        None,
+        "--aliases",
+        help="Optional CSV of hand-curated overrides: cluster_id,canonical_id. "
+        "Defaults to <out>/author_aliases.csv when it exists.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Stage 4b: cluster authors across the corpus into canonical records.
+
+    Reads ``references.csv`` and ``papers.csv`` from ``--out`` and writes
+    ``authors.csv`` + ``author_citations.csv``. When
+    ``enriched_references.csv`` is present, OpenAlex / ORCID ids are used
+    as ground truth for identity.
+    """
+    _configure_logging(verbose)
+    if merge_mode not in {"strict", "loose"}:
+        typer.secho(
+            f"--merge-mode must be 'strict' or 'loose', got {merge_mode!r}.",
+            fg=typer.colors.RED, err=True,
+        )
+        raise typer.Exit(code=1)
+
+    pipeline = Pipeline(
+        pdf_dir=None,
+        out_dir=out,
+        author_config=AuthorClusterConfig(merge_mode=merge_mode),
+    )
+    if aliases is not None:
+        # User-specified path overrides the default. Copy the file in
+        # under the canonical name so `Pipeline.normalize_authors` finds
+        # it via the layout, without forcing a new code path.
+        import shutil
+        if aliases.exists():
+            shutil.copy(aliases, pipeline.layout.author_aliases_csv)
+        else:
+            typer.secho(
+                f"--aliases path does not exist: {aliases}",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(code=1)
+
+    def _go() -> None:
+        authors_df, citations_df = pipeline.normalize_authors()
+        typer.echo(
+            f"Clustered {len(citations_df)} author occurrences into "
+            f"{len(authors_df)} canonical authors. "
+            f"Wrote {pipeline.layout.authors_csv}."
+        )
+        if pipeline.layout.author_review_json.exists():
+            import json as _json
+            review = _json.loads(
+                pipeline.layout.author_review_json.read_text(encoding="utf-8")
+            )
+            typer.secho(
+                f"{len(review)} cluster(s) flagged for review. See "
+                f"{pipeline.layout.author_review_json}",
+                fg=typer.colors.YELLOW,
+            )
+
+    _run_stage(_go, next_hint=None)
+
+
+@app.command()
 def status(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
 ) -> None:
@@ -360,6 +496,8 @@ def status(
     typer.echo(f"  references.csv         {_rows(layout.references_csv)}")
     typer.echo(f"  enriched_references.csv {_rows(layout.enriched_references_csv)}")
     typer.echo(f"  citation_graph.csv     {_rows(layout.graph_csv)}")
+    typer.echo(f"  authors.csv            {_rows(layout.authors_csv)}")
+    typer.echo(f"  author_citations.csv   {_rows(layout.author_citations_csv)}")
 
 
 if __name__ == "__main__":  # pragma: no cover

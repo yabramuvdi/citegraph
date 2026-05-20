@@ -150,6 +150,115 @@ def test_from_out_dir_missing_files_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Author queries
+# ---------------------------------------------------------------------------
+def _graph_with_authors() -> CitationGraph:
+    """Toy graph with two canonical authors and three reference citations."""
+    papers = pd.DataFrame([{"id": "p-a", "Title": "Paper A", "Year": 2020}])
+    references = pd.DataFrame(
+        [
+            {"id": "r-1", "Title": "Ref 1", "Year": 1990},
+            {"id": "r-2", "Title": "Ref 2", "Year": 1995},
+            {"id": "r-3", "Title": "Ref 3", "Year": 2000},
+        ]
+    ).set_index("id")
+    edges = pd.DataFrame(
+        [
+            {"citing_id": "p-a", "cited_id": "r-1"},
+            {"citing_id": "p-a", "cited_id": "r-2"},
+            {"citing_id": "p-a", "cited_id": "r-3"},
+        ]
+    )
+    authors = pd.DataFrame(
+        [
+            {
+                "id": "a-cardenas-juan-camilo",
+                "display_name": "Juan-Camilo Cárdenas",
+                "surname": "Cárdenas",
+                "surname_norm": "cardenas",
+                "canonical_given": "Juan-Camilo",
+                "initials": "JC",
+                "openalex_id": None,
+                "orcid": None,
+                "n_occurrences": 2,
+                "n_reference_citations": 2,
+                "n_distinct_papers_citing": 1,
+            },
+            {
+                "id": "a-diamond-adele",
+                "display_name": "Adele Diamond",
+                "surname": "Diamond",
+                "surname_norm": "diamond",
+                "canonical_given": "Adele",
+                "initials": "A",
+                "openalex_id": None,
+                "orcid": None,
+                "n_occurrences": 1,
+                "n_reference_citations": 1,
+                "n_distinct_papers_citing": 1,
+            },
+        ]
+    ).set_index("id")
+    citations = pd.DataFrame(
+        [
+            {"author_id": "a-cardenas-juan-camilo", "record_kind": "reference",
+             "record_id": "r-1", "position": 0, "citing_paper_id": "p-a",
+             "raw_author": "Cárdenas, J.-C."},
+            {"author_id": "a-cardenas-juan-camilo", "record_kind": "reference",
+             "record_id": "r-2", "position": 0, "citing_paper_id": "p-a",
+             "raw_author": "Cárdenas, Juan-Camilo"},
+            {"author_id": "a-diamond-adele", "record_kind": "reference",
+             "record_id": "r-3", "position": 0, "citing_paper_id": "p-a",
+             "raw_author": "Diamond, Adele"},
+        ]
+    )
+    return CitationGraph(
+        papers=papers, references=references, edges=edges,
+        authors=authors, author_citations=citations,
+    )
+
+
+def test_has_authors_flag() -> None:
+    g_with = _graph_with_authors()
+    assert g_with.has_authors is True
+
+
+def test_top_cited_authors_orders_by_count() -> None:
+    g = _graph_with_authors()
+    top = g.top_cited_authors(n=10)
+    assert list(top.index)[0] == "a-cardenas-juan-camilo"
+    assert int(top.iloc[0]["n_reference_citations"]) == 2
+
+
+def test_find_author_diacritic_insensitive() -> None:
+    g = _graph_with_authors()
+    hits_with_accent = g.find_author("Cárdenas")
+    hits_without = g.find_author("cardenas")
+    hits_partial = g.find_author("card")
+    assert list(hits_with_accent.index) == ["a-cardenas-juan-camilo"]
+    assert list(hits_without.index) == ["a-cardenas-juan-camilo"]
+    assert list(hits_partial.index) == ["a-cardenas-juan-camilo"]
+
+
+def test_citations_of_returns_referenced_works() -> None:
+    g = _graph_with_authors()
+    refs = g.citations_of("a-cardenas-juan-camilo")
+    assert set(refs.index) == {"r-1", "r-2"}
+    assert "citing_paper_id" in refs.columns
+
+
+def test_papers_citing_author_returns_source_papers() -> None:
+    g = _graph_with_authors()
+    papers = g.papers_citing_author("a-diamond-adele")
+    assert set(papers["id"]) == {"p-a"}
+
+
+def test_top_cited_authors_raises_without_authors_loaded(small_graph: CitationGraph) -> None:
+    with pytest.raises(RuntimeError, match="Author tables"):
+        small_graph.top_cited_authors()
+
+
+# ---------------------------------------------------------------------------
 # NetworkX export
 # ---------------------------------------------------------------------------
 def test_to_networkx_builds_directed_graph(small_graph: CitationGraph) -> None:

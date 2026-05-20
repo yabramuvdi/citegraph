@@ -48,6 +48,28 @@ citegraph run ./pdfs --out ./out --enrich
 citegraph dedup ./out/references_raw.csv --out ./out
 ```
 
+### Scanned PDFs
+
+If some of your PDFs are scanned (each page is a bitmap with no selectable text),
+pass `ocr=True` to force full-page OCR via EasyOCR:
+
+```python
+pipe = Pipeline(pdf_dir="./pdfs", out_dir="./out", ocr=True)
+result = pipe.run()
+```
+
+Or with the CLI:
+
+```bash
+citegraph convert ./pdfs --out ./out --ocr
+citegraph run ./pdfs --out ./out --ocr
+```
+
+After each conversion run `citegraph` writes a `conversion_warnings.json` sidecar
+listing any markdown files that appear to be image-only (fewer than 200
+substantive text characters after stripping image tags). If you see warnings
+there, re-running with `--ocr` is the fix.
+
 Every step is checkpointed on disk: re-running skips work that's already done,
 so an interrupted LLM pass doesn't waste API calls.
 
@@ -171,8 +193,15 @@ nx_graph = g.to_networkx()         # DiGraph with edges citing -> cited
 
 ### Sidecar files
 
-- `run_summary.json` &mdash; counts (`n_papers`, `n_references_raw`, `n_references_dedup`, `n_edges`, `n_metadata_failures`, `n_references_failures`), the model id, and the dedup configuration used.
-- `metadata_failures.jsonl` and `references_failures.jsonl` &mdash; **only created when at least one paper failed**. One JSON object per line: `{source_file, stage, error_class, error_message}`. The pipeline keeps going past per-paper failures; re-running will retry them (their caches were not written).
+All sidecar files follow the same convention: **absent means clean**. They are
+created only when the condition they describe actually occurred, so `path.exists()`
+is a sufficient check.
+
+- `run_summary.json` &mdash; counts for the whole run: `n_papers`, `n_references_raw`, `n_references_dedup`, `n_edges`, `n_metadata_failures`, `n_references_failures`, `n_source_duplicates`, `n_papers_no_references`, `n_conversion_warnings`, plus the model id and dedup configuration.
+- `metadata_failures.jsonl` and `references_failures.jsonl` &mdash; one JSON line per failed paper: `{source_file, stage, error_class, error_message}`. The pipeline keeps going past per-paper failures; re-running will retry them (their caches were not written).
+- `source_duplicates.json` &mdash; written when two differently-named PDFs contain the same paper (detected by the same fuzzy-match logic used for reference deduplication). Each entry names the canonical source file, the duplicate file(s), and the paper title. The duplicate PDFs are silently skipped in the references stage; remove them from `pdf_dir` and re-run to clean up.
+- `papers_no_references.json` &mdash; written when a paper is successfully processed but the LLM returned an empty reference list. Each entry has `paper_id`, `source_file`, and `title`. Common causes: image-only PDFs (see `--ocr`), papers with no bibliography section, or Gemini returning an empty list despite the content being present.
+- `conversion_warnings.json` &mdash; written after stage 1 when any output markdown appears to be image-only (scanned PDF converted without OCR). Each entry has `source_file` and a human-readable `reason`. Re-run stage 1 with `--ocr` to regenerate those files.
 
 ## Evaluation
 
@@ -200,6 +229,7 @@ deduplication F1. Numbers from the reference run are reported in
 | `dedup_config` | `DedupConfig()` | tune the fuzzy dedup &mdash; see below |
 | `overwrite_markdown` | `False` | re-run docling even when a cached `.md` exists |
 | `recursive` | `False` | walk subdirectories of `pdf_dir`. Cache filenames are disambiguated by relative path (e.g. `journal_X/foo.pdf` → `journal_X__foo.md`); a clear error is raised if two PDFs would still collide. CLI flag: `--recursive` / `-r` |
+| `ocr` | `False` | force full-page OCR via EasyOCR for every PDF. Needed for scanned PDFs where each page is a bitmap. CLI flag: `--ocr` |
 
 Dedup is tuned through `DedupConfig`:
 

@@ -143,6 +143,29 @@ def test_progressive_stages_resume_from_disk(tmp_path: Path) -> None:
     assert (tmp_path / "out" / "references_raw.csv").exists()
 
 
+def test_normalize_authors_writes_csvs_and_review(tmp_path: Path) -> None:
+    """End-to-end: pipeline.normalize_authors() reads dedup output and writes author tables."""
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    shutil.copy(FIXTURES / "sample_paper.md", md_dir / "sample_paper.md")
+
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+
+    pipeline = Pipeline(pdf_dir=pdf_dir, out_dir=tmp_path / "out", client=_FakeClient())
+    markdown_paths = list(md_dir.glob("*.md"))
+    papers = pipeline.extract_paper_metadata(markdown_paths)
+    raw_refs = pipeline.extract_paper_references(markdown_paths, papers)
+    pipeline.deduplicate(raw_refs)
+
+    authors_df, citations_df = pipeline.normalize_authors()
+    # The fake client returns 1 paper (2 authors) + 2 references (1 author each).
+    assert (tmp_path / "out" / "authors.csv").exists()
+    assert (tmp_path / "out" / "author_citations.csv").exists()
+    assert len(authors_df) >= 1
+    assert {"reference", "paper"}.issubset(set(citations_df["record_kind"]))
+
+
 def test_stage_not_ready_when_upstream_missing(tmp_path: Path) -> None:
     p = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
 

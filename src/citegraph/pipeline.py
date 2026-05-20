@@ -31,13 +31,14 @@ if TYPE_CHECKING:
 import pandas as pd
 
 from citegraph._progress import iter_with_progress
+from citegraph.authors import AuthorClusterConfig, load_aliases, normalize_authors
 from citegraph.dedup import DedupConfig, dedup_references
 from citegraph.enrich import EnrichConfig
 from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_to_record
 from citegraph.extract_references import extract_references_from_markdown
 from citegraph.io import OutLayout, read_json, write_json, write_pydantic, write_pydantic_list
 from citegraph.llm import GeminiClient
-from citegraph.pdf_to_markdown import convert_directory
+from citegraph.pdf_to_markdown import _is_image_only, convert_directory
 from citegraph.schemas import PaperMetadata, PipelineResult, Reference
 
 logger = logging.getLogger(__name__)
@@ -109,8 +110,10 @@ class Pipeline:
         enrich: bool = False,
         enrich_config: EnrichConfig | None = None,
         dedup_config: DedupConfig | None = None,
+        author_config: AuthorClusterConfig | None = None,
         overwrite_markdown: bool = False,
         recursive: bool = False,
+        ocr: bool = False,
         show_progress: bool = True,
         client: GeminiClient | None = None,
     ) -> None:
@@ -118,10 +121,12 @@ class Pipeline:
         self.layout = OutLayout(Path(out_dir))
         self.layout.ensure()
         self.dedup_config = dedup_config or DedupConfig()
+        self.author_config = author_config or AuthorClusterConfig()
         self.enrich = enrich
         self.enrich_config = enrich_config or EnrichConfig()
         self.overwrite_markdown = overwrite_markdown
         self.recursive = recursive
+        self.ocr = ocr
         self.show_progress = show_progress
         self._client_kwargs = {"model": model} if model else {}
         self._client = client
@@ -177,13 +182,16 @@ class Pipeline:
             raise StageNotReadyError(
                 "Pipeline was constructed without pdf_dir; cannot convert PDFs."
             )
-        return convert_directory(
+        paths = convert_directory(
             self.pdf_dir,
             self.layout.markdown_dir,
             overwrite=self.overwrite_markdown,
             recursive=self.recursive,
             show_progress=self.show_progress,
+            ocr=self.ocr,
         )
+        _check_conversion_quality(paths, self.layout)
+        return paths
 
     # ------------------------------------------------------------------
     # Stage 2: markdown -> per-paper metadata
@@ -236,6 +244,17 @@ class Pipeline:
             df = df.drop_duplicates(subset="id", keep="first").reset_index(drop=True)
         df.to_csv(self.layout.papers_csv, index=False)
         logger.info("Wrote %s (%d rows)", self.layout.papers_csv, len(df))
+
+        duplicates = _detect_source_duplicates(records, self.dedup_config)
+        _write_source_duplicates(self.layout.source_duplicates_json, duplicates)
+        if duplicates:
+            n_dup_files = sum(len(g["duplicate_source_files"]) for g in duplicates)
+            logger.warning(
+                "%d markdown file(s) appear to be duplicate PDFs; see %s",
+                n_dup_files,
+                self.layout.source_duplicates_json,
+            )
+
         return df
 
     # ------------------------------------------------------------------
@@ -252,6 +271,13 @@ class Pipeline:
             papers_df = self._load_papers()
 
         source_to_id = dict(zip(papers_df["source_file"], papers_df["id"], strict=False))
+
+        duplicate_lookup: dict[str, dict] = {}
+        if self.layout.source_duplicates_json.exists():
+            for group in read_json(self.layout.source_duplicates_json):
+                for dup_file in group.get("duplicate_source_files", []):
+                    duplicate_lookup[dup_file] = group
+
         rows: list[dict] = []
         failures: list[PaperFailure] = []
         for md in iter_with_progress(
@@ -262,7 +288,16 @@ class Pipeline:
         ):
             citing_id = source_to_id.get(md.name)
             if citing_id is None:
-                logger.warning("No paper id for %s; skipping references", md.name)
+                if md.name in duplicate_lookup:
+                    group = duplicate_lookup[md.name]
+                    logger.warning(
+                        "Skipping %s — duplicate of '%s' (%s); remove the extra PDF to silence this",
+                        md.name,
+                        group["canonical_source_file"],
+                        group["canonical_paper_id"],
+                    )
+                else:
+                    logger.warning("No paper id for %s; skipping references", md.name)
                 continue
 
             cache = self.layout.references_dir / f"{md.stem}.json"
@@ -295,6 +330,27 @@ class Pipeline:
                 self.layout.references_failures_jsonl,
             )
 
+        failure_source_files = {f.source_file for f in failures}
+        papers_with_refs = {row["citing_id"] for row in rows}
+        no_ref_entries = [
+            {
+                "paper_id": citing_id,
+                "source_file": md_name,
+                "title": papers_df.loc[papers_df["id"] == citing_id, "Title"].iloc[0]
+                if not papers_df.loc[papers_df["id"] == citing_id].empty
+                else "",
+            }
+            for md_name, citing_id in source_to_id.items()
+            if md_name not in failure_source_files and citing_id not in papers_with_refs
+        ]
+        _write_no_references(self.layout.papers_no_references_json, no_ref_entries)
+        if no_ref_entries:
+            logger.warning(
+                "%d paper(s) yielded no references; see %s",
+                len(no_ref_entries),
+                self.layout.papers_no_references_json,
+            )
+
         df = pd.DataFrame(rows)
         df.to_csv(self.layout.references_raw_csv, index=False)
         logger.info("Wrote %s (%d rows)", self.layout.references_raw_csv, len(df))
@@ -318,7 +374,9 @@ class Pipeline:
             empty_graph.to_csv(self.layout.graph_csv, index=False)
             return empty_refs, empty_graph
 
-        canonical_df, mapping = dedup_references(raw_refs, self.dedup_config)
+        canonical_df, mapping = dedup_references(
+            raw_refs, self.dedup_config, show_progress=self.show_progress
+        )
         graph = pd.DataFrame(
             {
                 "citing_id": raw_refs["citing_id"].values,
@@ -336,6 +394,81 @@ class Pipeline:
             len(graph),
         )
         return canonical_df, graph
+
+    # ------------------------------------------------------------------
+    # Stage 4b: corpus-wide author normalization (after dedup)
+    # ------------------------------------------------------------------
+    def normalize_authors(
+        self,
+        references: pd.DataFrame | None = None,
+        papers: pd.DataFrame | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Cluster every author across the corpus into canonical records.
+
+        Runs after :meth:`deduplicate`. Reads ``references.csv`` and
+        ``papers.csv`` if no arguments are passed. When
+        ``enriched_references.csv`` exists, its OpenAlex / ORCID ids are
+        attached to the reference authors so that enrichment acts as
+        ground truth for identity.
+
+        Hand-curated overrides are loaded from ``author_aliases.csv`` if
+        present (two-column ``cluster_id,canonical_id``) and applied
+        after the algorithmic clustering.
+        """
+        if references is None:
+            references = self._load_references()
+        if papers is None:
+            try:
+                papers = self._load_papers()
+            except StageNotReadyError:
+                papers = None  # reference-only mode is fine
+
+        enriched: pd.DataFrame | None = None
+        if self.layout.enriched_references_csv.exists():
+            enriched = pd.read_csv(self.layout.enriched_references_csv, index_col="id")
+            # ``OpenAlex_Authors`` round-trips as a string in CSV; turn it
+            # back into a list of dicts so the normalizer sees structured
+            # data. Bad rows are silently dropped to keep the stage resilient.
+            if "OpenAlex_Authors" in enriched.columns:
+                import ast
+                def _parse(val: object) -> object:
+                    if isinstance(val, list):
+                        return val
+                    if isinstance(val, str) and val.strip().startswith("["):
+                        try:
+                            return ast.literal_eval(val)
+                        except (ValueError, SyntaxError):
+                            return None
+                    return None
+                enriched["OpenAlex_Authors"] = enriched["OpenAlex_Authors"].map(_parse)
+
+        aliases = load_aliases(self.layout.author_aliases_csv)
+
+        authors_df, citations_df, review = normalize_authors(
+            references=references,
+            papers=papers,
+            enriched_references=enriched,
+            cfg=self.author_config,
+            aliases=aliases,
+        )
+
+        authors_df.to_csv(self.layout.authors_csv)
+        citations_df.to_csv(self.layout.author_citations_csv, index=False)
+        _write_author_review(self.layout.author_review_json, review)
+        if review:
+            logger.warning(
+                "%d author cluster(s) flagged for review; see %s",
+                len(review),
+                self.layout.author_review_json,
+            )
+        logger.info(
+            "Wrote %s (%d authors), %s (%d edges)",
+            self.layout.authors_csv,
+            len(authors_df),
+            self.layout.author_citations_csv,
+            len(citations_df),
+        )
+        return authors_df, citations_df
 
     # ------------------------------------------------------------------
     # Stage 5: optional enrichment
@@ -379,17 +512,25 @@ class Pipeline:
         raw_refs = self.extract_paper_references(markdown_paths, papers)
         references, graph = self.deduplicate(raw_refs)
         references = self.maybe_enrich(references)
+        authors_df, citations_df = self.normalize_authors(references=references, papers=papers)
 
         run_summary = {
             "n_papers": int(len(papers)),
             "n_references_raw": int(len(raw_refs)),
             "n_references_dedup": int(len(references)),
             "n_edges": int(len(graph)),
+            "n_authors": int(len(authors_df)),
+            "n_author_citations": int(len(citations_df)),
+            "n_author_review_flags": _count_author_review(self.layout.author_review_json),
             "n_metadata_failures": _count_failures(self.layout.metadata_failures_jsonl),
             "n_references_failures": _count_failures(self.layout.references_failures_jsonl),
+            "n_source_duplicates": _count_source_duplicates(self.layout.source_duplicates_json),
+            "n_papers_no_references": _count_no_references(self.layout.papers_no_references_json),
+            "n_conversion_warnings": _count_conversion_warnings(self.layout.conversion_warnings_json),
             "model": self.client.model,
             "enrich": self.enrich,
             "dedup_config": self.dedup_config.__dict__,
+            "author_config": self.author_config.__dict__,
         }
         write_json(self.layout.out_dir / "run_summary.json", run_summary)
         return PipelineResult(papers=papers, references=references, graph=graph)
@@ -401,3 +542,125 @@ def _count_failures(path: Path) -> int:
         return 0
     with path.open("r", encoding="utf-8") as f:
         return sum(1 for line in f if line.strip())
+
+
+def _detect_source_duplicates(records: list[dict], cfg: DedupConfig) -> list[dict]:
+    """Find records that are duplicate conversions of the same underlying paper.
+
+    Returns one entry per duplicate group (groups with >1 source file).  Each
+    entry names the canonical file (first seen), the duplicate files, the paper
+    title, and the paper id — enough for the user to identify and remove the
+    extra PDFs.
+    """
+    from citegraph.dedup import compare_papers
+
+    canonical_indices: list[int] = []
+    duplicate_of: dict[int, int] = {}
+
+    for i, rec in enumerate(records):
+        matched = False
+        for canon_idx in canonical_indices:
+            if compare_papers(rec, records[canon_idx], cfg):
+                duplicate_of[i] = canon_idx
+                matched = True
+                break
+        if not matched:
+            canonical_indices.append(i)
+
+    canon_to_dupes: dict[int, list[int]] = {}
+    for dup_idx, canon_idx in duplicate_of.items():
+        canon_to_dupes.setdefault(canon_idx, []).append(dup_idx)
+
+    groups = []
+    for canon_idx, dup_indices in canon_to_dupes.items():
+        canon = records[canon_idx]
+        groups.append(
+            {
+                "canonical_source_file": canon["source_file"],
+                "canonical_paper_id": canon["id"],
+                "title": canon.get("Title", ""),
+                "duplicate_source_files": [records[i]["source_file"] for i in dup_indices],
+            }
+        )
+    return groups
+
+
+def _write_no_references(path: Path, entries: list[dict]) -> None:
+    """Persist papers that returned zero references; remove the file when none exist."""
+    if not entries:
+        if path.exists():
+            path.unlink()
+        return
+    write_json(path, entries)
+
+
+def _write_source_duplicates(path: Path, groups: list[dict]) -> None:
+    """Persist duplicate groups as JSON, or remove the file when none exist.
+
+    File absence means no duplicates were found, mirroring the failures pattern.
+    """
+    if not groups:
+        if path.exists():
+            path.unlink()
+        return
+    write_json(path, groups)
+
+
+def _count_source_duplicates(path: Path) -> int:
+    """Total number of duplicate markdown files; 0 if the file doesn't exist."""
+    if not path.exists():
+        return 0
+    data = read_json(path)
+    return sum(len(g.get("duplicate_source_files", [])) for g in data)
+
+
+def _count_no_references(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return len(read_json(path))
+
+
+def _check_conversion_quality(paths: list[Path], layout: OutLayout) -> None:
+    """After conversion, flag markdown files that appear to be image-only."""
+    warnings = [
+        {"source_file": p.name, "reason": "image-only markdown (possibly a scanned PDF)"}
+        for p in paths
+        if _is_image_only(p)
+    ]
+    _write_conversion_warnings(layout.conversion_warnings_json, warnings)
+    if warnings:
+        logger.warning(
+            "%d markdown file(s) appear image-only (scanned PDFs?); "
+            "re-run with ocr=True / --ocr for better results. See %s",
+            len(warnings),
+            layout.conversion_warnings_json,
+        )
+
+
+def _write_conversion_warnings(path: Path, warnings: list[dict]) -> None:
+    if not warnings:
+        if path.exists():
+            path.unlink()
+        return
+    write_json(path, warnings)
+
+
+def _count_conversion_warnings(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return len(read_json(path))
+
+
+def _write_author_review(path: Path, review: list[dict]) -> None:
+    """Persist flagged author clusters, or remove the file when there are none."""
+    if not review:
+        if path.exists():
+            path.unlink()
+        return
+    write_json(path, review)
+
+
+def _count_author_review(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return len(read_json(path))
