@@ -158,10 +158,12 @@ A reference cited by N papers appears N times here, with N different `citing_id`
 | `doi` | string | only after `--enrich`; `None` for unmatched rows |
 | `enrichment_source` | string | only after `--enrich`; `"crossref"` or `"openalex"` |
 | `enrichment_status` | string | only after `--enrich`; `"matched"` or `"miss"` |
-| `enrichment_miss_reason` | string | only after `--enrich`; reason for unmatched rows, e.g. `"no_candidates"` |
-| `enrichment_title_score` | float | only after `--enrich`; fuzzy title score for the accepted candidate |
-| `enrichment_candidate_title` | string | only after `--enrich`; external title that was accepted |
+| `enrichment_miss_reason` | string | only after `--enrich`; reason for unmatched rows, e.g. `"no_openalex_candidates"`, `"below_title_threshold"`, `"year_mismatch"`, or `"http_error"` |
+| `enrichment_title_score` | float | only after `--enrich`; raw fuzzy title score for the best accepted or rejected candidate |
+| `enrichment_adjusted_score` | float | only after `--enrich`; title score after applying the year-mismatch penalty |
+| `enrichment_candidate_title` | string | only after `--enrich`; external title that was accepted or explains the miss |
 | `enrichment_year_match` | bool | only after `--enrich`; whether the input and candidate years agreed when both were known |
+| `enrichment_year_delta` | int | only after `--enrich`; absolute year difference when both years were known |
 
 `Authors_List` is preserved through the dedup stage so author normalization can use structured author strings instead of comma-splitting display text.
 
@@ -290,6 +292,9 @@ pipe = Pipeline(
         timeout_s=15.0,
         rows=3,                           # API result rows to consider
         max_workers=8,                    # concurrent enrichment workers
+        year_mismatch_penalty=8.0,         # subtract when candidate year differs
+        retry_attempts=3,                  # retry transient 429/503/timeouts
+        retry_wait_s=0.25,                 # exponential-backoff base wait
     ),
 )
 ```
@@ -298,9 +303,12 @@ The CLI exposes the same knobs as flags &mdash; see `citegraph run --help`.
 
 When enrichment runs, every row gets explicit diagnostics in
 `enriched_references.csv`: `enrichment_status`, `enrichment_miss_reason`,
-`enrichment_title_score`, `enrichment_candidate_title`, and
-`enrichment_year_match`. The same run writes `enrichment_summary.json` and
-`enrichment_misses.csv` under `out_dir/` for quick review.
+`enrichment_title_score`, `enrichment_adjusted_score`,
+`enrichment_candidate_title`, `enrichment_year_match`, and
+`enrichment_year_delta`. The same run writes `enrichment_summary.json` and
+`enrichment_misses.csv` under `out_dir/` for quick review. The enrichment CLI
+flags mirror these knobs: `--enrich-year-penalty`,
+`--enrich-retry-attempts`, and `--enrich-retry-wait`.
 
 ## Development
 

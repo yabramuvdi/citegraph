@@ -61,11 +61,17 @@ def _enrich_config(
     contact: str,
     threshold: float,
     timeout: float,
+    year_penalty: float,
+    retry_attempts: int,
+    retry_wait: float,
 ) -> EnrichConfig:
     return EnrichConfig(
         contact_email=contact,
         title_match_threshold=threshold,
         timeout_s=timeout,
+        year_mismatch_penalty=year_penalty,
+        retry_attempts=retry_attempts,
+        retry_wait_s=retry_wait,
     )
 
 
@@ -130,6 +136,23 @@ def run(
     enrich_contact: str = typer.Option("", "--enrich-contact", help="Contact email for CrossRef polite pool."),
     enrich_threshold: float = typer.Option(90.0, "--enrich-threshold", help="Title match threshold for enrichment."),
     enrich_timeout: float = typer.Option(15.0, "--enrich-timeout", help="HTTP timeout in seconds for enrichment."),
+    enrich_year_penalty: float = typer.Option(
+        8.0,
+        "--enrich-year-penalty",
+        help="Score penalty applied when input and candidate years differ.",
+    ),
+    enrich_retry_attempts: int = typer.Option(
+        3,
+        "--enrich-retry-attempts",
+        min=1,
+        help="Attempts for transient enrichment HTTP errors such as 429/503.",
+    ),
+    enrich_retry_wait: float = typer.Option(
+        0.25,
+        "--enrich-retry-wait",
+        min=0.0,
+        help="Base exponential-backoff wait in seconds for enrichment retries.",
+    ),
     model: str | None = typer.Option(None, "--model", help="Gemini model id."),
     threshold: float = typer.Option(85.0, "--threshold", help="Dedup similarity threshold."),
     title_weight: float = typer.Option(0.7, "--title-weight"),
@@ -168,7 +191,14 @@ def run(
     """Run the full PDF -> citation graph pipeline."""
     _configure_logging(verbose)
     cfg = _dedup_config(threshold, title_weight, authors_weight, journal_weight, year_window)
-    ecfg = _enrich_config(enrich_contact, enrich_threshold, enrich_timeout)
+    ecfg = _enrich_config(
+        enrich_contact,
+        enrich_threshold,
+        enrich_timeout,
+        enrich_year_penalty,
+        enrich_retry_attempts,
+        enrich_retry_wait,
+    )
     ocr_mode = _resolve_ocr_mode(ocr, ocr_auto)
     pipeline = Pipeline(
         pdf_dir=pdf_dir,
@@ -446,11 +476,35 @@ def enrich(
     enrich_contact: str = typer.Option("", "--enrich-contact", help="Contact email for CrossRef polite pool."),
     enrich_threshold: float = typer.Option(90.0, "--enrich-threshold", help="Title match threshold."),
     enrich_timeout: float = typer.Option(15.0, "--enrich-timeout", help="HTTP timeout in seconds."),
+    enrich_year_penalty: float = typer.Option(
+        8.0,
+        "--enrich-year-penalty",
+        help="Score penalty applied when input and candidate years differ.",
+    ),
+    enrich_retry_attempts: int = typer.Option(
+        3,
+        "--enrich-retry-attempts",
+        min=1,
+        help="Attempts for transient enrichment HTTP errors such as 429/503.",
+    ),
+    enrich_retry_wait: float = typer.Option(
+        0.25,
+        "--enrich-retry-wait",
+        min=0.0,
+        help="Base exponential-backoff wait in seconds for enrichment retries.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 5: optional CrossRef/OpenAlex enrichment of references.csv."""
     _configure_logging(verbose)
-    ecfg = _enrich_config(enrich_contact, enrich_threshold, enrich_timeout)
+    ecfg = _enrich_config(
+        enrich_contact,
+        enrich_threshold,
+        enrich_timeout,
+        enrich_year_penalty,
+        enrich_retry_attempts,
+        enrich_retry_wait,
+    )
     pipeline = Pipeline(pdf_dir=None, out_dir=out, enrich=True, enrich_config=ecfg)
 
     def _go() -> None:

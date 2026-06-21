@@ -109,6 +109,24 @@ def test_best_match_empty_items():
     assert _best_match([], "Any Title", 2017, _CFG, source="crossref") is None
 
 
+def test_best_match_rejects_exact_title_when_year_penalty_drops_score():
+    cfg = EnrichConfig(title_match_threshold=90.0, year_mismatch_penalty=15.0)
+    wrong_year = {
+        **_CROSSREF_ITEM,
+        "issued": {"date-parts": [[2020]]},
+    }
+
+    result = _best_match(
+        [wrong_year],
+        "Attention Is All You Need",
+        2017,
+        cfg,
+        source="crossref",
+    )
+
+    assert result is None
+
+
 # ---------------------------------------------------------------------------
 # _crossref_lookup
 # ---------------------------------------------------------------------------
@@ -140,6 +158,21 @@ def test_crossref_empty_title_returns_none():
     result = _crossref_lookup("", "Author", 2020, _CFG, client)
     assert result is None
     client.get.assert_not_called()
+
+
+def test_crossref_retries_transient_503_before_matching():
+    cfg = EnrichConfig(retry_wait_s=0)
+    transient = MagicMock()
+    transient.status_code = 503
+    success = _mock_crossref_response([_CROSSREF_ITEM])
+    client = MagicMock()
+    client.get.side_effect = [transient, success]
+
+    result = _crossref_lookup("Attention Is All You Need", "Vaswani", 2017, cfg, client)
+
+    assert result is not None
+    assert result["doi"] == "10.48550/arxiv.1706.03762"
+    assert client.get.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +273,76 @@ def test_enrich_references_no_match():
     assert result.iloc[0]["doi"] is None
     assert result.iloc[0]["Title"] == "Attention Is All You Need"
     assert result.iloc[0]["enrichment_status"] == "miss"
-    assert result.iloc[0]["enrichment_miss_reason"] == "no_candidates"
+    assert result.iloc[0]["enrichment_miss_reason"] == "no_openalex_candidates"
+
+
+def test_enrich_references_reports_year_mismatch_miss():
+    df = _make_df()
+    wrong_year = {
+        **_CROSSREF_ITEM,
+        "issued": {"date-parts": [[2020]]},
+    }
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.side_effect = [
+        _mock_crossref_response([wrong_year]),
+        _mock_openalex_response([]),
+    ]
+    cfg = EnrichConfig(title_match_threshold=90.0, year_mismatch_penalty=15.0)
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        result = enrich_references(df, cfg=cfg)
+
+    row = result.iloc[0]
+    assert row["enrichment_status"] == "miss"
+    assert row["enrichment_miss_reason"] == "year_mismatch"
+    assert row["enrichment_title_score"] == 100.0
+    assert row["enrichment_adjusted_score"] == 85.0
+    assert row["enrichment_year_delta"] == 3
+    assert row["enrichment_candidate_title"] == "Attention Is All You Need"
+
+
+def test_enrich_references_reports_below_threshold_miss():
+    df = _make_df()
+    unrelated = {
+        **_CROSSREF_ITEM,
+        "title": ["Totally Unrelated Work on Bananas"],
+    }
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.side_effect = [
+        _mock_crossref_response([unrelated]),
+        _mock_openalex_response([]),
+    ]
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        result = enrich_references(df, cfg=_CFG)
+
+    row = result.iloc[0]
+    assert row["enrichment_status"] == "miss"
+    assert row["enrichment_miss_reason"] == "below_title_threshold"
+    assert row["enrichment_candidate_title"] == "Totally Unrelated Work on Bananas"
+    assert row["enrichment_title_score"] < _CFG.title_match_threshold
+
+
+def test_enrich_references_reports_http_error_miss():
+    df = _make_df()
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.side_effect = Exception("connection refused")
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        result = enrich_references(df, cfg=_CFG)
+
+    row = result.iloc[0]
+    assert row["enrichment_status"] == "miss"
+    assert row["enrichment_miss_reason"] == "http_error"
 
 
 def test_enrich_references_uses_cache(tmp_path):
@@ -359,7 +461,7 @@ def test_enrich_references_caches_misses(tmp_path):
     assert cache_file.exists()
     cached = json.loads(cache_file.read_text())
     assert cached["enrichment_status"] == "miss"
-    assert cached["enrichment_miss_reason"] == "no_candidates"
+    assert cached["enrichment_miss_reason"] == "no_openalex_candidates"
     assert first.iloc[0]["enrichment_status"] == "miss"
 
     mock_client_2 = MagicMock()
@@ -394,7 +496,7 @@ def test_enrich_references_writes_misses_and_summary(tmp_path):
     misses = pd.read_csv(layout.enrichment_misses_csv)
     assert len(misses) == 1
     assert misses.iloc[0]["id"] == "r-vaswani-2017-attention"
-    assert misses.iloc[0]["enrichment_miss_reason"] == "no_candidates"
+    assert misses.iloc[0]["enrichment_miss_reason"] == "no_openalex_candidates"
 
     assert layout.enrichment_summary_json.exists()
     summary = json.loads(layout.enrichment_summary_json.read_text())

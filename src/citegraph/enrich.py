@@ -14,12 +14,18 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from rapidfuzz.fuzz import ratio
+from tenacity import (
+    Retrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 if TYPE_CHECKING:
     from citegraph.io import OutLayout
@@ -43,6 +49,9 @@ class EnrichConfig:
     timeout_s: float = 15.0
     rows: int = 3
     max_workers: int = 8
+    year_mismatch_penalty: float = 8.0
+    retry_attempts: int = 3
+    retry_wait_s: float = 0.25
 
     @property
     def user_agent(self) -> str:
@@ -55,9 +64,26 @@ _DIAGNOSTIC_COLUMNS = {
     "enrichment_status": None,
     "enrichment_miss_reason": None,
     "enrichment_title_score": None,
+    "enrichment_adjusted_score": None,
     "enrichment_candidate_title": None,
     "enrichment_year_match": None,
+    "enrichment_year_delta": None,
 }
+
+
+@dataclass(frozen=True)
+class _LookupReport:
+    match: dict | None = None
+    miss_reason: str | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
+class _TransientEnrichmentError(Exception):
+    """A temporary provider error that should be retried."""
+
+
+class _LookupHTTPError(Exception):
+    """A provider request failed after retry handling."""
 
 
 def _try_import_httpx():
@@ -78,8 +104,18 @@ def _crossref_lookup(
     cfg: EnrichConfig,
     client: Any,
 ) -> dict | None:
+    return _crossref_lookup_report(title, authors, year, cfg, client).match
+
+
+def _crossref_lookup_report(
+    title: str,
+    authors: str,
+    year: int | None,
+    cfg: EnrichConfig,
+    client: Any,
+) -> _LookupReport:
     if not title:
-        return None
+        return _LookupReport(miss_reason="empty_title")
     params = {
         "query.title": title,
         "rows": cfg.rows,
@@ -87,19 +123,18 @@ def _crossref_lookup(
     if authors:
         params["query.author"] = authors
     try:
-        resp = client.get(
+        payload = _request_json(
+            client,
             CROSSREF_URL,
             params=params,
-            headers={"User-Agent": cfg.user_agent},
-            timeout=cfg.timeout_s,
+            cfg=cfg,
         )
-        resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
+    except _LookupHTTPError as exc:
         logger.debug("CrossRef lookup failed for %r: %s", title, exc)
-        return None
+        return _LookupReport(miss_reason="http_error")
 
-    items = resp.json().get("message", {}).get("items", [])
-    return _best_match(items, title, year, cfg, source="crossref")
+    items = payload.get("message", {}).get("items", [])
+    return _best_match_report(items, title, year, cfg, source="crossref")
 
 
 def _openalex_lookup(
@@ -108,26 +143,77 @@ def _openalex_lookup(
     cfg: EnrichConfig,
     client: Any,
 ) -> dict | None:
+    return _openalex_lookup_report(title, year, cfg, client).match
+
+
+def _openalex_lookup_report(
+    title: str,
+    year: int | None,
+    cfg: EnrichConfig,
+    client: Any,
+) -> _LookupReport:
     if not title:
-        return None
+        return _LookupReport(miss_reason="empty_title")
     params = {
         "search": title,
         "per-page": cfg.rows,
     }
     try:
-        resp = client.get(
+        payload = _request_json(
+            client,
             OPENALEX_URL,
             params=params,
-            headers={"User-Agent": cfg.user_agent},
-            timeout=cfg.timeout_s,
+            cfg=cfg,
         )
-        resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
+    except _LookupHTTPError as exc:
         logger.debug("OpenAlex lookup failed for %r: %s", title, exc)
-        return None
+        return _LookupReport(miss_reason="http_error")
 
-    items = resp.json().get("results", [])
-    return _best_match(items, title, year, cfg, source="openalex")
+    items = payload.get("results", [])
+    return _best_match_report(items, title, year, cfg, source="openalex")
+
+
+def _request_json(
+    client: Any,
+    url: str,
+    *,
+    params: dict[str, Any],
+    cfg: EnrichConfig,
+) -> dict:
+    retryer = Retrying(
+        stop=stop_after_attempt(cfg.retry_attempts),
+        wait=wait_exponential(multiplier=cfg.retry_wait_s),
+        retry=retry_if_exception_type(_TransientEnrichmentError),
+        reraise=True,
+    )
+    try:
+        for attempt in retryer:
+            with attempt:
+                try:
+                    resp = client.get(
+                        url,
+                        params=params,
+                        headers={"User-Agent": cfg.user_agent},
+                        timeout=cfg.timeout_s,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    if _is_transient_exception(exc):
+                        raise _TransientEnrichmentError(str(exc)) from exc
+                    raise
+                status_code = getattr(resp, "status_code", None)
+                if status_code in {429, 503}:
+                    raise _TransientEnrichmentError(f"HTTP {status_code}")
+                resp.raise_for_status()
+                return resp.json()
+    except Exception as exc:  # noqa: BLE001
+        raise _LookupHTTPError(str(exc)) from exc
+    return {}
+
+
+def _is_transient_exception(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    return "timeout" in name or "timeout" in text
 
 
 def _best_match(
@@ -138,26 +224,58 @@ def _best_match(
     *,
     source: str,
 ) -> dict | None:
-    best: tuple[float, dict | None, str] = (0.0, None, "")
+    return _best_match_report(items, title, year, cfg, source=source).match
+
+
+def _best_match_report(
+    items: list[dict],
+    title: str,
+    year: int | None,
+    cfg: EnrichConfig,
+    *,
+    source: str,
+) -> _LookupReport:
+    best: tuple[float, float, dict | None, str, bool | None, int | None] = (
+        0.0,
+        0.0,
+        None,
+        "",
+        None,
+        None,
+    )
     for item in items:
         cand_title = _candidate_title(item, source)
         if not cand_title:
             continue
         score = ratio(title.lower(), cand_title.lower())
-        if score > best[0]:
-            best = (score, item, cand_title)
-    score, item, cand_title = best
-    if item is None or score < cfg.title_match_threshold:
-        return None
+        cand_year = _candidate_year(item, source)
+        year_match, year_delta = _year_comparison(year, cand_year)
+        adjusted = score - (cfg.year_mismatch_penalty if year_delta else 0.0)
+        if adjusted > best[0]:
+            best = (adjusted, score, item, cand_title, year_match, year_delta)
+    adjusted, score, item, cand_title, year_match, year_delta = best
+    if item is None:
+        return _LookupReport(miss_reason=f"no_{source}_candidates")
+    diagnostics = {
+        "enrichment_title_score": float(score),
+        "enrichment_adjusted_score": float(adjusted),
+        "enrichment_candidate_title": cand_title,
+        "enrichment_year_match": year_match,
+        "enrichment_year_delta": year_delta,
+    }
+    if adjusted < cfg.title_match_threshold:
+        reason = (
+            "year_mismatch"
+            if score >= cfg.title_match_threshold and year_delta
+            else "below_title_threshold"
+        )
+        return _LookupReport(miss_reason=reason, diagnostics=diagnostics)
+
     match = _normalize_record(item, source)
     match["enrichment_status"] = "matched"
     match["enrichment_miss_reason"] = None
-    match["enrichment_title_score"] = float(score)
-    match["enrichment_candidate_title"] = cand_title
-    match["enrichment_year_match"] = (
-        None if year is None or match.get("Year") is None else int(match["Year"]) == int(year)
-    )
-    return match
+    match.update(diagnostics)
+    return _LookupReport(match=match)
 
 
 def _candidate_title(item: dict, source: str) -> str:
@@ -167,6 +285,33 @@ def _candidate_title(item: dict, source: str) -> str:
     if source == "openalex":
         return item.get("title") or item.get("display_name") or ""
     return ""
+
+
+def _candidate_year(item: dict, source: str) -> int | None:
+    if source == "crossref":
+        year = (
+            item.get("issued", {}).get("date-parts", [[None]])[0][0]
+            if item.get("issued")
+            else None
+        )
+    elif source == "openalex":
+        year = item.get("publication_year")
+    else:
+        year = None
+    try:
+        return int(year) if year else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _year_comparison(
+    source_year: int | None,
+    candidate_year: int | None,
+) -> tuple[bool | None, int | None]:
+    if source_year is None or candidate_year is None:
+        return None, None
+    delta = abs(int(source_year) - int(candidate_year))
+    return delta == 0, delta
 
 
 def _normalize_record(item: dict, source: str) -> dict:
@@ -248,9 +393,10 @@ def _write_cache(cache_path: Path, data: dict) -> None:
     tmp.rename(cache_path)
 
 
-def _miss_record(reason: str) -> dict:
+def _miss_record(reason: str, diagnostics: dict[str, Any] | None = None) -> dict:
     return {
         **_DIAGNOSTIC_COLUMNS,
+        **(diagnostics or {}),
         "doi": None,
         "enrichment_source": None,
         "enrichment_status": "miss",
@@ -268,8 +414,8 @@ def _with_cache_diagnostics(cached: dict) -> dict:
         out["enrichment_miss_reason"] = (
             None if out["enrichment_status"] == "matched" else "cached_miss"
         )
-    for field, default in _DIAGNOSTIC_COLUMNS.items():
-        out.setdefault(field, default)
+    for column, default in _DIAGNOSTIC_COLUMNS.items():
+        out.setdefault(column, default)
     return out
 
 
@@ -297,32 +443,58 @@ def _enrich_one(
     except (TypeError, ValueError):
         year = None
 
-    match = _crossref_lookup(title, authors, year, cfg, client)
+    crossref = _crossref_lookup_report(title, authors, year, cfg, client)
+    openalex = _LookupReport()
+    match = crossref.match
     if match is None:
-        match = _openalex_lookup(title, year, cfg, client)
+        openalex = _openalex_lookup_report(title, year, cfg, client)
+        match = openalex.match
 
     if match:
         if enrichment_dir is not None:
             _write_cache(enrichment_dir / f"{ref_id}.json", match)
         row_dict["doi"] = match["doi"]
         row_dict["enrichment_source"] = match["enrichment_source"]
-        for field in ("Title", "Authors_List", "Authors", "Journal", "Year"):
-            if match.get(field):
-                row_dict[field] = match[field]
+        for column in ("Title", "Authors_List", "Authors", "Journal", "Year"):
+            if match.get(column):
+                row_dict[column] = match[column]
         # OpenAlex_Authors is a list-of-dicts; it may legitimately be []
         # for entries that have no authorships, so we don't gate on
         # truthiness — copy it through whenever the match carries it.
         if "OpenAlex_Authors" in match:
             row_dict["OpenAlex_Authors"] = match["OpenAlex_Authors"]
-        for field in _DIAGNOSTIC_COLUMNS:
-            row_dict[field] = match.get(field)
+        for column in _DIAGNOSTIC_COLUMNS:
+            row_dict[column] = match.get(column)
     else:
-        miss = _miss_record("no_candidates")
+        report = _select_miss_report(crossref, openalex)
+        miss = _miss_record(
+            report.miss_reason or "no_openalex_candidates",
+            report.diagnostics,
+        )
         if enrichment_dir is not None:
             _write_cache(enrichment_dir / f"{ref_id}.json", miss)
         row_dict.update(miss)
 
     return row_dict
+
+
+def _select_miss_report(*reports: _LookupReport) -> _LookupReport:
+    priority = {
+        "http_error": 4,
+        "year_mismatch": 3,
+        "below_title_threshold": 2,
+        "no_crossref_candidates": 1,
+        "no_openalex_candidates": 1,
+        "empty_title": 0,
+        None: -1,
+    }
+    return max(
+        reports,
+        key=lambda r: (
+            priority.get(r.miss_reason, 0),
+            1 if r.miss_reason == "no_openalex_candidates" else 0,
+        ),
+    )
 
 
 def _write_enrichment_sidecars(
@@ -346,8 +518,10 @@ def _write_enrichment_sidecars(
         "Journal",
         "enrichment_miss_reason",
         "enrichment_title_score",
+        "enrichment_adjusted_score",
         "enrichment_candidate_title",
         "enrichment_year_match",
+        "enrichment_year_delta",
     ]
     misses_out = misses[[c for c in miss_columns if c in misses.columns]].copy()
     if enriched.index.name == "id":

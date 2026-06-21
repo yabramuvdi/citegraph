@@ -14,7 +14,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from citegraph.cli import app
+from citegraph.cli import _enrich_config, app
 
 runner = CliRunner()
 
@@ -106,6 +106,34 @@ def test_llm_concurrency_option_rejects_zero(tmp_path: Path) -> None:
 
     assert result.exit_code == 2
     assert "--llm-concurrency" in result.output
+
+
+def test_enrich_quality_options_are_exposed_on_enrichment_commands() -> None:
+    for command in ("run", "enrich"):
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--enrich-year-penalty" in result.output
+        assert "--enrich-retry-attemp" in result.output
+        assert "Attempts for transient" in result.output
+        assert "--enrich-retry-wait" in result.output
+
+
+def test_enrich_config_receives_quality_options() -> None:
+    cfg = _enrich_config(
+        contact="me@example.com",
+        threshold=91.0,
+        timeout=17.0,
+        year_penalty=11.0,
+        retry_attempts=5,
+        retry_wait=0.1,
+    )
+
+    assert cfg.contact_email == "me@example.com"
+    assert cfg.title_match_threshold == 91.0
+    assert cfg.timeout_s == 17.0
+    assert cfg.year_mismatch_penalty == 11.0
+    assert cfg.retry_attempts == 5
+    assert cfg.retry_wait_s == 0.1
 
 
 # ---------------------------------------------------------------------------
