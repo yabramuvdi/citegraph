@@ -38,7 +38,7 @@ from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_
 from citegraph.extract_references import extract_references_from_markdown
 from citegraph.io import OutLayout, read_json, write_json, write_pydantic, write_pydantic_list
 from citegraph.llm import GeminiClient
-from citegraph.pdf_to_markdown import _is_image_only, convert_directory
+from citegraph.pdf_to_markdown import OCRMode, _is_image_only, convert_directory
 from citegraph.schemas import PaperMetadata, PipelineResult, Reference
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class Pipeline:
         author_config: AuthorClusterConfig | None = None,
         overwrite_markdown: bool = False,
         recursive: bool = False,
-        ocr: bool = False,
+        ocr: OCRMode = False,
         show_progress: bool = True,
         client: GeminiClient | None = None,
     ) -> None:
@@ -190,7 +190,7 @@ class Pipeline:
             show_progress=self.show_progress,
             ocr=self.ocr,
         )
-        _check_conversion_quality(paths, self.layout)
+        _check_conversion_quality(paths, self.layout, ocr_attempted=bool(self.ocr))
         return paths
 
     # ------------------------------------------------------------------
@@ -620,19 +620,37 @@ def _count_no_references(path: Path) -> int:
     return len(read_json(path))
 
 
-def _check_conversion_quality(paths: list[Path], layout: OutLayout) -> None:
-    """After conversion, flag markdown files that appear to be image-only."""
+def _check_conversion_quality(
+    paths: list[Path], layout: OutLayout, *, ocr_attempted: bool = False
+) -> None:
+    """After conversion, flag markdown files that appear to be image-only.
+
+    ``ocr_attempted`` tunes the remediation hint: if OCR was already tried
+    (force or auto) and the output is *still* image-only, telling the user
+    to "re-run with --ocr" is wrong — surface that the page is genuinely
+    unreadable and needs manual review instead.
+    """
+    reason = (
+        "image-only markdown even after OCR (manual review needed)"
+        if ocr_attempted
+        else "image-only markdown (possibly a scanned PDF)"
+    )
     warnings = [
-        {"source_file": p.name, "reason": "image-only markdown (possibly a scanned PDF)"}
+        {"source_file": p.name, "reason": reason}
         for p in paths
         if _is_image_only(p)
     ]
     _write_conversion_warnings(layout.conversion_warnings_json, warnings)
     if warnings:
+        hint = (
+            "OCR did not help; inspect the source PDFs and consider manual transcription."
+            if ocr_attempted
+            else "re-run with ocr=True / --ocr (or ocr='auto' / --ocr-auto) for better results."
+        )
         logger.warning(
-            "%d markdown file(s) appear image-only (scanned PDFs?); "
-            "re-run with ocr=True / --ocr for better results. See %s",
+            "%d markdown file(s) appear image-only; %s See %s",
             len(warnings),
+            hint,
             layout.conversion_warnings_json,
         )
 

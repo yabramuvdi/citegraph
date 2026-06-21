@@ -336,3 +336,95 @@ def test_cluster_ids_are_stable_across_runs():
     a2, _, _ = normalize_authors(references=refs)
     assert list(a1.index) == list(a2.index)
     assert all(cid.startswith("a-") for cid in a1.index)
+
+
+# ---------------------------------------------------------------------------
+# Regression: single-letter pseudo-surnames from joined Authors string
+# ---------------------------------------------------------------------------
+
+
+def test_parse_rejects_single_letter_surname():
+    """'J.' and 'X. Y.' must not be accepted as surnames — they are misparsed initials."""
+    assert parse_author("J.") is None
+    assert parse_author("X. Y.") is None
+    assert parse_author("M") is None
+
+
+def test_normalize_authors_no_authors_list_no_single_letter_clusters():
+    """A references frame with only the comma-joined ``Authors`` column must
+    not yield single-letter pseudo-surnames.
+
+    Before the fix, ``Authors_List`` was dropped during dedup; the author
+    stage then split ``"Smith, J., García, A."`` on ``,`` and ended up with
+    ``"J"`` and ``"A"`` as surnames, producing mega-clusters keyed on one
+    letter.
+    """
+    refs = pd.DataFrame([
+        {"id": "r-1", "Title": "T1", "Year": 2010,
+         "Authors": "Smith, J., García, A."},
+        {"id": "r-2", "Title": "T2", "Year": 2011,
+         "Authors": "Smith, John, García, Ana"},
+    ]).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert not authors_df.empty
+    assert (authors_df["surname_norm"].str.len() > 1).all(), authors_df
+    assert set(authors_df["surname_norm"]) == {"smith", "garcia"}
+
+
+def test_normalize_authors_handles_semicolon_joined_authors():
+    """Semicolon-joined author strings split cleanly without re-glue heuristics."""
+    refs = pd.DataFrame([
+        {"id": "r-1", "Title": "T1", "Year": 2010,
+         "Authors": "Smith, J.; García, A."},
+    ]).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert set(authors_df["surname_norm"]) == {"smith", "garcia"}
+
+
+def test_normalize_authors_handles_comma_joined_full_given_names():
+    """Fallback comma splitting should re-glue obvious Surname, Given pairs."""
+    refs = pd.DataFrame([
+        {"id": "r-1", "Title": "T1", "Year": 2010,
+         "Authors": "Smith, John, García, Ana"},
+    ]).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert set(authors_df["surname_norm"]) == {"smith", "garcia"}
+
+
+def test_normalize_authors_does_not_pair_first_last_chunks():
+    """Avoid gluing ``Talbot Page, Louis Putterman`` into one false author."""
+    refs = pd.DataFrame([
+        {"id": "r-1", "Title": "T1", "Year": 2010,
+         "Authors": "Bochet, Oliver, Talbot Page, Louis Putterman"},
+    ]).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert set(authors_df["surname_norm"]) == {"bochet", "page", "putterman"}
+
+
+def test_dedup_to_authors_round_trip_via_csv(tmp_path: Path):
+    """End-to-end: raw refs → dedup → CSV round-trip → normalize_authors.
+
+    Guards against any future stage that drops ``Authors_List`` between
+    dedup and author normalization.
+    """
+    from citegraph.dedup import dedup_references
+
+    raw = pd.DataFrame([
+        {"Title": "Paper One",   "Authors": "Smith, J., García, A.",
+         "Authors_List": ["Smith, J.", "García, A."],
+         "Journal": "J1", "Year": 2010, "citing_id": "p-1"},
+        {"Title": "Paper Two",   "Authors": "Smith, John, García, Ana",
+         "Authors_List": ["Smith, John", "García, Ana"],
+         "Journal": "J2", "Year": 2011, "citing_id": "p-1"},
+    ])
+    canonical, _ = dedup_references(raw, show_progress=False)
+    # Authors_List must survive dedup.
+    assert "Authors_List" in canonical.columns
+
+    csv_path = tmp_path / "references.csv"
+    canonical.to_csv(csv_path)
+    reloaded = pd.read_csv(csv_path, index_col="id")
+
+    authors_df, _, _ = normalize_authors(references=reloaded)
+    assert (authors_df["surname_norm"].str.len() > 1).all()
+    assert {"smith", "garcia"} <= set(authors_df["surname_norm"])

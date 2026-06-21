@@ -5,8 +5,14 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from pathlib import Path
+from typing import Literal
 
 logger = logging.getLogger(__name__)
+
+# ``ocr`` flag accepted by :func:`convert_directory` and the ``Pipeline``:
+# ``False`` = never OCR, ``True`` = force OCR everywhere, ``"auto"`` = try
+# without OCR first and only re-run the image-only outputs with OCR.
+OCRMode = bool | Literal["auto"]
 
 
 def list_pdfs(pdf_dir: Path | str, *, recursive: bool = False) -> list[Path]:
@@ -146,6 +152,36 @@ def convert_pdf_to_markdown(
     return out_path
 
 
+def _convert_loop(
+    pdfs: list[Path],
+    pdf_dir: Path,
+    markdown_dir: Path | str,
+    *,
+    overwrite: bool,
+    recursive: bool,
+    show_progress: bool,
+    ocr: bool,
+    description: str = "Converting PDFs",
+) -> list[Path]:
+    """Inner per-PDF loop shared by the single-pass and two-pass paths."""
+    from citegraph._progress import iter_with_progress
+
+    out_paths: list[Path] = []
+    for pdf in iter_with_progress(
+        pdfs,
+        show_progress=show_progress,
+        description=description,
+        item_label=lambda p: p.name,
+    ):
+        stem = cache_stem_for(pdf, pdf_dir) if recursive else None
+        out_paths.append(
+            convert_pdf_to_markdown(
+                pdf, markdown_dir, overwrite=overwrite, cache_stem=stem, ocr=ocr
+            )
+        )
+    return out_paths
+
+
 def convert_directory(
     pdf_dir: Path | str,
     markdown_dir: Path | str,
@@ -153,7 +189,7 @@ def convert_directory(
     overwrite: bool = False,
     recursive: bool = False,
     show_progress: bool = True,
-    ocr: bool = False,
+    ocr: OCRMode = False,
 ) -> list[Path]:
     """Convert every PDF under ``pdf_dir`` to markdown.
 
@@ -166,30 +202,63 @@ def convert_directory(
     while the per-PDF loop runs. Pass ``False`` for headless runs / tests
     where the extra stderr output is unwanted.
 
-    With ``ocr=True``, forces full-page OCR via EasyOCR for every PDF.
+    ``ocr`` controls how OCR is applied (see :data:`OCRMode`):
+
+    * ``False`` — never OCR.
+    * ``True`` — force full-page OCR via EasyOCR for every PDF.
+    * ``"auto"`` — two-pass: convert everything without OCR first, run the
+      :func:`_is_image_only` heuristic on each output, then re-run only
+      the flagged PDFs with OCR (their stub markdown is deleted first so
+      the cache check doesn't short-circuit the retry).
 
     Returns the list of written markdown files in stable (sorted) order.
     """
     pdf_dir = Path(pdf_dir)
+    markdown_dir = Path(markdown_dir)
     pdfs = list_pdfs(pdf_dir, recursive=recursive)
-    logger.info("Found %d PDFs under %s (recursive=%s)", len(pdfs), pdf_dir, recursive)
+    logger.info(
+        "Found %d PDFs under %s (recursive=%s, ocr=%r)", len(pdfs), pdf_dir, recursive, ocr
+    )
 
     if recursive:
         _detect_stem_collisions(pdfs, pdf_dir)
 
-    from citegraph._progress import iter_with_progress
-
-    out_paths: list[Path] = []
-    for pdf in iter_with_progress(
-        pdfs,
-        show_progress=show_progress,
-        description="Converting PDFs",
-        item_label=lambda p: p.name,
-    ):
-        stem = cache_stem_for(pdf, pdf_dir) if recursive else None
-        out_paths.append(
-            convert_pdf_to_markdown(
-                pdf, markdown_dir, overwrite=overwrite, cache_stem=stem, ocr=ocr
-            )
+    if ocr == "auto":
+        # Pass 1: try without OCR — cheap on text PDFs, fast on cached ones.
+        out_paths = _convert_loop(
+            pdfs,
+            pdf_dir,
+            markdown_dir,
+            overwrite=overwrite,
+            recursive=recursive,
+            show_progress=show_progress,
+            ocr=False,
         )
-    return out_paths
+        retry_pairs = [(pdf, md) for pdf, md in zip(pdfs, out_paths, strict=True) if _is_image_only(md)]
+        if retry_pairs:
+            logger.info(
+                "Re-running %d image-only PDF(s) with OCR (auto fallback)", len(retry_pairs)
+            )
+            for _pdf, md in retry_pairs:
+                md.unlink()
+            _convert_loop(
+                [pdf for pdf, _ in retry_pairs],
+                pdf_dir,
+                markdown_dir,
+                overwrite=True,
+                recursive=recursive,
+                show_progress=show_progress,
+                ocr=True,
+                description=f"Re-converting {len(retry_pairs)} with OCR",
+            )
+        return out_paths
+
+    return _convert_loop(
+        pdfs,
+        pdf_dir,
+        markdown_dir,
+        overwrite=overwrite,
+        recursive=recursive,
+        show_progress=show_progress,
+        ocr=bool(ocr),
+    )

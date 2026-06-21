@@ -21,6 +21,7 @@ from citegraph.authors import AuthorClusterConfig
 from citegraph.dedup import DedupConfig, dedup_references
 from citegraph.enrich import EnrichConfig
 from citegraph.io import OutLayout
+from citegraph.pdf_to_markdown import OCRMode
 from citegraph.pipeline import Pipeline, StageNotReadyError
 
 app = typer.Typer(
@@ -68,6 +69,45 @@ def _enrich_config(
     )
 
 
+def _warn_conversion_quality(layout: OutLayout, *, ocr_attempted: bool) -> None:
+    """Echo a yellow warning when stage 1 left image-only outputs.
+
+    Tailors the remediation hint to whether OCR was already tried — telling
+    the user to "re-run with --ocr" is unhelpful when they just did that.
+    """
+    if not layout.conversion_warnings_json.exists():
+        return
+    import json as _json
+
+    warns = _json.loads(layout.conversion_warnings_json.read_text(encoding="utf-8"))
+    if ocr_attempted:
+        msg = (
+            f"{len(warns)} file(s) appear image-only even after OCR; "
+            "manual review needed. See:"
+        )
+    else:
+        msg = (
+            f"{len(warns)} file(s) appear image-only (scanned PDFs?). "
+            "Re-run with --ocr-auto (fastest) or --ocr (force). See:"
+        )
+    typer.secho(msg, fg=typer.colors.YELLOW)
+    typer.secho(f"  {layout.conversion_warnings_json}", fg=typer.colors.YELLOW)
+
+
+def _resolve_ocr_mode(ocr: bool, ocr_auto: bool) -> OCRMode:
+    """Map the two mutually-exclusive CLI flags to the Pipeline ``ocr`` value."""
+    if ocr and ocr_auto:
+        typer.secho(
+            "--ocr and --ocr-auto are mutually exclusive; pick one.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if ocr_auto:
+        return "auto"
+    return ocr
+
+
 def _next_step_hint(msg: str) -> None:
     typer.echo(f"Next: {msg}")
 
@@ -106,7 +146,15 @@ def run(
         help="Walk subdirectories of PDF_DIR. Cache keys are disambiguated by relative path.",
     ),
     ocr: bool = typer.Option(
-        False, "--ocr", help="Force full-page OCR via EasyOCR (for scanned PDFs)."
+        False, "--ocr", help="Force full-page OCR via EasyOCR for every PDF (for scanned PDFs)."
+    ),
+    ocr_auto: bool = typer.Option(
+        False,
+        "--ocr-auto",
+        help=(
+            "Two-pass OCR: convert without OCR first, then re-run image-only outputs with OCR. "
+            "Cheaper than --ocr when most PDFs have selectable text."
+        ),
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip cost-estimate confirmation."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
@@ -115,6 +163,7 @@ def run(
     _configure_logging(verbose)
     cfg = _dedup_config(threshold, title_weight, authors_weight, journal_weight, year_window)
     ecfg = _enrich_config(enrich_contact, enrich_threshold, enrich_timeout)
+    ocr_mode = _resolve_ocr_mode(ocr, ocr_auto)
     pipeline = Pipeline(
         pdf_dir=pdf_dir,
         out_dir=out,
@@ -124,7 +173,7 @@ def run(
         dedup_config=cfg,
         overwrite_markdown=overwrite_markdown,
         recursive=recursive,
-        ocr=ocr,
+        ocr=ocr_mode,
     )
 
     if not yes:
@@ -146,15 +195,7 @@ def run(
         f"{len(result.graph)} citation edges."
     )
     layout = pipeline.layout
-    if layout.conversion_warnings_json.exists():
-        import json as _json
-        warns = _json.loads(layout.conversion_warnings_json.read_text(encoding="utf-8"))
-        typer.secho(
-            f"{len(warns)} file(s) appear image-only (scanned PDFs?). "
-            "Re-run with --ocr for better results. See:",
-            fg=typer.colors.YELLOW,
-        )
-        typer.secho(f"  {layout.conversion_warnings_json}", fg=typer.colors.YELLOW)
+    _warn_conversion_quality(layout, ocr_attempted=bool(ocr_mode))
     if layout.papers_no_references_json.exists():
         import json as _json
         entries = _json.loads(layout.papers_no_references_json.read_text(encoding="utf-8"))
@@ -217,30 +258,31 @@ def convert(
         help="Walk subdirectories of PDF_DIR. Cache keys are disambiguated by relative path.",
     ),
     ocr: bool = typer.Option(
-        False, "--ocr", help="Force full-page OCR via EasyOCR (for scanned PDFs)."
+        False, "--ocr", help="Force full-page OCR via EasyOCR for every PDF (for scanned PDFs)."
+    ),
+    ocr_auto: bool = typer.Option(
+        False,
+        "--ocr-auto",
+        help=(
+            "Two-pass OCR: convert without OCR first, then re-run image-only outputs with OCR. "
+            "Cheaper than --ocr when most PDFs have selectable text."
+        ),
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 1: convert PDFs to markdown via docling."""
     _configure_logging(verbose)
+    ocr_mode = _resolve_ocr_mode(ocr, ocr_auto)
     pipeline = Pipeline(
         pdf_dir=pdf_dir,
         out_dir=out,
         overwrite_markdown=overwrite_markdown,
         recursive=recursive,
-        ocr=ocr,
+        ocr=ocr_mode,
     )
     paths = pipeline.convert_pdfs()
     typer.echo(f"Converted {len(paths)} PDFs. Markdown in {pipeline.layout.markdown_dir}.")
-    if pipeline.layout.conversion_warnings_json.exists():
-        import json as _json
-        warns = _json.loads(pipeline.layout.conversion_warnings_json.read_text(encoding="utf-8"))
-        typer.secho(
-            f"{len(warns)} file(s) appear image-only (scanned PDFs?). "
-            "Re-run with --ocr for better results. See:",
-            fg=typer.colors.YELLOW,
-        )
-        typer.secho(f"  {pipeline.layout.conversion_warnings_json}", fg=typer.colors.YELLOW)
+    _warn_conversion_quality(pipeline.layout, ocr_attempted=bool(ocr_mode))
     _next_step_hint(f"`citegraph metadata --out {out}` (inspect markdown/ first if you want).")
 
 

@@ -83,7 +83,7 @@ ignore = [
 # Function-call defaults (typer.Option / typer.Argument) are idiomatic.
 "src/citegraph/cli.py" = ["B008"]
 # Original research scripts are not part of the package; lint loosely.
-"research/**/*.py" = ["E", "F", "B", "UP"]
+"research/**/*.py" = ["E", "W", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

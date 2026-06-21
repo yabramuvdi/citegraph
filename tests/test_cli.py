@@ -64,6 +64,28 @@ def test_estimate_reports_token_summary(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# convert OCR flags
+# ---------------------------------------------------------------------------
+def test_convert_rejects_mutually_exclusive_ocr_flags(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "convert",
+            str(pdf_dir),
+            "--out",
+            str(tmp_path / "out"),
+            "--ocr",
+            "--ocr-auto",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--ocr and --ocr-auto are mutually exclusive" in result.output
+
+
+# ---------------------------------------------------------------------------
 # dedup
 # ---------------------------------------------------------------------------
 def test_dedup_missing_input_exits_nonzero(tmp_path: Path) -> None:

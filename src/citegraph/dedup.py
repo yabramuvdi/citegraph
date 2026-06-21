@@ -132,8 +132,14 @@ def compare_papers(paper1: dict, paper2: dict, cfg: DedupConfig) -> bool:
 
 
 def _row_to_dict(row: pd.Series) -> dict:
+    # Authors_List is preserved alongside the comma-joined Authors so that
+    # downstream stages (author normalization in particular) can recover
+    # individual author strings without having to split the joined form —
+    # comma-splitting "Smith, J., García, A." would mistake each initial
+    # for its own author.
     return {
         "Authors": row.get("Authors"),
+        "Authors_List": row.get("Authors_List"),
         "Journal": row.get("Journal"),
         "Title": row.get("Title"),
         "Year": row.get("Year"),

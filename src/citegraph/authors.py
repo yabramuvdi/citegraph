@@ -223,6 +223,13 @@ def parse_author(raw: str) -> ParsedAuthor | None:
     surname = surname.strip(" .-")
     if not surname or not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", surname):
         return None
+    # A "surname" whose every letter run is a single letter is almost
+    # certainly a misparsed initial ("J.", "X. Y."). Real surnames have
+    # at least one multi-letter run. Rejecting here prevents the mega-
+    # clusters of one-letter surnames that arise when an upstream stage
+    # has comma-split "Smith, J., García, A." into separate fragments.
+    if _is_initial_only_token(surname):
+        return None
 
     given_tokens = _tokenize_given(given_str)
     initials = "".join(_initials_from_token(t) for t in given_tokens)
@@ -684,9 +691,13 @@ def _collect_occurrences(
 def _row_authors(row: pd.Series) -> list[str]:
     """Pull a list of author strings from a DataFrame row.
 
-    ``Authors_List`` is preferred (the canonical schema field), with
-    ``Authors`` (the comma-joined display string) as a fallback. CSVs
-    round-trip ``Authors_List`` as a Python repr, which is parsed back.
+    ``Authors_List`` is preferred (the canonical schema field) and round-
+    trips through CSV as a Python repr that we parse back with
+    :func:`ast.literal_eval`. When only the comma-joined ``Authors``
+    string is available — e.g. a ``references.csv`` written before
+    Authors_List was preserved through dedup — we fall back to
+    :func:`_split_joined_authors`, which is safe against the
+    ``"Smith, J., García, A."`` pattern.
     """
     val = row.get("Authors_List")
     if isinstance(val, list):
@@ -701,13 +712,67 @@ def _row_authors(row: pd.Series) -> list[str]:
                     return [str(a) for a in parsed if a]
             except (ValueError, SyntaxError):
                 pass
-        # Otherwise treat as a comma-joined display string.
         if s:
-            return [a.strip() for a in s.split(",") if a.strip()]
+            return _split_joined_authors(s)
     fallback = row.get("Authors")
     if isinstance(fallback, str) and fallback.strip():
-        return [a.strip() for a in fallback.split(",") if a.strip()]
+        return _split_joined_authors(fallback)
     return []
+
+
+def _split_joined_authors(s: str) -> list[str]:
+    """Split a delimiter-joined author string into individual names.
+
+    Prefers ``;`` (unambiguous) when present. Otherwise splits on ``,``
+    and re-glues obvious ``Surname, Given`` pairs so that
+    ``"Smith, J., García, A."`` and ``"Smith, John, García, Ana"`` become
+    two authors rather than four fragments. Strings without that pattern
+    (e.g. ``"John Smith, Mary Jones"``) pass through unchanged.
+    """
+    s = s.strip()
+    if not s:
+        return []
+    if ";" in s:
+        return [p.strip() for p in s.split(";") if p.strip()]
+
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        cur = parts[i]
+        nxt = parts[i + 1] if i + 1 < len(parts) else None
+        if (
+            nxt is not None
+            and not _is_initial_only_token(cur)
+            and (
+                _is_initial_only_token(nxt)
+                or _looks_like_surname_given_pair(cur, nxt)
+            )
+        ):
+            out.append(f"{cur}, {nxt}")
+            i += 2
+        else:
+            out.append(cur)
+            i += 1
+    return out
+
+
+def _looks_like_surname_given_pair(surname_part: str, given_part: str) -> bool:
+    """Heuristic for comma-joined fallback strings.
+
+    This intentionally handles only high-confidence cases: one-word
+    surnames (``Smith, John``) and particle compounds
+    (``de la Cruz, Juan``). Multi-word chunks such as ``Talbot Page`` are
+    likely already in first-last order, so pairing them with the next
+    comma part would create a false author.
+    """
+    surname_words = surname_part.split()
+    given_words = given_part.split()
+    if not surname_words or not given_words or len(given_words) > 2:
+        return False
+    if len(surname_words) == 1:
+        return True
+    return any(w.strip(".-").lower() in _PARTICLES for w in surname_words[:-1])
 
 
 def _match_enrichment(

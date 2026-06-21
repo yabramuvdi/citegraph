@@ -173,6 +173,91 @@ def test_convert_directory_recursive_raises_on_collision(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# ocr="auto" two-pass fallback
+# ---------------------------------------------------------------------------
+def test_convert_directory_ocr_auto_retries_only_image_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """auto mode: skip OCR for text PDFs, re-run only the image-only ones."""
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "text.pdf").write_text("")  # will look fine after pass 1
+    (pdf_dir / "scan.pdf").write_text("")  # will look image-only after pass 1
+
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+
+    calls: list[tuple[str, bool]] = []  # (pdf stem, ocr flag)
+
+    def fake_convert(pdf_path, markdown_dir, *, overwrite=False, cache_stem=None, ocr=False):
+        from pathlib import Path as _P
+
+        pdf_path = _P(pdf_path)
+        markdown_dir = _P(markdown_dir)
+        stem = cache_stem or pdf_path.stem
+        calls.append((pdf_path.stem, bool(ocr)))
+        out = markdown_dir / f"{stem}.md"
+        # If a cache exists and we're not overwriting, return it (mirrors real behavior).
+        if out.exists() and not overwrite:
+            return out
+        if pdf_path.stem == "scan" and not ocr:
+            out.write_text("<!-- image -->\n<!-- image -->\n")  # image-only
+        else:
+            out.write_text("# Body\n" + ("x" * 500))  # plenty of real text
+        return out
+
+    from citegraph import pdf_to_markdown as mod
+
+    monkeypatch.setattr(mod, "convert_pdf_to_markdown", fake_convert)
+
+    out_paths = convert_directory(pdf_dir, md_dir, ocr="auto", show_progress=False)
+
+    # Both files were written; scan.pdf got a second pass with OCR=True.
+    assert sorted(p.name for p in out_paths) == ["scan.md", "text.md"]
+    assert ("text", False) in calls
+    assert ("scan", False) in calls
+    assert ("scan", True) in calls  # second pass with OCR
+    assert ("text", True) not in calls  # text.pdf was not retried
+    # Final markdown for scan.pdf reflects the OCR pass (no longer image-only).
+    assert "# Body" in (md_dir / "scan.md").read_text()
+
+
+def test_convert_directory_ocr_auto_no_retry_when_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """auto mode: a single OCR pass should not run when nothing looks image-only."""
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "a.pdf").write_text("")
+    (pdf_dir / "b.pdf").write_text("")
+
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+
+    calls: list[tuple[str, bool]] = []
+
+    def fake_convert(pdf_path, markdown_dir, *, overwrite=False, cache_stem=None, ocr=False):
+        from pathlib import Path as _P
+
+        pdf_path = _P(pdf_path)
+        markdown_dir = _P(markdown_dir)
+        calls.append((pdf_path.stem, bool(ocr)))
+        out = _P(markdown_dir) / f"{pdf_path.stem}.md"
+        if out.exists() and not overwrite:
+            return out
+        out.write_text("# Body\n" + ("x" * 500))
+        return out
+
+    from citegraph import pdf_to_markdown as mod
+
+    monkeypatch.setattr(mod, "convert_pdf_to_markdown", fake_convert)
+
+    convert_directory(pdf_dir, md_dir, ocr="auto", show_progress=False)
+
+    assert all(not ocr_flag for _, ocr_flag in calls), calls
+
+
+# ---------------------------------------------------------------------------
 # convert_pdf_to_markdown explicit cache_stem param
 # ---------------------------------------------------------------------------
 def test_convert_pdf_to_markdown_respects_cache_stem(tmp_path: Path) -> None:
