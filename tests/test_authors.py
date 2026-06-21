@@ -248,6 +248,54 @@ def test_openalex_id_merges_records_that_look_different():
     assert authors_df.iloc[0]["openalex_id"] == "A5012345678"
 
 
+def test_openalex_full_name_anchor_absorbs_unidentified_initials():
+    refs = _refs([
+        {
+            "id": "r-1",
+            "Title": "T1",
+            "Authors_List": ["Cárdenas, Juan-Camilo"],
+            "Year": 2010,
+        },
+        {
+            "id": "r-2",
+            "Title": "T2",
+            "Authors_List": ["Cardenas, J.C."],
+            "Year": 2012,
+        },
+        {
+            "id": "r-3",
+            "Title": "T3",
+            "Authors_List": ["Juan-Camilo Cardenas"],
+            "Year": 2014,
+        },
+    ])
+    enriched = pd.DataFrame(
+        [
+            {
+                "id": "r-1",
+                "OpenAlex_Authors": [
+                    {
+                        "display_name": "Juan-Camilo Cardenas",
+                        "openalex_id": "A5042502300",
+                        "orcid": "0000-0003-0005-7595",
+                    }
+                ],
+            }
+        ]
+    ).set_index("id")
+
+    authors_df, citations_df, _ = normalize_authors(
+        references=refs,
+        enriched_references=enriched,
+    )
+
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["openalex_id"] == "A5042502300"
+    assert authors_df.iloc[0]["orcid"] == "0000-0003-0005-7595"
+    assert int(authors_df.iloc[0]["n_reference_citations"]) == 3
+    assert set(citations_df["record_id"]) == {"r-1", "r-2", "r-3"}
+
+
 def test_different_openalex_ids_split_identical_names():
     """Two 'J. Smith' records with different OpenAlex ids stay separate."""
     refs = _refs([

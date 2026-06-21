@@ -388,6 +388,74 @@ def _has_coauthor_overlap(
     return bool(set(occ.co_author_keys) & cluster_keys)
 
 
+def _has_external_id(cluster: list[AuthorOccurrence]) -> bool:
+    return any(o.openalex_id or o.orcid for o in cluster)
+
+
+def _full_first_norms(cluster: list[AuthorOccurrence]) -> set[str]:
+    return {
+        o.parsed.first_given_norm
+        for o in cluster
+        if o.parsed.has_full_first and o.parsed.first_given_norm
+    }
+
+
+def _first_initials(cluster: list[AuthorOccurrence]) -> set[str]:
+    return {o.parsed.first_initial.lower() for o in cluster if o.parsed.first_initial}
+
+
+def _merge_unidentified_into_external_clusters(
+    clusters: list[list[AuthorOccurrence]],
+) -> list[list[AuthorOccurrence]]:
+    """Use enriched full-name clusters as anchors for no-id name variants.
+
+    OpenAlex / ORCID-bearing clusters remain authoritative: different external
+    ids are never merged together. This pass only moves clusters with no
+    external id into exactly one compatible external-id cluster.
+    """
+    external_clusters = [c for c in clusters if _has_external_id(c)]
+    if not external_clusters:
+        return clusters
+
+    merged: list[list[AuthorOccurrence]] = list(external_clusters)
+    unresolved: list[list[AuthorOccurrence]] = []
+    for cluster in clusters:
+        if _has_external_id(cluster):
+            continue
+
+        full_norms = _full_first_norms(cluster)
+        if full_norms:
+            candidates = [
+                ext for ext in external_clusters
+                if full_norms & _full_first_norms(ext)
+            ]
+        else:
+            initials = _first_initials(cluster)
+            candidates = [
+                ext for ext in external_clusters
+                if initials & _first_initials(ext)
+            ]
+
+        target: list[AuthorOccurrence] | None = None
+        if len(candidates) == 1:
+            target = candidates[0]
+        elif len(candidates) > 1:
+            with_overlap = [
+                ext for ext in candidates
+                if any(_has_coauthor_overlap(o, ext) for o in cluster)
+            ]
+            if len(with_overlap) == 1:
+                target = with_overlap[0]
+
+        if target is None:
+            unresolved.append(cluster)
+        else:
+            target.extend(cluster)
+
+    merged.extend(unresolved)
+    return merged
+
+
 def _cluster_block(
     occs: list[AuthorOccurrence],
     cfg: AuthorClusterConfig,
@@ -473,7 +541,7 @@ def _cluster_block(
     clusters.extend(anchor_clusters.values())
     clusters.extend(init_buckets.values())
     clusters.extend(final_singletons)
-    return clusters
+    return _merge_unidentified_into_external_clusters(clusters)
 
 
 def normalize_authors(

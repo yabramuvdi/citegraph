@@ -64,6 +64,14 @@ class OutLayout:
         return self.out_dir / "enriched_references.csv"
 
     @property
+    def enrichment_misses_csv(self) -> Path:
+        return self.out_dir / "enrichment_misses.csv"
+
+    @property
+    def enrichment_summary_json(self) -> Path:
+        return self.out_dir / "enrichment_summary.json"
+
+    @property
     def graph_csv(self) -> Path:
         return self.out_dir / "citation_graph.csv"
 

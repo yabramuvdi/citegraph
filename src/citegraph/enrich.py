@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -49,6 +49,15 @@ class EnrichConfig:
         if self.contact_email:
             return f"citegraph/0.1 (mailto:{self.contact_email})"
         return "citegraph/0.1"
+
+
+_DIAGNOSTIC_COLUMNS = {
+    "enrichment_status": None,
+    "enrichment_miss_reason": None,
+    "enrichment_title_score": None,
+    "enrichment_candidate_title": None,
+    "enrichment_year_match": None,
+}
 
 
 def _try_import_httpx():
@@ -129,18 +138,26 @@ def _best_match(
     *,
     source: str,
 ) -> dict | None:
-    best: tuple[float, dict | None] = (0.0, None)
+    best: tuple[float, dict | None, str] = (0.0, None, "")
     for item in items:
         cand_title = _candidate_title(item, source)
         if not cand_title:
             continue
         score = ratio(title.lower(), cand_title.lower())
         if score > best[0]:
-            best = (score, item)
-    score, item = best
+            best = (score, item, cand_title)
+    score, item, cand_title = best
     if item is None or score < cfg.title_match_threshold:
         return None
-    return _normalize_record(item, source)
+    match = _normalize_record(item, source)
+    match["enrichment_status"] = "matched"
+    match["enrichment_miss_reason"] = None
+    match["enrichment_title_score"] = float(score)
+    match["enrichment_candidate_title"] = cand_title
+    match["enrichment_year_match"] = (
+        None if year is None or match.get("Year") is None else int(match["Year"]) == int(year)
+    )
+    return match
 
 
 def _candidate_title(item: dict, source: str) -> str:
@@ -205,7 +222,9 @@ def _normalize_record(item: dict, source: str) -> dict:
                 )
         authors = [a["display_name"] for a in author_objs]
         title = item.get("title") or item.get("display_name") or ""
-        journal = (item.get("primary_location") or {}).get("source", {}).get("display_name") or ""
+        primary_location = item.get("primary_location") or {}
+        source_obj = primary_location.get("source") or {}
+        journal = source_obj.get("display_name") or ""
         year = item.get("publication_year")
         doi = item.get("doi")
         if isinstance(doi, str) and doi.startswith("https://doi.org/"):
@@ -229,6 +248,31 @@ def _write_cache(cache_path: Path, data: dict) -> None:
     tmp.rename(cache_path)
 
 
+def _miss_record(reason: str) -> dict:
+    return {
+        **_DIAGNOSTIC_COLUMNS,
+        "doi": None,
+        "enrichment_source": None,
+        "enrichment_status": "miss",
+        "enrichment_miss_reason": reason,
+    }
+
+
+def _with_cache_diagnostics(cached: dict) -> dict:
+    out = dict(cached)
+    if "enrichment_status" not in out:
+        out["enrichment_status"] = (
+            "matched" if out.get("doi") or out.get("enrichment_source") else "miss"
+        )
+    if "enrichment_miss_reason" not in out:
+        out["enrichment_miss_reason"] = (
+            None if out["enrichment_status"] == "matched" else "cached_miss"
+        )
+    for field, default in _DIAGNOSTIC_COLUMNS.items():
+        out.setdefault(field, default)
+    return out
+
+
 def _enrich_one(
     ref_id: str,
     row: pd.Series,
@@ -243,7 +287,7 @@ def _enrich_one(
         cache_path = enrichment_dir / f"{ref_id}.json"
         if cache_path.exists():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            row_dict.update(cached)
+            row_dict.update(_with_cache_diagnostics(cached))
             return row_dict
 
     title = str(row.get("Title") or "")
@@ -270,11 +314,65 @@ def _enrich_one(
         # truthiness — copy it through whenever the match carries it.
         if "OpenAlex_Authors" in match:
             row_dict["OpenAlex_Authors"] = match["OpenAlex_Authors"]
+        for field in _DIAGNOSTIC_COLUMNS:
+            row_dict[field] = match.get(field)
     else:
-        row_dict.setdefault("doi", None)
-        row_dict.setdefault("enrichment_source", None)
+        miss = _miss_record("no_candidates")
+        if enrichment_dir is not None:
+            _write_cache(enrichment_dir / f"{ref_id}.json", miss)
+        row_dict.update(miss)
 
     return row_dict
+
+
+def _write_enrichment_sidecars(
+    enriched: pd.DataFrame,
+    cfg: EnrichConfig,
+    layout: OutLayout | None,
+) -> None:
+    if layout is None:
+        return
+
+    status = enriched.get("enrichment_status")
+    if status is None:
+        misses = enriched.iloc[0:0].copy()
+    else:
+        misses = enriched[status == "miss"].copy()
+
+    miss_columns = [
+        "Title",
+        "Authors",
+        "Year",
+        "Journal",
+        "enrichment_miss_reason",
+        "enrichment_title_score",
+        "enrichment_candidate_title",
+        "enrichment_year_match",
+    ]
+    misses_out = misses[[c for c in miss_columns if c in misses.columns]].copy()
+    if enriched.index.name == "id":
+        misses_out.insert(0, "id", misses_out.index)
+    misses_out.to_csv(layout.enrichment_misses_csv, index=False)
+
+    source_counts = (
+        enriched["enrichment_source"].fillna("miss").value_counts().to_dict()
+        if "enrichment_source" in enriched.columns
+        else {}
+    )
+    n_matched = int((enriched.get("enrichment_status") == "matched").sum()) if "enrichment_status" in enriched else 0
+    n_missed = int((enriched.get("enrichment_status") == "miss").sum()) if "enrichment_status" in enriched else 0
+    summary = {
+        "n_references": int(len(enriched)),
+        "n_matched": n_matched,
+        "n_missed": n_missed,
+        "match_rate": (n_matched / len(enriched)) if len(enriched) else 0.0,
+        "sources": {str(k): int(v) for k, v in source_counts.items()},
+        "config": asdict(cfg),
+    }
+    layout.enrichment_summary_json.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def enrich_references(
@@ -314,6 +412,8 @@ def enrich_references(
     enriched = pd.DataFrame(enriched_rows)
     if df.index.name == "id":
         enriched.index = df.index
+
+    _write_enrichment_sidecars(enriched, cfg, layout)
 
     logger.info(
         "Enrichment complete: %d/%d references resolved",

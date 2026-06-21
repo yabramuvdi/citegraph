@@ -210,24 +210,209 @@ class CitationGraph:
         Joins ``author_citations`` against ``references`` and includes
         the citing-paper id so the caller can trace back to the source.
         """
-        self._require_authors()
-        ac = self.author_citations
-        rows = ac[(ac["author_id"] == author_id) & (ac["record_kind"] == "reference")]
-        if rows.empty:
-            return self.references.iloc[0:0].copy()
-        out = self.references.loc[self.references.index.isin(rows["record_id"])].copy()
-        out["citing_paper_id"] = out.index.map(
-            dict(zip(rows["record_id"], rows["citing_paper_id"], strict=False))
+        context = self.citation_context_for_author(author_id)
+        if context.empty:
+            out = self.references.iloc[0:0].copy()
+            out["citing_paper_ids"] = pd.Series(dtype=object)
+            out["n_citing_papers"] = pd.Series(dtype=int)
+            return out
+
+        out = self.references.loc[
+            self.references.index.isin(context["cited_reference_id"])
+        ].copy()
+        citing_ids = context.groupby("cited_reference_id")["citing_paper_id"].agg(
+            lambda s: sorted(set(s))
         )
+        out["citing_paper_ids"] = out.index.map(citing_ids)
+        out["n_citing_papers"] = out["citing_paper_ids"].map(len)
         return out
 
     def papers_citing_author(self, author_id: str) -> pd.DataFrame:
         """Return source papers that cite at least one reference by ``author_id``."""
-        self._require_authors()
-        ac = self.author_citations
-        rows = ac[(ac["author_id"] == author_id) & (ac["record_kind"] == "reference")]
-        citing_ids = set(rows["citing_paper_id"].dropna().unique())
+        context = self.citation_context_for_author(author_id)
+        citing_ids = set(context["citing_paper_id"].dropna().unique())
         return self.papers[self.papers["id"].isin(citing_ids)]
+
+    def citation_context_for_author(self, author_id: str) -> pd.DataFrame:
+        """Return source-paper context for every citation of works by ``author_id``.
+
+        The result is one row per ``source paper -> cited reference`` edge where
+        the cited reference has ``author_id`` among its canonical authors. This
+        is the audit table behind claims like "100 papers cited Juan Camilo
+        Cardenas"; source-paper journal fields come from ``papers.csv``.
+        """
+        self._require_authors()
+        columns = [
+            "author_id",
+            "author_display_name",
+            "raw_author",
+            "position",
+            "citing_paper_id",
+            "source_paper_title",
+            "source_paper_journal",
+            "source_paper_year",
+            "cited_reference_id",
+            "cited_reference_title",
+            "cited_reference_journal",
+            "cited_reference_year",
+        ]
+        ac = self.author_citations
+        author_refs = ac[
+            (ac["author_id"] == author_id)
+            & (ac["record_kind"] == "reference")
+        ].copy()
+        if author_refs.empty or self.edges.empty:
+            return pd.DataFrame(columns=columns)
+
+        author_refs = author_refs.rename(columns={"record_id": "cited_reference_id"})
+        edges = self.edges.rename(
+            columns={"citing_id": "citing_paper_id", "cited_id": "cited_reference_id"}
+        )
+        context = edges.merge(
+            author_refs[["author_id", "cited_reference_id", "position", "raw_author"]],
+            on="cited_reference_id",
+            how="inner",
+        )
+        if context.empty:
+            return pd.DataFrame(columns=columns)
+
+        papers = self.papers.rename(
+            columns={
+                "id": "citing_paper_id",
+                "Title": "source_paper_title",
+                "Journal": "source_paper_journal",
+                "Year": "source_paper_year",
+            }
+        )
+        for col in ("source_paper_title", "source_paper_journal", "source_paper_year"):
+            if col not in papers.columns:
+                papers[col] = pd.NA
+
+        references = self.references.reset_index()
+        references = references.rename(
+            columns={
+                references.columns[0]: "cited_reference_id",
+                "Title": "cited_reference_title",
+                "Journal": "cited_reference_journal",
+                "Year": "cited_reference_year",
+            }
+        )
+        for col in (
+            "cited_reference_title",
+            "cited_reference_journal",
+            "cited_reference_year",
+        ):
+            if col not in references.columns:
+                references[col] = pd.NA
+
+        author_display = (
+            self.authors.loc[author_id, "display_name"]
+            if author_id in self.authors.index and "display_name" in self.authors.columns
+            else ""
+        )
+        context["author_display_name"] = author_display
+        context = context.merge(
+            papers[
+                [
+                    "citing_paper_id",
+                    "source_paper_title",
+                    "source_paper_journal",
+                    "source_paper_year",
+                ]
+            ],
+            on="citing_paper_id",
+            how="left",
+        ).merge(
+            references[
+                [
+                    "cited_reference_id",
+                    "cited_reference_title",
+                    "cited_reference_journal",
+                    "cited_reference_year",
+                ]
+            ],
+            on="cited_reference_id",
+            how="left",
+        )
+        return context[columns].sort_values(
+            ["citing_paper_id", "cited_reference_id", "position"]
+        ).reset_index(drop=True)
+
+    def citing_papers_by_author(self, author_id: str) -> pd.DataFrame:
+        """Return distinct source papers that cite at least one work by ``author_id``.
+
+        One source paper can cite several references by the same author; it
+        still appears once here, with ``n_cited_references_by_author`` and the
+        cited reference ids/titles preserving the evidence.
+        """
+        context = self.citation_context_for_author(author_id)
+        columns = [
+            "paper_id",
+            "source_paper_title",
+            "source_paper_journal",
+            "source_paper_year",
+            "author_id",
+            "author_display_name",
+            "n_cited_references_by_author",
+            "cited_reference_ids",
+            "cited_reference_titles",
+        ]
+        if context.empty:
+            return pd.DataFrame(columns=columns)
+
+        grouped = (
+            context.groupby(
+                [
+                    "citing_paper_id",
+                    "source_paper_title",
+                    "source_paper_journal",
+                    "source_paper_year",
+                    "author_id",
+                    "author_display_name",
+                ],
+                dropna=False,
+            )
+            .agg(
+                n_cited_references_by_author=("cited_reference_id", "nunique"),
+                cited_reference_ids=(
+                    "cited_reference_id",
+                    lambda s: sorted(set(s)),
+                ),
+                cited_reference_titles=(
+                    "cited_reference_title",
+                    lambda s: list(dict.fromkeys(s)),
+                ),
+            )
+            .reset_index()
+            .rename(columns={"citing_paper_id": "paper_id"})
+        )
+        return grouped[columns].sort_values(
+            ["n_cited_references_by_author", "paper_id"],
+            ascending=[False, True],
+        ).reset_index(drop=True)
+
+    def source_journals_citing_author(self, author_id: str) -> pd.DataFrame:
+        """Count source-paper journals among papers that cite ``author_id``."""
+        papers = self.citing_papers_by_author(author_id)
+        columns = ["source_paper_journal", "n_papers", "share_of_papers"]
+        if papers.empty:
+            return pd.DataFrame(columns=columns)
+
+        journal_series = (
+            papers["source_paper_journal"]
+            .replace("", pd.NA)
+            .fillna("(unknown)")
+        )
+        counts = (
+            journal_series.value_counts()
+            .rename_axis("source_paper_journal")
+            .reset_index(name="n_papers")
+        )
+        counts["share_of_papers"] = counts["n_papers"] / len(papers)
+        return counts[columns].sort_values(
+            ["n_papers", "source_paper_journal"],
+            ascending=[False, True],
+        ).reset_index(drop=True)
 
     # ------------------------------------------------------------------
     # Export

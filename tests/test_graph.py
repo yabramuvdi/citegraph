@@ -154,19 +154,27 @@ def test_from_out_dir_missing_files_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 def _graph_with_authors() -> CitationGraph:
     """Toy graph with two canonical authors and three reference citations."""
-    papers = pd.DataFrame([{"id": "p-a", "Title": "Paper A", "Year": 2020}])
+    papers = pd.DataFrame(
+        [
+            {"id": "p-a", "Title": "Paper A", "Journal": "Ecological Economics", "Year": 2020},
+            {"id": "p-b", "Title": "Paper B", "Journal": "Ecological Economics", "Year": 2021},
+            {"id": "p-c", "Title": "Paper C", "Journal": "World Development", "Year": 2022},
+        ]
+    )
     references = pd.DataFrame(
         [
-            {"id": "r-1", "Title": "Ref 1", "Year": 1990},
-            {"id": "r-2", "Title": "Ref 2", "Year": 1995},
-            {"id": "r-3", "Title": "Ref 3", "Year": 2000},
+            {"id": "r-1", "Title": "Ref 1", "Journal": "World Development", "Year": 1990},
+            {"id": "r-2", "Title": "Ref 2", "Journal": "Ecological Economics", "Year": 1995},
+            {"id": "r-3", "Title": "Ref 3", "Journal": "Child Development", "Year": 2000},
         ]
     ).set_index("id")
     edges = pd.DataFrame(
         [
             {"citing_id": "p-a", "cited_id": "r-1"},
             {"citing_id": "p-a", "cited_id": "r-2"},
-            {"citing_id": "p-a", "cited_id": "r-3"},
+            {"citing_id": "p-b", "cited_id": "r-1"},
+            {"citing_id": "p-c", "cited_id": "r-1"},
+            {"citing_id": "p-c", "cited_id": "r-3"},
         ]
     )
     authors = pd.DataFrame(
@@ -202,13 +210,13 @@ def _graph_with_authors() -> CitationGraph:
     citations = pd.DataFrame(
         [
             {"author_id": "a-cardenas-juan-camilo", "record_kind": "reference",
-             "record_id": "r-1", "position": 0, "citing_paper_id": "p-a",
+             "record_id": "r-1", "position": 0, "citing_paper_id": "",
              "raw_author": "Cárdenas, J.-C."},
             {"author_id": "a-cardenas-juan-camilo", "record_kind": "reference",
-             "record_id": "r-2", "position": 0, "citing_paper_id": "p-a",
+             "record_id": "r-2", "position": 0, "citing_paper_id": "",
              "raw_author": "Cárdenas, Juan-Camilo"},
             {"author_id": "a-diamond-adele", "record_kind": "reference",
-             "record_id": "r-3", "position": 0, "citing_paper_id": "p-a",
+             "record_id": "r-3", "position": 0, "citing_paper_id": "",
              "raw_author": "Diamond, Adele"},
         ]
     )
@@ -244,13 +252,52 @@ def test_citations_of_returns_referenced_works() -> None:
     g = _graph_with_authors()
     refs = g.citations_of("a-cardenas-juan-camilo")
     assert set(refs.index) == {"r-1", "r-2"}
-    assert "citing_paper_id" in refs.columns
+    assert refs.loc["r-1", "citing_paper_ids"] == ["p-a", "p-b", "p-c"]
+    assert refs.loc["r-2", "citing_paper_ids"] == ["p-a"]
 
 
 def test_papers_citing_author_returns_source_papers() -> None:
     g = _graph_with_authors()
     papers = g.papers_citing_author("a-diamond-adele")
-    assert set(papers["id"]) == {"p-a"}
+    assert set(papers["id"]) == {"p-c"}
+
+
+def test_citation_context_for_author_joins_source_papers_to_cited_references() -> None:
+    g = _graph_with_authors()
+
+    context = g.citation_context_for_author("a-cardenas-juan-camilo")
+
+    assert len(context) == 4
+    assert set(context["citing_paper_id"]) == {"p-a", "p-b", "p-c"}
+    assert set(context["cited_reference_id"]) == {"r-1", "r-2"}
+    row = context[
+        (context["citing_paper_id"] == "p-a")
+        & (context["cited_reference_id"] == "r-2")
+    ].iloc[0]
+    assert row["source_paper_journal"] == "Ecological Economics"
+    assert row["cited_reference_title"] == "Ref 2"
+    assert row["raw_author"] == "Cárdenas, Juan-Camilo"
+
+
+def test_citing_papers_by_author_counts_distinct_source_papers() -> None:
+    g = _graph_with_authors()
+
+    papers = g.citing_papers_by_author("a-cardenas-juan-camilo")
+
+    assert list(papers["paper_id"]) == ["p-a", "p-b", "p-c"]
+    assert papers.loc[papers["paper_id"] == "p-a", "n_cited_references_by_author"].iloc[0] == 2
+    assert papers.loc[papers["paper_id"] == "p-a", "cited_reference_ids"].iloc[0] == ["r-1", "r-2"]
+    assert papers.loc[papers["paper_id"] == "p-b", "n_cited_references_by_author"].iloc[0] == 1
+
+
+def test_source_journals_citing_author_counts_source_paper_journals() -> None:
+    g = _graph_with_authors()
+
+    journals = g.source_journals_citing_author("a-cardenas-juan-camilo")
+
+    assert list(journals["source_paper_journal"]) == ["Ecological Economics", "World Development"]
+    assert list(journals["n_papers"]) == [2, 1]
+    assert list(journals["share_of_papers"].round(3)) == [0.667, 0.333]
 
 
 def test_top_cited_authors_raises_without_authors_loaded(small_graph: CitationGraph) -> None:

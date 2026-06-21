@@ -303,7 +303,7 @@
       <span><b>Repo:</b> <code>/Users/yabra/repos/citegraph</code></span>
       <span><b>Status:</b> pipeline shipped, review-UI pre-implementation</span>
       <span><b>Pipeline stages live:</b> 6 / 6</span>
-      <span><b>Tests:</b> 198 across 15 files, no network</span>
+      <span><b>Tests:</b> 206 across 15 files, no network</span>
     </div>
 
     <div class="colorbar" aria-hidden="true">
@@ -421,14 +421,14 @@
       <article class="ms" data-status="wip" data-wave="0">
         <div class="row1"><span class="id">M05 · W0</span><span class="badge wip">In progress</span></div>
         <h4>CrossRef / OpenAlex enrichment</h4>
-        <p class="why">Code shipped + unit-tested (19 OpenAlex-touching assertions in <code>test_enrich.py</code> — happy path, HTTP error, empty-title guard, CrossRef→OpenAlex fallback, all offline via mocked <code>httpx</code>). <em>Not demonstrated on a real corpus yet:</em> the 91-paper run in <code>out/</code> was done without <code>--enrich</code>, <code>out/enrichment/</code> is empty, no <code>enriched_references.csv</code> exists. Production validation against live OpenAlex + a real match-rate measurement is the remaining step.</p>
+        <p class="why">Code shipped + unit-tested (23 tests in <code>test_enrich.py</code> — happy path, HTTP error, empty-title guard, CrossRef→OpenAlex fallback, null OpenAlex source guard, match diagnostics, miss caching, legacy-cache backfill; all offline via mocked <code>httpx</code>). Live-tested on the current 7-paper notebook output: <code>enriched_references.csv</code> has 229 rows, 183 matches (70 CrossRef, 113 OpenAlex) and 46 explicit misses; <code>enrichment_summary.json</code> and <code>enrichment_misses.csv</code> record the review surface; 182 rows carry <code>OpenAlex_Authors</code> objects and 113 rows carry OpenAlex/ORCID author identity evidence.</p>
         <div class="files"><b>files:</b> src/citegraph/enrich.py · tests/test_enrich.py</div>
       </article>
 
       <article class="ms" data-status="done" data-wave="0">
         <div class="row1"><span class="id">M06 · W0</span><span class="badge done">Done</span></div>
         <h4>Author normalization</h4>
-        <p class="why">Code shipped + unit-tested (32 tests in <code>test_authors.py</code>, the largest test file). Surname blocking, precision-first clustering (full-first-name anchors; initial-only merges only when unambiguous), OpenAlex / ORCID IDs override string evidence, <code>author_aliases.csv</code> applied last, low-confidence clusters surfaced in <code>author_review.json</code>. Demonstrated on the 91-paper corpus in <code>out/</code>: <code>authors.csv</code> has 4,267 rows, <code>author_citations.csv</code> has 6,770 rows, and <code>author_review.json</code> has 169 low-confidence clusters for human review. Enrichment is still pending, so this run used string-only evidence except for any curated aliases.</p>
+        <p class="why">Code shipped + unit-tested (33 tests in <code>test_authors.py</code>, the largest test file). Surname blocking, precision-first clustering (full-first-name anchors; initial-only merges only when unambiguous), OpenAlex / ORCID IDs override string evidence, external-id clusters absorb no-id variants when unambiguous, <code>author_aliases.csv</code> applied last, low-confidence clusters surfaced in <code>author_review.json</code>. Demonstrated on the current enriched 7-paper notebook output: <code>authors.csv</code> has 340 rows, <code>author_citations.csv</code> has 458 rows, and <code>author_review.json</code> has 0 low-confidence clusters for human review.</p>
         <div class="files"><b>files:</b> src/citegraph/authors.py · tests/test_authors.py</div>
       </article>
 
@@ -443,14 +443,14 @@
       <article class="ms" data-status="done" data-wave="1">
         <div class="row1"><span class="id">M08 · W1</span><span class="badge done">Done</span></div>
         <h4>CitationGraph query view</h4>
-        <p class="why">Read-only wrapper delivering on the package name. <code>from_out_dir</code> / <code>from_pipeline_result</code> constructors, scope-tight methods (<code>top_cited</code>, <code>cited_by</code>, <code>citers_of</code>), and lazy <code>networkx</code> export. Loads author tables when present and unlocks <code>top_cited_authors</code> / <code>find_author</code> / <code>citations_of</code>.</p>
+        <p class="why">Read-only wrapper delivering on the package name. <code>from_out_dir</code> / <code>from_pipeline_result</code> constructors, scope-tight methods (<code>top_cited</code>, <code>cited_by</code>, <code>citers_of</code>), and lazy <code>networkx</code> export. Loads author tables when present and unlocks <code>top_cited_authors</code> / <code>find_author</code> / <code>citations_of</code>, plus source-paper context queries for author claims: <code>citation_context_for_author</code>, <code>citing_papers_by_author</code>, and <code>source_journals_citing_author</code>.</p>
         <div class="files"><b>files:</b> src/citegraph/graph.py</div>
       </article>
 
       <article class="ms" data-status="done" data-wave="1">
         <div class="row1"><span class="id">M09 · W1</span><span class="badge done">Done</span></div>
         <h4>Failure isolation &amp; sidecars</h4>
-        <p class="why">Per-paper try/except in both extraction loops; failures recorded to <code>metadata_failures.jsonl</code> / <code>references_failures.jsonl</code> without writing cache, so re-runs retry. Six sidecar files (conversion warnings, source duplicates, no-references, two failure logs, author review) all follow the "absent = clean" convention.</p>
+        <p class="why">Per-paper try/except in both extraction loops; failures recorded to <code>metadata_failures.jsonl</code> / <code>references_failures.jsonl</code> without writing cache, so re-runs retry. Warning sidecars (conversion warnings, source duplicates, no-references, two failure logs, author review) follow the "absent = clean" convention; enrichment adds always-reviewable <code>enrichment_summary.json</code> and <code>enrichment_misses.csv</code> after stage 5 runs.</p>
         <div class="files"><b>files:</b> src/citegraph/pipeline.py (_write_failures, _write_no_references)</div>
       </article>
 
@@ -464,7 +464,7 @@
       <article class="ms" data-status="done" data-wave="1">
         <div class="row1"><span class="id">M11 · W1</span><span class="badge done">Done</span></div>
         <h4>Test suite (no network)</h4>
-        <p class="why">198 tests across 15 files, every test runs offline. Pattern: subclass <code>GeminiClient</code> with a <code>_FakeClient</code> that sniffs the prompt to distinguish metadata from references. CI runs <code>ruff check</code> + <code>pytest</code> on Python 3.10 / 3.11 / 3.12.</p>
+        <p class="why">206 tests across 15 files, every test runs offline. Pattern: subclass <code>GeminiClient</code> with a <code>_FakeClient</code> that sniffs the prompt to distinguish metadata from references. CI runs <code>ruff check</code> + <code>pytest</code> on Python 3.10 / 3.11 / 3.12.</p>
         <div class="files"><b>files:</b> tests/ · tests/test_pipeline.py (_FakeClient)</div>
       </article>
 

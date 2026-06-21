@@ -157,8 +157,13 @@ A reference cited by N papers appears N times here, with N different `citing_id`
 | `Title`, `Authors`, `Journal`, `Year` | | from the first member of the cluster |
 | `doi` | string | only after `--enrich`; `None` for unmatched rows |
 | `enrichment_source` | string | only after `--enrich`; `"crossref"` or `"openalex"` |
+| `enrichment_status` | string | only after `--enrich`; `"matched"` or `"miss"` |
+| `enrichment_miss_reason` | string | only after `--enrich`; reason for unmatched rows, e.g. `"no_candidates"` |
+| `enrichment_title_score` | float | only after `--enrich`; fuzzy title score for the accepted candidate |
+| `enrichment_candidate_title` | string | only after `--enrich`; external title that was accepted |
+| `enrichment_year_match` | bool | only after `--enrich`; whether the input and candidate years agreed when both were known |
 
-`Authors_List` is *not* preserved through the dedup stage &mdash; only the derived `Authors` string survives.
+`Authors_List` is preserved through the dedup stage so author normalization can use structured author strings instead of comma-splitting display text.
 
 ### `citation_graph.csv` &mdash; the actual graph
 
@@ -188,6 +193,18 @@ g.cited_by("p-doe-2020-some-paper")
 g.citers_of("r-hardin-1968-tragedy-of-the-commons")
 ```
 
+When `authors.csv` and `author_citations.csv` exist, author-level queries
+are available too. These join through `citation_graph.csv`, so source-paper
+journal counts answer "which journals are doing the citing?":
+
+```python
+cardenas_id = g.find_author("cardenas").index[0]
+
+g.citation_context_for_author(cardenas_id)   # one source-paper -> cited-reference edge per row
+g.citing_papers_by_author(cardenas_id)       # distinct source papers citing that author
+g.source_journals_citing_author(cardenas_id) # source-paper journal rollup
+```
+
 For graph analysis, export to [`networkx`](https://networkx.org/) (not a
 default dependency &mdash; install separately):
 
@@ -197,15 +214,18 @@ nx_graph = g.to_networkx()         # DiGraph with edges citing -> cited
 
 ### Sidecar files
 
-All sidecar files follow the same convention: **absent means clean**. They are
-created only when the condition they describe actually occurred, so `path.exists()`
-is a sufficient check.
+Most warning sidecar files follow the same convention: **absent means clean**.
+They are created only when the condition they describe actually occurred, so
+`path.exists()` is a sufficient check. Enrichment review files are different:
+they are written when stage 5 runs so you can inspect match quality.
 
 - `run_summary.json` &mdash; counts for the whole run: `n_papers`, `n_references_raw`, `n_references_dedup`, `n_edges`, `n_metadata_failures`, `n_references_failures`, `n_source_duplicates`, `n_papers_no_references`, `n_conversion_warnings`, plus the model id and dedup configuration.
 - `metadata_failures.jsonl` and `references_failures.jsonl` &mdash; one JSON line per failed paper: `{source_file, stage, error_class, error_message}`. The pipeline keeps going past per-paper failures; re-running will retry them (their caches were not written).
 - `source_duplicates.json` &mdash; written when two differently-named PDFs contain the same paper (detected by the same fuzzy-match logic used for reference deduplication). Each entry names the canonical source file, the duplicate file(s), and the paper title. The duplicate PDFs are silently skipped in the references stage; remove them from `pdf_dir` and re-run to clean up.
 - `papers_no_references.json` &mdash; written when a paper is successfully processed but the LLM returned an empty reference list. Each entry has `paper_id`, `source_file`, and `title`. Common causes: image-only PDFs (see `--ocr-auto` / `--ocr`), papers with no bibliography section, or Gemini returning an empty list despite the content being present.
 - `conversion_warnings.json` &mdash; written after stage 1 when any output markdown appears to be image-only (scanned PDF converted without OCR). Each entry has `source_file` and a human-readable `reason`. Re-run stage 1 with `--ocr-auto` to regenerate only the flagged files with OCR, or `--ocr` to force OCR for every PDF.
+- `enrichment_summary.json` &mdash; written by stage 5 when enrichment runs. Contains match/miss counts, source counts, match rate, and the `EnrichConfig` values used.
+- `enrichment_misses.csv` &mdash; written by stage 5 when enrichment runs. Lists unmatched references with their miss reason so they can be inspected or curated later.
 
 ## Evaluation
 
@@ -275,6 +295,12 @@ pipe = Pipeline(
 ```
 
 The CLI exposes the same knobs as flags &mdash; see `citegraph run --help`.
+
+When enrichment runs, every row gets explicit diagnostics in
+`enriched_references.csv`: `enrichment_status`, `enrichment_miss_reason`,
+`enrichment_title_score`, `enrichment_candidate_title`, and
+`enrichment_year_match`. The same run writes `enrichment_summary.json` and
+`enrichment_misses.csv` under `out_dir/` for quick review.
 
 ## Development
 
