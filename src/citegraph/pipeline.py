@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,6 +33,7 @@ import pandas as pd
 
 from citegraph._progress import iter_with_progress
 from citegraph.authors import AuthorClusterConfig, load_aliases, normalize_authors
+from citegraph.config import get_settings
 from citegraph.dedup import DedupConfig, dedup_references
 from citegraph.enrich import EnrichConfig
 from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_to_record
@@ -114,6 +116,7 @@ class Pipeline:
         overwrite_markdown: bool = False,
         recursive: bool = False,
         ocr: OCRMode = False,
+        llm_concurrency: int | None = None,
         show_progress: bool = True,
         client: GeminiClient | None = None,
     ) -> None:
@@ -127,6 +130,13 @@ class Pipeline:
         self.overwrite_markdown = overwrite_markdown
         self.recursive = recursive
         self.ocr = ocr
+        self.llm_concurrency = (
+            llm_concurrency
+            if llm_concurrency is not None
+            else get_settings().citegraph_llm_concurrency
+        )
+        if self.llm_concurrency < 1:
+            raise ValueError("llm_concurrency must be >= 1")
         self.show_progress = show_progress
         self._client_kwargs = {"model": model} if model else {}
         self._client = client
@@ -202,14 +212,7 @@ class Pipeline:
         if markdown_paths is None:
             markdown_paths = self._load_markdown_paths()
 
-        records: list[dict] = []
-        failures: list[PaperFailure] = []
-        for md in iter_with_progress(
-            markdown_paths,
-            show_progress=self.show_progress,
-            description="Extracting metadata",
-            item_label=lambda p: p.name,
-        ):
+        def _process_one(md: Path) -> tuple[dict | None, PaperFailure | None]:
             cache = self.layout.metadata_dir / f"{md.stem}.json"
             try:
                 if cache.exists():
@@ -219,10 +222,10 @@ class Pipeline:
                     logger.info("Extracting metadata from %s", md.name)
                     meta = extract_metadata_from_markdown(md, client=self.client)
                     write_pydantic(cache, meta)
-                records.append(metadata_to_record(meta, source_file=md.name))
+                return metadata_to_record(meta, source_file=md.name), None
             except Exception as exc:  # noqa: BLE001 - one bad paper shouldn't kill the run
                 logger.error("Metadata extraction failed for %s: %s", md.name, exc)
-                failures.append(
+                return None, (
                     PaperFailure(
                         source_file=md.name,
                         stage="metadata",
@@ -231,6 +234,27 @@ class Pipeline:
                     )
                 )
 
+        records_by_index: list[dict | None] = [None] * len(markdown_paths)
+        failures_by_index: list[PaperFailure | None] = [None] * len(markdown_paths)
+        with ThreadPoolExecutor(max_workers=self.llm_concurrency) as executor:
+            future_to_index: dict[Future[tuple[dict | None, PaperFailure | None]], int] = {
+                executor.submit(_process_one, md): idx
+                for idx, md in enumerate(markdown_paths)
+            }
+            futures = list(future_to_index)
+            for future in iter_with_progress(
+                futures,
+                show_progress=self.show_progress,
+                description="Extracting metadata",
+                item_label=lambda fut: markdown_paths[future_to_index[fut]].name,
+            ):
+                idx = future_to_index[future]
+                record, failure = future.result()
+                records_by_index[idx] = record
+                failures_by_index[idx] = failure
+
+        records = [r for r in records_by_index if r is not None]
+        failures = [f for f in failures_by_index if f is not None]
         _write_failures(self.layout.metadata_failures_jsonl, failures)
         if failures:
             logger.warning(
@@ -278,14 +302,8 @@ class Pipeline:
                 for dup_file in group.get("duplicate_source_files", []):
                     duplicate_lookup[dup_file] = group
 
-        rows: list[dict] = []
-        failures: list[PaperFailure] = []
-        for md in iter_with_progress(
-            markdown_paths,
-            show_progress=self.show_progress,
-            description="Extracting references",
-            item_label=lambda p: p.name,
-        ):
+        valid_items: list[tuple[int, Path, str]] = []
+        for idx, md in enumerate(markdown_paths):
             citing_id = source_to_id.get(md.name)
             if citing_id is None:
                 if md.name in duplicate_lookup:
@@ -299,7 +317,9 @@ class Pipeline:
                 else:
                     logger.warning("No paper id for %s; skipping references", md.name)
                 continue
+            valid_items.append((idx, md, citing_id))
 
+        def _process_one(md: Path, citing_id: str) -> tuple[list[dict], PaperFailure | None]:
             cache = self.layout.references_dir / f"{md.stem}.json"
             try:
                 if cache.exists():
@@ -309,11 +329,13 @@ class Pipeline:
                     logger.info("Extracting references from %s", md.name)
                     refs = extract_references_from_markdown(md, client=self.client)
                     write_pydantic_list(cache, refs)
+                rows = []
                 for ref in refs:
                     rows.append({**ref.model_dump(), "citing_id": citing_id})
+                return rows, None
             except Exception as exc:  # noqa: BLE001 - one bad paper shouldn't kill the run
                 logger.error("References extraction failed for %s: %s", md.name, exc)
-                failures.append(
+                return [], (
                     PaperFailure(
                         source_file=md.name,
                         stage="references",
@@ -322,6 +344,30 @@ class Pipeline:
                     )
                 )
 
+        rows_by_index: dict[int, list[dict]] = {}
+        failures_by_index: dict[int, PaperFailure] = {}
+        with ThreadPoolExecutor(max_workers=self.llm_concurrency) as executor:
+            future_to_item: dict[Future[tuple[list[dict], PaperFailure | None]], tuple[int, Path, str]] = {
+                executor.submit(_process_one, md, citing_id): (idx, md, citing_id)
+                for idx, md, citing_id in valid_items
+            }
+            futures = list(future_to_item)
+            for future in iter_with_progress(
+                futures,
+                show_progress=self.show_progress,
+                description="Extracting references",
+                item_label=lambda fut: future_to_item[fut][1].name,
+            ):
+                idx, _md, _citing_id = future_to_item[future]
+                item_rows, failure = future.result()
+                rows_by_index[idx] = item_rows
+                if failure is not None:
+                    failures_by_index[idx] = failure
+
+        rows: list[dict] = []
+        for idx, _md, _citing_id in valid_items:
+            rows.extend(rows_by_index.get(idx, []))
+        failures = [failures_by_index[idx] for idx in sorted(failures_by_index)]
         _write_failures(self.layout.references_failures_jsonl, failures)
         if failures:
             logger.warning(

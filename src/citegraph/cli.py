@@ -136,6 +136,12 @@ def run(
     authors_weight: float = typer.Option(0.3, "--authors-weight"),
     journal_weight: float = typer.Option(0.0, "--journal-weight"),
     year_window: int = typer.Option(1, "--year-window"),
+    llm_concurrency: int | None = typer.Option(
+        None,
+        "--llm-concurrency",
+        min=1,
+        help="Maximum concurrent Gemini extraction calls (default: CITEGRAPH_LLM_CONCURRENCY or 4).",
+    ),
     overwrite_markdown: bool = typer.Option(
         False, "--overwrite-markdown", help="Re-run docling even if cached."
     ),
@@ -174,6 +180,7 @@ def run(
         overwrite_markdown=overwrite_markdown,
         recursive=recursive,
         ocr=ocr_mode,
+        llm_concurrency=llm_concurrency,
     )
 
     if not yes:
@@ -290,11 +297,22 @@ def convert(
 def metadata(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
     model: str | None = typer.Option(None, "--model"),
+    llm_concurrency: int | None = typer.Option(
+        None,
+        "--llm-concurrency",
+        min=1,
+        help="Maximum concurrent Gemini metadata extraction calls.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 2: extract per-paper metadata from cached markdown."""
     _configure_logging(verbose)
-    pipeline = Pipeline(pdf_dir=None, out_dir=out, model=model)
+    pipeline = Pipeline(
+        pdf_dir=None,
+        out_dir=out,
+        model=model,
+        llm_concurrency=llm_concurrency,
+    )
 
     def _go() -> None:
         df = pipeline.extract_paper_metadata()
@@ -318,12 +336,23 @@ def metadata(
 def references(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
     model: str | None = typer.Option(None, "--model"),
+    llm_concurrency: int | None = typer.Option(
+        None,
+        "--llm-concurrency",
+        min=1,
+        help="Maximum concurrent Gemini reference extraction calls.",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip cost-estimate confirmation."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 3: extract per-paper reference lists from cached markdown."""
     _configure_logging(verbose)
-    pipeline = Pipeline(pdf_dir=None, out_dir=out, model=model)
+    pipeline = Pipeline(
+        pdf_dir=None,
+        out_dir=out,
+        model=model,
+        llm_concurrency=llm_concurrency,
+    )
 
     if not yes:
         try:

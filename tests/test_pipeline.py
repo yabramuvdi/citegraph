@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import threading
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -120,6 +122,123 @@ def test_pipeline_caches_metadata(tmp_path: Path) -> None:
 
     reloaded = pd.read_csv(tmp_path / "out" / "papers.csv")
     assert reloaded.iloc[0]["Title"].startswith("Governing Common-Pool Resources")
+
+
+def test_metadata_extraction_runs_concurrently_and_preserves_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    markdown_paths = []
+    for i in range(4):
+        path = md_dir / f"paper_{i}.md"
+        path.write_text(f"# Paper {i}\n")
+        markdown_paths.append(path)
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_extract(md_path: Path, *, client):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        idx = int(md_path.stem.rsplit("_", 1)[1])
+        return PaperMetadata(
+            Title=f"Paper {idx}",
+            Authors_List=[f"Author {idx}"],
+            Journal="J",
+            Year=2020 + idx,
+        )
+
+    monkeypatch.setattr("citegraph.pipeline.extract_metadata_from_markdown", fake_extract)
+
+    pipeline = Pipeline(
+        pdf_dir=None,
+        out_dir=tmp_path / "out",
+        client=_FakeClient(),
+        llm_concurrency=3,
+        show_progress=False,
+    )
+    papers = pipeline.extract_paper_metadata(markdown_paths)
+
+    assert max_active > 1
+    assert papers["source_file"].tolist() == [p.name for p in markdown_paths]
+
+
+def test_reference_extraction_runs_concurrently_and_preserves_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    markdown_paths = []
+    paper_rows = []
+    for i in range(4):
+        path = md_dir / f"paper_{i}.md"
+        path.write_text(f"# Paper {i}\n## References\n1. Ref {i}\n")
+        markdown_paths.append(path)
+        paper_rows.append(
+            {
+                "id": f"p-paper-{i}",
+                "Title": f"Paper {i}",
+                "Authors_List": [f"Author {i}"],
+                "Journal": "J",
+                "Year": 2020 + i,
+                "source_file": path.name,
+            }
+        )
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_extract(md_path: Path, *, client):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        idx = int(md_path.stem.rsplit("_", 1)[1])
+        return [
+            Reference(
+                Title=f"Ref {idx}",
+                Authors_List=[f"Cited {idx}"],
+                Journal="J",
+                Year=2000 + idx,
+            )
+        ]
+
+    monkeypatch.setattr("citegraph.pipeline.extract_references_from_markdown", fake_extract)
+
+    pipeline = Pipeline(
+        pdf_dir=None,
+        out_dir=tmp_path / "out",
+        client=_FakeClient(),
+        llm_concurrency=3,
+        show_progress=False,
+    )
+    refs = pipeline.extract_paper_references(
+        markdown_paths, papers_df=pd.DataFrame(paper_rows)
+    )
+
+    assert max_active > 1
+    assert refs["citing_id"].tolist() == [row["id"] for row in paper_rows]
+
+
+def test_pipeline_rejects_non_positive_llm_concurrency(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="llm_concurrency"):
+        Pipeline(
+            pdf_dir=None,
+            out_dir=tmp_path / "out",
+            client=_FakeClient(),
+            llm_concurrency=0,
+        )
 
 
 def test_progressive_stages_resume_from_disk(tmp_path: Path) -> None:

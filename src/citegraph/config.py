@@ -41,6 +41,12 @@ class Settings(BaseSettings):
         default=120.0,
         validation_alias="CITEGRAPH_REQUEST_TIMEOUT_S",
     )
+    citegraph_llm_concurrency: int = Field(
+        default=4,
+        ge=1,
+        validation_alias="CITEGRAPH_LLM_CONCURRENCY",
+        description="Maximum concurrent LLM extraction calls.",
+    )
 
     def require_api_key(self) -> str:
         """Return the Gemini API key or raise a helpful error."""

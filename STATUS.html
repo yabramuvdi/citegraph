@@ -303,7 +303,7 @@
       <span><b>Repo:</b> <code>/Users/yabra/repos/citegraph</code></span>
       <span><b>Status:</b> pipeline shipped, review-UI pre-implementation</span>
       <span><b>Pipeline stages live:</b> 6 / 6</span>
-      <span><b>Tests:</b> 193 across 15 files, no network</span>
+      <span><b>Tests:</b> 198 across 15 files, no network</span>
     </div>
 
     <div class="colorbar" aria-hidden="true">
@@ -313,17 +313,17 @@
       <span style="background:var(--accent-4)"></span>
     </div>
 
-    <div class="progress" role="img" aria-label="Overall milestone progress: 10 done, 1 in progress, 1 scaffolded, 13 not started">
-      <span class="done" style="width:40%"></span>
+    <div class="progress" role="img" aria-label="Overall milestone progress: 11 done, 1 in progress, 1 scaffolded, 12 not started">
+      <span class="done" style="width:44%"></span>
       <span class="wip"  style="width:4%"></span>
       <span class="scaf" style="width:4%"></span>
-      <span class="idle" style="width:52%"></span>
+      <span class="idle" style="width:48%"></span>
     </div>
     <div class="legend">
-      <span><i class="dot" style="background:var(--done)"></i>Done · 10</span>
+      <span><i class="dot" style="background:var(--done)"></i>Done · 11</span>
       <span><i class="dot" style="background:var(--wip)"></i>In progress · 1</span>
       <span><i class="dot" style="background:var(--scaf)"></i>Scaffolded · 1</span>
-      <span><i class="dot" style="background:var(--idle)"></i>Not started · 13</span>
+      <span><i class="dot" style="background:var(--idle)"></i>Not started · 12</span>
       <span style="margin-left:auto">25 milestones total</span>
     </div>
   </header>
@@ -351,7 +351,7 @@
         <div class="num">2</div>
         <h3>Pipeline refinements</h3>
         <small>M12 – M15 · concurrency, normalization, ground-truth, canonical-row merging</small>
-        <div class="bar"><span class="idle" style="width:100%;background:var(--idle)"></span></div>
+        <div class="bar"><span class="done" style="width:25%;background:var(--done)"></span><span class="idle" style="width:75%;background:var(--idle)"></span></div>
       </div>
 
       <div class="wave-card">
@@ -380,10 +380,10 @@
 
     <div class="toolbar" role="tablist" aria-label="Filter milestones by status">
       <button class="pill" data-filter="all" aria-pressed="true">All <span class="count">25</span></button>
-      <button class="pill" data-filter="done" aria-pressed="false"><i class="dot" style="background:var(--done)"></i>Done <span class="count">10</span></button>
+      <button class="pill" data-filter="done" aria-pressed="false"><i class="dot" style="background:var(--done)"></i>Done <span class="count">11</span></button>
       <button class="pill" data-filter="wip" aria-pressed="false"><i class="dot" style="background:var(--wip)"></i>In progress <span class="count">1</span></button>
       <button class="pill" data-filter="scaf" aria-pressed="false"><i class="dot" style="background:var(--scaf)"></i>Scaffolded <span class="count">1</span></button>
-      <button class="pill" data-filter="idle" aria-pressed="false"><i class="dot" style="background:var(--idle)"></i>Not started <span class="count">13</span></button>
+      <button class="pill" data-filter="idle" aria-pressed="false"><i class="dot" style="background:var(--idle)"></i>Not started <span class="count">12</span></button>
       <button class="pill" data-filter="block" aria-pressed="false" style="margin-left:auto"><i class="dot" style="background:var(--block)"></i>Blocked</button>
     </div>
 
@@ -464,16 +464,16 @@
       <article class="ms" data-status="done" data-wave="1">
         <div class="row1"><span class="id">M11 · W1</span><span class="badge done">Done</span></div>
         <h4>Test suite (no network)</h4>
-        <p class="why">193 tests across 15 files, every test runs offline. Pattern: subclass <code>GeminiClient</code> with a <code>_FakeClient</code> that sniffs the prompt to distinguish metadata from references. CI runs <code>ruff check</code> + <code>pytest</code> on Python 3.10 / 3.11 / 3.12.</p>
+        <p class="why">198 tests across 15 files, every test runs offline. Pattern: subclass <code>GeminiClient</code> with a <code>_FakeClient</code> that sniffs the prompt to distinguish metadata from references. CI runs <code>ruff check</code> + <code>pytest</code> on Python 3.10 / 3.11 / 3.12.</p>
         <div class="files"><b>files:</b> tests/ · tests/test_pipeline.py (_FakeClient)</div>
       </article>
 
       <!-- Wave 2 — Pipeline refinements -->
-      <article class="ms" data-status="idle" data-wave="2">
-        <div class="row1"><span class="id">M12 · W2</span><span class="badge idle">Not started</span></div>
+      <article class="ms" data-status="done" data-wave="2">
+        <div class="row1"><span class="id">M12 · W2</span><span class="badge done">Done</span></div>
         <h4>Concurrent LLM calls</h4>
-        <p class="why">Both extraction stages are sequential — round-trips dominate wall-clock on large corpora. Add a thread/async pool around the per-paper loops, capped via <code>CITEGRAPH_LLM_CONCURRENCY</code>. Cache layer already isolates per-paper failures, so a worker error is contained. Highest-leverage productivity item in Wave 2.</p>
-        <div class="files"><b>blocked by:</b> OQ-05 (concurrency default)</div>
+        <p class="why">Metadata and reference extraction now run per-paper work in a thread pool capped by <code>Pipeline(llm_concurrency=...)</code>, <code>--llm-concurrency</code>, or <code>CITEGRAPH_LLM_CONCURRENCY</code> (default <code>4</code>). Results are collected in input order, caches remain per-paper, and worker failures still write the same failure sidecars without blocking the rest of the batch.</p>
+        <div class="files"><b>files:</b> src/citegraph/pipeline.py · src/citegraph/config.py · src/citegraph/cli.py · tests/test_pipeline.py</div>
       </article>
 
       <article class="ms" data-status="idle" data-wave="2">
@@ -574,12 +574,12 @@
 
   <section>
     <h2 class="display">Next 3 things to do</h2>
-    <p class="lede">If you walk in cold, start here. M12 is a quick productivity win independent of everything else; M20+M21 are the foundation for the entire review-UI wave.</p>
+    <p class="lede">If you walk in cold, start here. M05 validates external enrichment on the real corpus; M20+M21 are the foundation for the entire review-UI wave.</p>
     <div class="grid-2">
       <div class="panel">
-        <h3>1 — Ship M12 (concurrent LLM calls)</h3>
-        <p style="color:var(--ink-soft);margin:0 0 8px">Lowest-risk, highest-immediate-value item. The cache layer already isolates per-paper failures, so a thread/async pool around <code>extract_paper_metadata</code> and <code>extract_paper_references</code> is largely additive. Add a <code>CITEGRAPH_LLM_CONCURRENCY</code> setting (resolve OQ-05 default first — probably 4 or 8). On the 91-paper corpus already in <code>out/</code> this should cut extraction wall-clock by &gt;5×.</p>
-        <p style="margin:0;font-size:13px;color:var(--ink-mute)">Touches: <code>src/citegraph/pipeline.py</code>, <code>src/citegraph/config.py</code>, <code>src/citegraph/cli.py</code>.</p>
+        <h3>1 — Validate M05 (real enrichment run)</h3>
+        <p style="color:var(--ink-soft);margin:0 0 8px">Run CrossRef/OpenAlex enrichment on the 91-paper corpus, measure match rate, inspect misses, and confirm <code>OpenAlex_Authors</code> survives into <code>enriched_references.csv</code> for the author stage. This turns the last Wave 0 item from code-complete to corpus-validated.</p>
+        <p style="margin:0;font-size:13px;color:var(--ink-mute)">Touches: <code>out/enrichment/</code>, <code>out/enriched_references.csv</code>, <code>STATUS.html</code>.</p>
       </div>
       <div class="panel">
         <h3>2 — Ship M20 (eval_mode infrastructure)</h3>
@@ -603,7 +603,7 @@
       <div class="oq blocker"><span class="oqid">OQ-02</span><span><b>Web UI server framework.</b> FastAPI (async, websockets, +deps) vs stdlib <code>http.server</code> (zero deps, polling). The "review-only" use case is small enough that stdlib could work; FastAPI is friendlier for the future.</span><span class="blocks">M21</span></div>
       <div class="oq"><span class="oqid">OQ-03</span><span><b>Borderline-pair scope for dedup review.</b> The roadmap suggests ±5 around threshold, year diff at edge of window, missing-year merges. Pick concrete numbers and document the rationale before M24.</span><span class="blocks">M24</span></div>
       <div class="oq"><span class="oqid">OQ-04</span><span><b>Default sample sizes per checkpoint.</b> Roadmap suggests 5 papers (metadata), 3 papers × 5 refs (references). Validate on the existing 91-paper corpus — too low loses signal, too high becomes drudgery.</span><span class="blocks">M20, M22-M23</span></div>
-      <div class="oq"><span class="oqid">OQ-05</span><span><b><code>CITEGRAPH_LLM_CONCURRENCY</code> default.</b> Gemini's free tier has a per-minute cap; paid is generous. 4 is safe everywhere; 8-16 maximizes throughput on paid. Pick a default that doesn't surprise free-tier users.</span><span class="blocks">M12</span></div>
+      <div class="oq"><span class="oqid">OQ-05</span><span><b><code>CITEGRAPH_LLM_CONCURRENCY</code> default.</b> Resolved for M12 as <code>4</code>: conservative enough for broad use, overridable via env var, <code>Pipeline(...)</code>, and <code>--llm-concurrency</code>.</span><span class="blocks">resolved</span></div>
       <div class="oq"><span class="oqid">OQ-06</span><span><b>Gemini pricing-table refresh policy.</b> The table in <code>cost_estimation.py</code> is dated mid-2025. Decide whether it's manually refreshed on each release or fetched at runtime (cached).</span><span class="blocks">M10 maintenance</span></div>
       <div class="oq"><span class="oqid">OQ-07</span><span><b>Re-extraction strategy after a checkpoint edit.</b> When the user edits a metadata field, do we (a) just overwrite the cache, (b) re-validate by calling the LLM again, or (c) mark the paper and require explicit re-run? (a) is simplest, (c) is most defensive.</span><span class="blocks">M20, M22</span></div>
       <div class="oq"><span class="oqid">OQ-08</span><span><b>Author cluster review confidence criteria.</b> <code>author_review.json</code> currently flags initial-only + several citations + no external id. Should also flag clusters where OpenAlex IDs <em>conflict</em> (same surname-name but different OpenAlex id across rows) — a stronger signal than "no id at all".</span><span class="blocks">M25, src/citegraph/authors.py</span></div>

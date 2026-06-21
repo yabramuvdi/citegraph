@@ -231,6 +231,7 @@ deduplication F1. Numbers from the reference run are reported in
 | `enrich` | `False` | run a CrossRef/OpenAlex pass over the deduplicated references (requires the `[crossref]` extra) |
 | `enrich_config` | `EnrichConfig()` | tune the enrichment pass &mdash; see below |
 | `dedup_config` | `DedupConfig()` | tune the fuzzy dedup &mdash; see below |
+| `llm_concurrency` | `4` | maximum concurrent Gemini extraction calls for metadata/references (or set `CITEGRAPH_LLM_CONCURRENCY`). CLI flag on LLM stages: `--llm-concurrency` |
 | `overwrite_markdown` | `False` | re-run docling even when a cached `.md` exists |
 | `recursive` | `False` | walk subdirectories of `pdf_dir`. Cache filenames are disambiguated by relative path (e.g. `journal_X/foo.pdf` → `journal_X__foo.md`); a clear error is raised if two PDFs would still collide. CLI flag: `--recursive` / `-r` |
 | `ocr` | `False` | OCR mode: `False` disables OCR, `"auto"` retries image-only outputs with OCR, and `True` forces full-page OCR for every PDF. CLI flags: `--ocr-auto` / `--ocr` |

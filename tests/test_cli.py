@@ -85,6 +85,29 @@ def test_convert_rejects_mutually_exclusive_ocr_flags(tmp_path: Path) -> None:
     assert "--ocr and --ocr-auto are mutually exclusive" in result.output
 
 
+def test_llm_concurrency_option_is_exposed_on_llm_commands() -> None:
+    for command in ("run", "metadata", "references"):
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--llm-concurrency" in result.output
+
+
+def test_llm_concurrency_option_rejects_zero(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "metadata",
+            "--llm-concurrency",
+            "0",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--llm-concurrency" in result.output
+
+
 # ---------------------------------------------------------------------------
 # dedup
 # ---------------------------------------------------------------------------
