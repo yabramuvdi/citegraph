@@ -16,8 +16,9 @@ CrossRef / OpenAlex. The result is three CSVs you can analyse directly:
 ## Install
 
 ```bash
-pip install citegraph                  # base install (Gemini + fuzzy dedup)
-pip install "citegraph[crossref]"      # + CrossRef / OpenAlex enrichment
+pip install citegraph                  # base install (Gemini + fuzzy dedup + graph queries)
+pip install "citegraph[pdf]"           # + PDF conversion via docling
+pip install "citegraph[all]"           # + PDF conversion and CrossRef/OpenAlex enrichment
 ```
 
 You'll need a Google Gemini API key:
@@ -250,11 +251,11 @@ deduplication F1. Numbers from the reference run are reported in
 | `pdf_dir` | required | folder of input PDFs (`None` is allowed when resuming from a previous run's cache) |
 | `out_dir` | required | where outputs and checkpoints are written |
 | `model` | `gemini-3.1-flash-lite` | Gemini model id (or set `CITEGRAPH_MODEL`) |
-| `enrich` | `False` | run a CrossRef/OpenAlex pass over the deduplicated references (requires the `[crossref]` extra) |
+| `enrich` | `False` | run a CrossRef/OpenAlex pass over the deduplicated references (requires the `[crossref]` or `[all]` extra) |
 | `enrich_config` | `EnrichConfig()` | tune the enrichment pass &mdash; see below |
 | `dedup_config` | `DedupConfig()` | tune the fuzzy dedup &mdash; see below |
 | `llm_concurrency` | `4` | maximum concurrent Gemini extraction calls for metadata/references (or set `CITEGRAPH_LLM_CONCURRENCY`). CLI flag on LLM stages: `--llm-concurrency` |
-| `overwrite_markdown` | `False` | re-run docling even when a cached `.md` exists |
+| `overwrite_markdown` | `False` | re-run docling even when a cached `.md` exists (PDF conversion requires the `[pdf]` or `[all]` extra) |
 | `recursive` | `False` | walk subdirectories of `pdf_dir`. Cache filenames are disambiguated by relative path (e.g. `journal_X/foo.pdf` → `journal_X__foo.md`); a clear error is raised if two PDFs would still collide. CLI flag: `--recursive` / `-r` |
 | `ocr` | `False` | OCR mode: `False` disables OCR, `"auto"` retries image-only outputs with OCR, and `True` forces full-page OCR for every PDF. CLI flags: `--ocr-auto` / `--ocr` |
 
