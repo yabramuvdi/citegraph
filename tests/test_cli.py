@@ -116,6 +116,7 @@ def test_enrich_quality_options_are_exposed_on_enrichment_commands() -> None:
         assert "--enrich-retry-attemp" in result.output
         assert "Attempts for transient" in result.output
         assert "--enrich-retry-wait" in result.output
+        assert "--enrich-max-workers" in result.output
 
 
 def test_enrich_config_receives_quality_options() -> None:
@@ -126,6 +127,7 @@ def test_enrich_config_receives_quality_options() -> None:
         year_penalty=11.0,
         retry_attempts=5,
         retry_wait=0.1,
+        max_workers=2,
     )
 
     assert cfg.contact_email == "me@example.com"
@@ -134,6 +136,23 @@ def test_enrich_config_receives_quality_options() -> None:
     assert cfg.year_mismatch_penalty == 11.0
     assert cfg.retry_attempts == 5
     assert cfg.retry_wait_s == 0.1
+    assert cfg.max_workers == 2
+
+
+def test_enrich_max_workers_option_rejects_zero(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "enrich",
+            "--enrich-max-workers",
+            "0",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--enrich-max-workers" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,7 @@ def _enrich_config(
     year_penalty: float,
     retry_attempts: int,
     retry_wait: float,
+    max_workers: int,
 ) -> EnrichConfig:
     return EnrichConfig(
         contact_email=contact,
@@ -72,6 +73,7 @@ def _enrich_config(
         year_mismatch_penalty=year_penalty,
         retry_attempts=retry_attempts,
         retry_wait_s=retry_wait,
+        max_workers=max_workers,
     )
 
 
@@ -153,6 +155,12 @@ def run(
         min=0.0,
         help="Base exponential-backoff wait in seconds for enrichment retries.",
     ),
+    enrich_max_workers: int = typer.Option(
+        8,
+        "--enrich-max-workers",
+        min=1,
+        help="Maximum concurrent CrossRef/OpenAlex enrichment lookups.",
+    ),
     model: str | None = typer.Option(None, "--model", help="Gemini model id."),
     threshold: float = typer.Option(85.0, "--threshold", help="Dedup similarity threshold."),
     title_weight: float = typer.Option(0.7, "--title-weight"),
@@ -198,6 +206,7 @@ def run(
         enrich_year_penalty,
         enrich_retry_attempts,
         enrich_retry_wait,
+        enrich_max_workers,
     )
     ocr_mode = _resolve_ocr_mode(ocr, ocr_auto)
     pipeline = Pipeline(
@@ -498,6 +507,12 @@ def enrich(
         min=0.0,
         help="Base exponential-backoff wait in seconds for enrichment retries.",
     ),
+    enrich_max_workers: int = typer.Option(
+        8,
+        "--enrich-max-workers",
+        min=1,
+        help="Maximum concurrent CrossRef/OpenAlex enrichment lookups.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 5: optional CrossRef/OpenAlex enrichment of references.csv."""
@@ -509,6 +524,7 @@ def enrich(
         enrich_year_penalty,
         enrich_retry_attempts,
         enrich_retry_wait,
+        enrich_max_workers,
     )
     pipeline = Pipeline(pdf_dir=None, out_dir=out, enrich=True, enrich_config=ecfg)
 
