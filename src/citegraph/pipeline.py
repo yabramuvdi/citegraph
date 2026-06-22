@@ -466,6 +466,7 @@ class Pipeline:
         self,
         references: pd.DataFrame | None = None,
         papers: pd.DataFrame | None = None,
+        graph: pd.DataFrame | None = None,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Cluster every author across the corpus into canonical records.
 
@@ -486,6 +487,8 @@ class Pipeline:
                 papers = self._load_papers()
             except StageNotReadyError:
                 papers = None  # reference-only mode is fine
+        if graph is None and self.layout.graph_csv.exists():
+            graph = pd.read_csv(self.layout.graph_csv)
 
         enriched: pd.DataFrame | None = None
         if self.layout.enriched_references_csv.exists():
@@ -504,6 +507,7 @@ class Pipeline:
             references=references,
             papers=papers,
             enriched_references=enriched,
+            citation_edges=graph,
             cfg=self.author_config,
             aliases=aliases,
         )
@@ -568,7 +572,9 @@ class Pipeline:
         raw_refs = self.extract_paper_references(markdown_paths, papers)
         references, graph = self.deduplicate(raw_refs)
         references = self.maybe_enrich(references)
-        authors_df, citations_df = self.normalize_authors(references=references, papers=papers)
+        authors_df, citations_df = self.normalize_authors(
+            references=references, papers=papers, graph=graph
+        )
 
         run_summary = {
             "n_papers": int(len(papers)),

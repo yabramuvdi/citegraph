@@ -45,7 +45,7 @@ from pathlib import Path
 import pandas as pd
 from slugify import slugify
 
-from citegraph.io import parse_authors_list
+from citegraph.io import parse_authors_list, require_columns
 
 logger = logging.getLogger(__name__)
 
@@ -551,6 +551,7 @@ def normalize_authors(
     references: pd.DataFrame,
     papers: pd.DataFrame | None = None,
     enriched_references: pd.DataFrame | None = None,
+    citation_edges: pd.DataFrame | None = None,
     cfg: AuthorClusterConfig | None = None,
     aliases: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[dict]]:
@@ -572,6 +573,10 @@ def normalize_authors(
         of ``{display_name, openalex_id, orcid}`` dicts per row), those
         identifiers are attached to the matching reference authors so
         OpenAlex acts as ground truth.
+    citation_edges:
+        Optional citation graph with ``citing_id`` and ``cited_id`` columns.
+        When provided, ``authors.csv`` counts distinct source papers that cite
+        references by each canonical author.
     cfg:
         Tunable :class:`AuthorClusterConfig`.
     aliases:
@@ -659,7 +664,7 @@ def normalize_authors(
     if aliases:
         clusters = _apply_aliases(clusters, aliases)
 
-    authors_df = _clusters_to_authors_df(clusters)
+    authors_df = _clusters_to_authors_df(clusters, citation_edges=citation_edges)
     citations_df = _clusters_to_citations_df(clusters)
     review = [
         {
@@ -921,11 +926,36 @@ def _apply_aliases(
     return list(merged.values())
 
 
-def _clusters_to_authors_df(clusters: list[AuthorCluster]) -> pd.DataFrame:
+def _reference_citers(citation_edges: pd.DataFrame | None) -> dict[str, set[str]]:
+    if citation_edges is None or citation_edges.empty:
+        return {}
+    require_columns(
+        citation_edges,
+        ["citing_id", "cited_id"],
+        artifact="citation graph",
+    )
+    out: dict[str, set[str]] = defaultdict(set)
+    for _, row in citation_edges.iterrows():
+        cited_id = row.get("cited_id")
+        citing_id = row.get("citing_id")
+        if cited_id and citing_id:
+            out[str(cited_id)].add(str(citing_id))
+    return out
+
+
+def _clusters_to_authors_df(
+    clusters: list[AuthorCluster],
+    *,
+    citation_edges: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Render clusters as the on-disk ``authors.csv`` shape."""
+    ref_citers = _reference_citers(citation_edges)
     rows = []
     for c in clusters:
-        n_papers = len({o.citing_paper_id for o in c.occurrences if o.citing_paper_id})
+        citing_papers: set[str] = set()
+        for o in c.occurrences:
+            if o.record_kind == "reference":
+                citing_papers.update(ref_citers.get(o.record_id, set()))
         n_refs = sum(1 for o in c.occurrences if o.record_kind == "reference")
         rows.append(
             {
@@ -939,7 +969,7 @@ def _clusters_to_authors_df(clusters: list[AuthorCluster]) -> pd.DataFrame:
                 "orcid": c.orcid,
                 "n_occurrences": c.n_occurrences,
                 "n_reference_citations": n_refs,
-                "n_distinct_papers_citing": n_papers,
+                "n_distinct_papers_citing": len(citing_papers),
             }
         )
     df = pd.DataFrame(rows)

@@ -370,6 +370,26 @@ def test_normalize_includes_source_paper_authors():
     assert kinds == {"reference", "paper"}
 
 
+def test_normalize_counts_distinct_citing_papers_from_edges():
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Ostrom, Elinor"], "Year": 1990},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Ostrom, E."], "Year": 1998},
+    ])
+    edges = pd.DataFrame(
+        [
+            {"citing_id": "p-a", "cited_id": "r-1"},
+            {"citing_id": "p-b", "cited_id": "r-1"},
+            {"citing_id": "p-a", "cited_id": "r-2"},
+        ]
+    )
+
+    authors_df, _, _ = normalize_authors(references=refs, citation_edges=edges)
+
+    ostrom = authors_df.iloc[0]
+    assert int(ostrom["n_reference_citations"]) == 2
+    assert int(ostrom["n_distinct_papers_citing"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # Stable cluster ids
 # ---------------------------------------------------------------------------
