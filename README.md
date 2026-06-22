@@ -106,6 +106,55 @@ rates; the table lives in
 should be checked against https://ai.google.dev/pricing before trusting the
 output for budgeting.
 
+## Real smoke test
+
+For a new corpus, especially while tuning OCR, LLM concurrency, or enrichment,
+prefer a staged smoke test over a single `run` command. This uses the same
+checkpointed artifacts as the full pipeline, but gives you an inspection point
+after every externally fragile step.
+
+```bash
+export PDF_DIR="/path/to/pdf-folder"
+export OUT_DIR="/tmp/citegraph_smoke_out"
+
+citegraph convert "$PDF_DIR" --out "$OUT_DIR" --recursive --ocr-auto --verbose
+citegraph estimate --out "$OUT_DIR" --model gemini-3.1-flash-lite
+
+citegraph metadata --out "$OUT_DIR" --model gemini-3.1-flash-lite --llm-concurrency 4
+citegraph references --out "$OUT_DIR" --model gemini-3.1-flash-lite --llm-concurrency 4 --yes
+
+citegraph dedup --out "$OUT_DIR"
+citegraph enrich --out "$OUT_DIR" \
+  --enrich-contact "you@example.com" \
+  --enrich-max-workers 2 \
+  --enrich-timeout 15
+citegraph authors --out "$OUT_DIR"
+
+citegraph status --out "$OUT_DIR"
+```
+
+Two details matter in practice:
+
+- Keep `--ocr-auto` on the first pass unless you already know every PDF has
+  selectable text. If conversion leaves `conversion_warnings.json`, inspect it
+  before paying for LLM extraction.
+- Use a real `--enrich-contact` and a modest `--enrich-max-workers` value when
+  querying CrossRef/OpenAlex. This is slower, but friendlier to provider rate
+  limits; re-runs reuse the per-reference cache in `OUT_DIR/enrichment/`.
+
+After the smoke test, load the graph directly from disk:
+
+```python
+from citegraph import CitationGraph
+
+g = CitationGraph.from_out_dir("/tmp/citegraph_smoke_out")
+print(g)
+print(g.top_cited(10)[["Title", "Year", "citation_count"]])
+
+if g.has_authors:
+    print(g.top_cited_authors(10)[["display_name", "n_reference_citations"]])
+```
+
 ## Pipeline
 
 ```
@@ -309,7 +358,8 @@ When enrichment runs, every row gets explicit diagnostics in
 `enrichment_year_delta`. The same run writes `enrichment_summary.json` and
 `enrichment_misses.csv` under `out_dir/` for quick review. The enrichment CLI
 flags mirror these knobs: `--enrich-year-penalty`,
-`--enrich-retry-attempts`, and `--enrich-retry-wait`.
+`--enrich-retry-attempts`, `--enrich-retry-wait`, and
+`--enrich-max-workers`.
 
 ## Development
 
