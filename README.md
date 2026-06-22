@@ -113,6 +113,16 @@ prefer a staged smoke test over a single `run` command. This uses the same
 checkpointed artifacts as the full pipeline, but gives you an inspection point
 after every externally fragile step.
 
+The maintained helper is:
+
+```bash
+ENRICH_CONTACT="you@example.com" scripts/smoke_test.sh /path/to/pdf-folder
+```
+
+Set `OUT_DIR`, `MODEL`, `LLM_CONCURRENCY`, `ENRICH_MAX_WORKERS`, or
+`ENRICH_TIMEOUT` in the environment to override the defaults. The expanded
+command sequence is:
+
 ```bash
 export PDF_DIR="/path/to/pdf-folder"
 export OUT_DIR="/tmp/citegraph_smoke_out"
