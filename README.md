@@ -113,15 +113,17 @@ prefer a staged smoke test over a single `run` command. This uses the same
 checkpointed artifacts as the full pipeline, but gives you an inspection point
 after every externally fragile step.
 
-The maintained helper is:
+From a repository checkout, the maintained helper is:
 
 ```bash
 ENRICH_CONTACT="you@example.com" scripts/smoke_test.sh /path/to/pdf-folder
 ```
 
 Set `OUT_DIR`, `MODEL`, `LLM_CONCURRENCY`, `ENRICH_MAX_WORKERS`, or
-`ENRICH_TIMEOUT` in the environment to override the defaults. The expanded
-command sequence is:
+`ENRICH_TIMEOUT` in the environment to override the defaults.
+
+If you installed from PyPI, use the CLI directly. The expanded command sequence
+is:
 
 ```bash
 export PDF_DIR="/path/to/pdf-folder"
@@ -386,7 +388,8 @@ CI runs the same lint + test commands on Python 3.10 / 3.11 / 3.12; see
 
 The release workflow ([.github/workflows/publish.yml](.github/workflows/publish.yml))
 uses PyPI's [trusted publishing](https://docs.pypi.org/trusted-publishers/),
-so no API token is stored in the repo. To cut a release:
+so no API token is stored in the repo. See [docs/RELEASE.md](docs/RELEASE.md)
+for the full checklist. To cut a release:
 
 1. Bump the `version` in [`pyproject.toml`](pyproject.toml) and in
    `src/citegraph/__init__.py`.
