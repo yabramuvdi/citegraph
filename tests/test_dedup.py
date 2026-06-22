@@ -236,3 +236,34 @@ def test_dedup_references_returns_stable_ids(sample_references):
     for cluster_id in mapping.unique():
         assert isinstance(cluster_id, str)
         assert cluster_id.startswith("r-")
+
+
+def test_dedup_uses_candidate_blocking_for_unrelated_rows(monkeypatch):
+    rows = []
+    for i in range(30):
+        rows.append(
+            {
+                "Title": f"Distinct Paper {i}",
+                "Authors_List": [f"Author{i} Surname{i}"],
+                "Authors": f"Author{i} Surname{i}",
+                "Journal": "J",
+                "Year": 1900 + i,
+                "citing_id": f"p-{i}",
+            }
+        )
+    df = pd.DataFrame(rows)
+
+    calls = 0
+
+    def counted_compare(a, b, cfg):
+        nonlocal calls
+        calls += 1
+        return compare_papers(a, b, cfg)
+
+    monkeypatch.setattr("citegraph.dedup.compare_papers", counted_compare)
+
+    canonical, mapping = dedup_references(df, DedupConfig(year_window=0), show_progress=False)
+
+    assert len(canonical) == len(df)
+    assert len(mapping) == len(df)
+    assert calls < 40

@@ -129,6 +129,22 @@ def test_from_pipeline_result_round_trip(small_graph: CitationGraph) -> None:
     assert g.top_cited(n=1).index.tolist() == ["r-x"]
 
 
+def test_from_pipeline_result_carries_author_tables() -> None:
+    source = _graph_with_authors()
+    result = PipelineResult(
+        papers=source.papers,
+        references=source.references,
+        graph=source.edges,
+        authors=source.authors,
+        author_citations=source.author_citations,
+    )
+
+    g = CitationGraph.from_pipeline_result(result)
+
+    assert g.has_authors is True
+    assert g.top_cited_authors(n=1).index.tolist() == ["a-cardenas-juan-camilo"]
+
+
 def test_from_out_dir_loads_csvs(tmp_path: Path, small_graph: CitationGraph) -> None:
     out = tmp_path / "out"
     out.mkdir()

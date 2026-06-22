@@ -99,7 +99,13 @@ class CitationGraph:
     @classmethod
     def from_pipeline_result(cls, result: PipelineResult) -> CitationGraph:
         """Wrap the DataFrames returned by :meth:`Pipeline.run`."""
-        return cls(papers=result.papers, references=result.references, edges=result.graph)
+        return cls(
+            papers=result.papers,
+            references=result.references,
+            edges=result.graph,
+            authors=result.authors,
+            author_citations=result.author_citations,
+        )
 
     # ------------------------------------------------------------------
     # Counts

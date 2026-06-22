@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 import time
@@ -99,6 +100,38 @@ def test_pipeline_end_to_end_no_network(tmp_path: Path) -> None:
     assert (tmp_path / "out" / "references_raw.csv").exists()
     assert (tmp_path / "out" / "references.csv").exists()
     assert (tmp_path / "out" / "citation_graph.csv").exists()
+
+
+def test_pipeline_run_returns_author_tables_and_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    shutil.copy(FIXTURES / "sample_paper.md", md_dir / "sample_paper.md")
+
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+
+    pipeline = Pipeline(
+        pdf_dir=pdf_dir,
+        out_dir=tmp_path / "out",
+        client=_FakeClient(),
+        show_progress=False,
+    )
+    monkeypatch.setattr(pipeline, "convert_pdfs", lambda: [md_dir / "sample_paper.md"])
+
+    result = pipeline.run()
+
+    assert result.authors is not None
+    assert result.author_citations is not None
+    assert not result.authors.empty
+    assert not result.author_citations.empty
+    manifest = tmp_path / "out" / "artifact_manifest.json"
+    assert manifest.exists()
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    assert data["schema_version"] == 1
+    assert data["package_version"] == "0.1.0"
+    assert "run_summary" in data["artifacts"]
 
 
 def test_pipeline_caches_metadata(tmp_path: Path) -> None:
@@ -300,3 +333,11 @@ def test_stage_not_ready_when_upstream_missing(tmp_path: Path) -> None:
     shutil.copy(FIXTURES / "sample_paper.md", p.layout.markdown_dir / "sample_paper.md")
     with pytest.raises(StageNotReadyError, match="metadata"):
         p.extract_paper_references()
+
+
+def test_deduplicate_validates_required_columns(tmp_path: Path) -> None:
+    p = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
+    raw_refs = pd.DataFrame([{"Title": "Only a title"}])
+
+    with pytest.raises(ValueError, match="dedup input.*missing required column.*citing_id"):
+        p.deduplicate(raw_refs)

@@ -145,6 +145,18 @@ def test_dedup_missing_input_exits_nonzero(tmp_path: Path) -> None:
     assert "Missing" in result.output
 
 
+def test_dedup_reports_missing_required_columns(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    raw = out / "references_raw.csv"
+    raw.write_text("Title,Year\nA Paper,2020\n")
+
+    result = runner.invoke(app, ["dedup", "--out", str(out)])
+
+    assert result.exit_code == 1
+    assert "dedup input is missing required column: citing_id" in result.output
+
+
 def test_dedup_happy_path_writes_outputs(tmp_path: Path) -> None:
     out = tmp_path / "out"
     out.mkdir()

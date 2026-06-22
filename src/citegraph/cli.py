@@ -20,7 +20,7 @@ from rich.logging import RichHandler
 from citegraph.authors import AuthorClusterConfig
 from citegraph.dedup import DedupConfig, dedup_references
 from citegraph.enrich import EnrichConfig
-from citegraph.io import OutLayout
+from citegraph.io import OutLayout, require_columns
 from citegraph.pdf_to_markdown import OCRMode
 from citegraph.pipeline import Pipeline, StageNotReadyError
 
@@ -448,6 +448,11 @@ def dedup(
         raise typer.Exit(code=1)
 
     raw_refs = pd.read_csv(csv_path)
+    try:
+        require_columns(raw_refs, ["Title", "Year", "citing_id"], artifact="dedup input")
+    except ValueError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from e
     canonical, mapping = dedup_references(raw_refs, cfg)
     graph = (
         pd.DataFrame(

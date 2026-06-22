@@ -19,10 +19,9 @@ easy as::
 
 from __future__ import annotations
 
-import json
 import logging
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,12 +37,38 @@ from citegraph.dedup import DedupConfig, dedup_references
 from citegraph.enrich import EnrichConfig
 from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_to_record
 from citegraph.extract_references import extract_references_from_markdown
-from citegraph.io import OutLayout, read_json, write_json, write_pydantic, write_pydantic_list
+from citegraph.io import (
+    OutLayout,
+    parse_openalex_authors,
+    read_json,
+    require_columns,
+    write_json,
+    write_pydantic,
+    write_pydantic_list,
+)
 from citegraph.llm import GeminiClient
-from citegraph.pdf_to_markdown import OCRMode, _is_image_only, convert_directory
+from citegraph.pdf_to_markdown import OCRMode, convert_directory
+from citegraph.reports import (
+    check_conversion_quality,
+    count_author_review,
+    count_conversion_warnings,
+    count_failures,
+    count_no_references,
+    count_source_duplicates,
+    detect_source_duplicates,
+    write_artifact_manifest,
+    write_author_review,
+    write_failures,
+    write_no_references,
+    write_source_duplicates,
+)
 from citegraph.schemas import PaperMetadata, PipelineResult, Reference
 
 logger = logging.getLogger(__name__)
+
+# Backwards-compatible private alias for older tests / callers that reached
+# into pipeline.py before report helpers were split out.
+_count_failures = count_failures
 
 
 class StageNotReadyError(RuntimeError):
@@ -58,22 +83,6 @@ class PaperFailure:
     stage: str  # "metadata" or "references"
     error_class: str
     error_message: str
-
-
-def _write_failures(path: Path, failures: list[PaperFailure]) -> None:
-    """Persist ``failures`` as JSONL, or remove the file when none occurred.
-
-    Encoding the "no failures" state as file *absence* gives a single clean
-    signal: ``path.exists()`` <=> at least one paper failed in this stage.
-    """
-    if not failures:
-        if path.exists():
-            path.unlink()
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for fail in failures:
-            f.write(json.dumps(asdict(fail), ensure_ascii=False) + "\n")
 
 
 class Pipeline:
@@ -200,7 +209,7 @@ class Pipeline:
             show_progress=self.show_progress,
             ocr=self.ocr,
         )
-        _check_conversion_quality(paths, self.layout, ocr_attempted=bool(self.ocr))
+        check_conversion_quality(paths, self.layout, ocr_attempted=bool(self.ocr))
         return paths
 
     # ------------------------------------------------------------------
@@ -255,7 +264,7 @@ class Pipeline:
 
         records = [r for r in records_by_index if r is not None]
         failures = [f for f in failures_by_index if f is not None]
-        _write_failures(self.layout.metadata_failures_jsonl, failures)
+        write_failures(self.layout.metadata_failures_jsonl, failures)
         if failures:
             logger.warning(
                 "Metadata stage finished with %d failure(s); see %s",
@@ -269,8 +278,8 @@ class Pipeline:
         df.to_csv(self.layout.papers_csv, index=False)
         logger.info("Wrote %s (%d rows)", self.layout.papers_csv, len(df))
 
-        duplicates = _detect_source_duplicates(records, self.dedup_config)
-        _write_source_duplicates(self.layout.source_duplicates_json, duplicates)
+        duplicates = detect_source_duplicates(records, self.dedup_config)
+        write_source_duplicates(self.layout.source_duplicates_json, duplicates)
         if duplicates:
             n_dup_files = sum(len(g["duplicate_source_files"]) for g in duplicates)
             logger.warning(
@@ -368,7 +377,7 @@ class Pipeline:
         for idx, _md, _citing_id in valid_items:
             rows.extend(rows_by_index.get(idx, []))
         failures = [failures_by_index[idx] for idx in sorted(failures_by_index)]
-        _write_failures(self.layout.references_failures_jsonl, failures)
+        write_failures(self.layout.references_failures_jsonl, failures)
         if failures:
             logger.warning(
                 "References stage finished with %d failure(s); see %s",
@@ -389,7 +398,7 @@ class Pipeline:
             for md_name, citing_id in source_to_id.items()
             if md_name not in failure_source_files and citing_id not in papers_with_refs
         ]
-        _write_no_references(self.layout.papers_no_references_json, no_ref_entries)
+        write_no_references(self.layout.papers_no_references_json, no_ref_entries)
         if no_ref_entries:
             logger.warning(
                 "%d paper(s) yielded no references; see %s",
@@ -411,6 +420,15 @@ class Pipeline:
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         if raw_refs is None:
             raw_refs = self._load_raw_refs()
+        require_columns(
+            raw_refs,
+            ["Title", "Year", "citing_id"],
+            artifact="dedup input",
+        )
+        if "Authors" not in raw_refs.columns and "Authors_List" not in raw_refs.columns:
+            raise ValueError(
+                "dedup input is missing required column: Authors or Authors_List"
+            )
 
         if raw_refs.empty:
             empty_refs = pd.DataFrame(columns=["Title", "Authors", "Year", "Journal"])
@@ -476,16 +494,8 @@ class Pipeline:
             # back into a list of dicts so the normalizer sees structured
             # data. Bad rows are silently dropped to keep the stage resilient.
             if "OpenAlex_Authors" in enriched.columns:
-                import ast
                 def _parse(val: object) -> object:
-                    if isinstance(val, list):
-                        return val
-                    if isinstance(val, str) and val.strip().startswith("["):
-                        try:
-                            return ast.literal_eval(val)
-                        except (ValueError, SyntaxError):
-                            return None
-                    return None
+                    return parse_openalex_authors(val)
                 enriched["OpenAlex_Authors"] = enriched["OpenAlex_Authors"].map(_parse)
 
         aliases = load_aliases(self.layout.author_aliases_csv)
@@ -500,7 +510,7 @@ class Pipeline:
 
         authors_df.to_csv(self.layout.authors_csv)
         citations_df.to_csv(self.layout.author_citations_csv, index=False)
-        _write_author_review(self.layout.author_review_json, review)
+        write_author_review(self.layout.author_review_json, review)
         if review:
             logger.warning(
                 "%d author cluster(s) flagged for review; see %s",
@@ -567,164 +577,42 @@ class Pipeline:
             "n_edges": int(len(graph)),
             "n_authors": int(len(authors_df)),
             "n_author_citations": int(len(citations_df)),
-            "n_author_review_flags": _count_author_review(self.layout.author_review_json),
-            "n_metadata_failures": _count_failures(self.layout.metadata_failures_jsonl),
-            "n_references_failures": _count_failures(self.layout.references_failures_jsonl),
-            "n_source_duplicates": _count_source_duplicates(self.layout.source_duplicates_json),
-            "n_papers_no_references": _count_no_references(self.layout.papers_no_references_json),
-            "n_conversion_warnings": _count_conversion_warnings(self.layout.conversion_warnings_json),
+            "n_author_review_flags": count_author_review(self.layout.author_review_json),
+            "n_metadata_failures": count_failures(self.layout.metadata_failures_jsonl),
+            "n_references_failures": count_failures(self.layout.references_failures_jsonl),
+            "n_source_duplicates": count_source_duplicates(self.layout.source_duplicates_json),
+            "n_papers_no_references": count_no_references(self.layout.papers_no_references_json),
+            "n_conversion_warnings": count_conversion_warnings(self.layout.conversion_warnings_json),
             "model": self.client.model,
             "enrich": self.enrich,
             "dedup_config": self.dedup_config.__dict__,
             "author_config": self.author_config.__dict__,
         }
-        write_json(self.layout.out_dir / "run_summary.json", run_summary)
-        return PipelineResult(papers=papers, references=references, graph=graph)
-
-
-def _count_failures(path: Path) -> int:
-    """Count entries in a failures.jsonl file; 0 if the file doesn't exist."""
-    if not path.exists():
-        return 0
-    with path.open("r", encoding="utf-8") as f:
-        return sum(1 for line in f if line.strip())
-
-
-def _detect_source_duplicates(records: list[dict], cfg: DedupConfig) -> list[dict]:
-    """Find records that are duplicate conversions of the same underlying paper.
-
-    Returns one entry per duplicate group (groups with >1 source file).  Each
-    entry names the canonical file (first seen), the duplicate files, the paper
-    title, and the paper id — enough for the user to identify and remove the
-    extra PDFs.
-    """
-    from citegraph.dedup import compare_papers
-
-    canonical_indices: list[int] = []
-    duplicate_of: dict[int, int] = {}
-
-    for i, rec in enumerate(records):
-        matched = False
-        for canon_idx in canonical_indices:
-            if compare_papers(rec, records[canon_idx], cfg):
-                duplicate_of[i] = canon_idx
-                matched = True
-                break
-        if not matched:
-            canonical_indices.append(i)
-
-    canon_to_dupes: dict[int, list[int]] = {}
-    for dup_idx, canon_idx in duplicate_of.items():
-        canon_to_dupes.setdefault(canon_idx, []).append(dup_idx)
-
-    groups = []
-    for canon_idx, dup_indices in canon_to_dupes.items():
-        canon = records[canon_idx]
-        groups.append(
-            {
-                "canonical_source_file": canon["source_file"],
-                "canonical_paper_id": canon["id"],
-                "title": canon.get("Title", ""),
-                "duplicate_source_files": [records[i]["source_file"] for i in dup_indices],
-            }
+        run_summary_path = self.layout.out_dir / "run_summary.json"
+        write_json(run_summary_path, run_summary)
+        write_artifact_manifest(
+            self.layout,
+            stage="run",
+            artifacts={
+                "papers": self.layout.papers_csv,
+                "references_raw": self.layout.references_raw_csv,
+                "references": self.layout.references_csv,
+                "citation_graph": self.layout.graph_csv,
+                "authors": self.layout.authors_csv,
+                "author_citations": self.layout.author_citations_csv,
+                "run_summary": run_summary_path,
+            },
+            config={
+                "model": self.client.model,
+                "enrich": self.enrich,
+                "dedup_config": self.dedup_config.__dict__,
+                "author_config": self.author_config.__dict__,
+            },
         )
-    return groups
-
-
-def _write_no_references(path: Path, entries: list[dict]) -> None:
-    """Persist papers that returned zero references; remove the file when none exist."""
-    if not entries:
-        if path.exists():
-            path.unlink()
-        return
-    write_json(path, entries)
-
-
-def _write_source_duplicates(path: Path, groups: list[dict]) -> None:
-    """Persist duplicate groups as JSON, or remove the file when none exist.
-
-    File absence means no duplicates were found, mirroring the failures pattern.
-    """
-    if not groups:
-        if path.exists():
-            path.unlink()
-        return
-    write_json(path, groups)
-
-
-def _count_source_duplicates(path: Path) -> int:
-    """Total number of duplicate markdown files; 0 if the file doesn't exist."""
-    if not path.exists():
-        return 0
-    data = read_json(path)
-    return sum(len(g.get("duplicate_source_files", [])) for g in data)
-
-
-def _count_no_references(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return len(read_json(path))
-
-
-def _check_conversion_quality(
-    paths: list[Path], layout: OutLayout, *, ocr_attempted: bool = False
-) -> None:
-    """After conversion, flag markdown files that appear to be image-only.
-
-    ``ocr_attempted`` tunes the remediation hint: if OCR was already tried
-    (force or auto) and the output is *still* image-only, telling the user
-    to "re-run with --ocr" is wrong — surface that the page is genuinely
-    unreadable and needs manual review instead.
-    """
-    reason = (
-        "image-only markdown even after OCR (manual review needed)"
-        if ocr_attempted
-        else "image-only markdown (possibly a scanned PDF)"
-    )
-    warnings = [
-        {"source_file": p.name, "reason": reason}
-        for p in paths
-        if _is_image_only(p)
-    ]
-    _write_conversion_warnings(layout.conversion_warnings_json, warnings)
-    if warnings:
-        hint = (
-            "OCR did not help; inspect the source PDFs and consider manual transcription."
-            if ocr_attempted
-            else "re-run with ocr=True / --ocr (or ocr='auto' / --ocr-auto) for better results."
+        return PipelineResult(
+            papers=papers,
+            references=references,
+            graph=graph,
+            authors=authors_df,
+            author_citations=citations_df,
         )
-        logger.warning(
-            "%d markdown file(s) appear image-only; %s See %s",
-            len(warnings),
-            hint,
-            layout.conversion_warnings_json,
-        )
-
-
-def _write_conversion_warnings(path: Path, warnings: list[dict]) -> None:
-    if not warnings:
-        if path.exists():
-            path.unlink()
-        return
-    write_json(path, warnings)
-
-
-def _count_conversion_warnings(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return len(read_json(path))
-
-
-def _write_author_review(path: Path, review: list[dict]) -> None:
-    """Persist flagged author clusters, or remove the file when there are none."""
-    if not review:
-        if path.exists():
-            path.unlink()
-        return
-    write_json(path, review)
-
-
-def _count_author_review(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return len(read_json(path))

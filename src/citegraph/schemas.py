@@ -85,3 +85,5 @@ class PipelineResult:
     papers: pd.DataFrame
     references: pd.DataFrame
     graph: pd.DataFrame
+    authors: pd.DataFrame | None = None
+    author_citations: pd.DataFrame | None = None

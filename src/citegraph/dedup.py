@@ -22,13 +22,15 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 
 import pandas as pd
 from rapidfuzz.fuzz import token_set_ratio
 
 from citegraph._progress import iter_with_progress
-from citegraph.ids import make_reference_id
+from citegraph.ids import _first_author_token, make_reference_id
+from citegraph.io import require_columns
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +148,56 @@ def _row_to_dict(row: pd.Series) -> dict:
     }
 
 
+def _title_block_key(title: object) -> str:
+    words = normalize_text(title).split()
+    return " ".join(words[:6])
+
+
+def _author_block_key(row: pd.Series) -> str:
+    return _first_author_token(row.get("Authors_List") or row.get("Authors", ""))
+
+
+def _years_can_match(a: object, b: object, cfg: DedupConfig) -> bool:
+    y1, ok1 = _read_year(a)
+    y2, ok2 = _read_year(b)
+    if not ok1 or not ok2:
+        return False
+    if y1 is None or y2 is None:
+        return True
+    return abs(y1 - y2) <= cfg.year_window
+
+
+def _candidate_index_lookup(df: pd.DataFrame) -> tuple[dict[str, set[int]], dict[str, set[int]], set[int]]:
+    author_blocks: dict[str, set[int]] = defaultdict(set)
+    title_blocks: dict[str, set[int]] = defaultdict(set)
+    unknown_author: set[int] = set()
+
+    for idx, row in df.iterrows():
+        author_key = _author_block_key(row)
+        title_key = _title_block_key(row.get("Title"))
+        author_blocks[author_key].add(idx)
+        if author_key == "unknown":
+            unknown_author.add(idx)
+        if title_key:
+            title_blocks[title_key].add(idx)
+    return author_blocks, title_blocks, unknown_author
+
+
+def _candidate_indices(
+    row: pd.Series,
+    *,
+    author_blocks: dict[str, set[int]],
+    title_blocks: dict[str, set[int]],
+    unknown_author: set[int],
+) -> set[int]:
+    author_key = _author_block_key(row)
+    title_key = _title_block_key(row.get("Title"))
+    candidates = set(author_blocks.get(author_key, set())) | unknown_author
+    if title_key:
+        candidates.update(title_blocks.get(title_key, set()))
+    return candidates
+
+
 def dedup_references(
     df: pd.DataFrame,
     cfg: DedupConfig | None = None,
@@ -173,6 +225,9 @@ def dedup_references(
         to its cluster id.
     """
     cfg = cfg or DedupConfig()
+    require_columns(df, ["Title", "Year"], artifact="dedup input")
+    if "Authors" not in df.columns and "Authors_List" not in df.columns:
+        raise ValueError("dedup input is missing required column: Authors or Authors_List")
     if df.empty:
         empty = df.copy()
         empty["id"] = pd.Series(dtype=str)
@@ -181,6 +236,7 @@ def dedup_references(
     df = df.reset_index(drop=True)
     cluster_ids: list[str | None] = [None] * len(df)
     representatives: list[tuple[str, dict]] = []
+    author_blocks, title_blocks, unknown_author = _candidate_index_lookup(df)
 
     for i in iter_with_progress(
         list(range(len(df))),
@@ -199,8 +255,16 @@ def dedup_references(
         cluster_ids[i] = cluster_id
         representatives.append((cluster_id, paper_i))
 
-        for j in range(i + 1, len(df)):
+        candidate_js = _candidate_indices(
+            df.iloc[i],
+            author_blocks=author_blocks,
+            title_blocks=title_blocks,
+            unknown_author=unknown_author,
+        )
+        for j in sorted(idx for idx in candidate_js if idx > i):
             if cluster_ids[j] is not None:
+                continue
+            if not _years_can_match(df.iloc[i].get("Year"), df.iloc[j].get("Year"), cfg):
                 continue
             if compare_papers(paper_i, _row_to_dict(df.iloc[j]), cfg):
                 cluster_ids[j] = cluster_id

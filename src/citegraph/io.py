@@ -17,10 +17,12 @@ so that re-runs can resume:
 
 from __future__ import annotations
 
+import ast
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -111,6 +113,10 @@ class OutLayout:
     def conversion_warnings_json(self) -> Path:
         return self.out_dir / "conversion_warnings.json"
 
+    @property
+    def artifact_manifest_json(self) -> Path:
+        return self.out_dir / "artifact_manifest.json"
+
     def ensure(self) -> None:
         for d in (
             self.out_dir,
@@ -140,3 +146,65 @@ def write_pydantic(path: Path, obj: BaseModel) -> None:
 
 def write_pydantic_list(path: Path, objs: Iterable[BaseModel]) -> None:
     write_json(path, [o.model_dump() for o in objs])
+
+
+def serialize_structured(value: Any) -> str:
+    """Serialize structured CSV cell values with JSON syntax."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _parse_structured(value: object) -> object:
+    if isinstance(value, (list, dict)):
+        return value
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    if s.startswith("[") or s.startswith("{"):
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            try:
+                return ast.literal_eval(s)
+            except (ValueError, SyntaxError):
+                return None
+    return None
+
+
+def parse_authors_list(value: object) -> list[str]:
+    """Parse an Authors_List CSV cell or in-memory value into author strings."""
+    parsed = _parse_structured(value)
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed if item]
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return []
+        if ";" in s:
+            return [part.strip() for part in s.split(";") if part.strip()]
+        return [s]
+    return []
+
+
+def parse_openalex_authors(value: object) -> list[dict] | None:
+    """Parse the OpenAlex_Authors structured CSV cell."""
+    parsed = _parse_structured(value)
+    if not isinstance(parsed, list):
+        return None
+    out = []
+    for item in parsed:
+        if isinstance(item, dict):
+            out.append(item)
+    return out
+
+
+def require_columns(df: Any, columns: Iterable[str], *, artifact: str) -> None:
+    """Raise a clear error when a DataFrame-like artifact lacks required columns."""
+    available = set(getattr(df, "columns", []))
+    missing = [column for column in columns if column not in available]
+    if missing:
+        suffix = "s" if len(missing) > 1 else ""
+        raise ValueError(
+            f"{artifact} is missing required column{suffix}: {', '.join(missing)}"
+        )

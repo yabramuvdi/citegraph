@@ -45,6 +45,8 @@ from pathlib import Path
 import pandas as pd
 from slugify import slugify
 
+from citegraph.io import parse_authors_list
+
 logger = logging.getLogger(__name__)
 
 
@@ -771,17 +773,11 @@ def _row_authors(row: pd.Series) -> list[str]:
     if isinstance(val, list):
         return [str(a) for a in val if a]
     if isinstance(val, str):
-        s = val.strip()
-        if s.startswith("[") and s.endswith("]"):
-            try:
-                import ast
-                parsed = ast.literal_eval(s)
-                if isinstance(parsed, list):
-                    return [str(a) for a in parsed if a]
-            except (ValueError, SyntaxError):
-                pass
-        if s:
-            return _split_joined_authors(s)
+        parsed = parse_authors_list(val)
+        if len(parsed) > 1:
+            return parsed
+        if parsed:
+            return _split_joined_authors(parsed[0])
     fallback = row.get("Authors")
     if isinstance(fallback, str) and fallback.strip():
         return _split_joined_authors(fallback)
