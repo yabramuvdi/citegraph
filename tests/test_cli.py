@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from citegraph.cli import _enrich_config, app
@@ -94,7 +95,7 @@ def test_llm_concurrency_option_is_exposed_on_llm_commands() -> None:
             terminal_width=240,
         )
         assert result.exit_code == 0, result.output
-        assert "--llm-concurrency" in result.output
+        assert "--llm-concurrency" in unstyle(result.output)
 
 
 def test_llm_concurrency_option_rejects_zero(tmp_path: Path) -> None:
@@ -112,7 +113,7 @@ def test_llm_concurrency_option_rejects_zero(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 2
-    assert "--llm-concurrency" in result.output
+    assert "--llm-concurrency" in unstyle(result.output)
 
 
 def test_enrich_quality_options_are_exposed_on_enrichment_commands() -> None:
@@ -124,11 +125,12 @@ def test_enrich_quality_options_are_exposed_on_enrichment_commands() -> None:
             terminal_width=240,
         )
         assert result.exit_code == 0, result.output
-        assert "--enrich-year-penalty" in result.output
-        assert "--enrich-retry-attemp" in result.output
-        assert "Attempts for transient" in result.output
-        assert "--enrich-retry-wait" in result.output
-        assert "--enrich-max-workers" in result.output
+        output = unstyle(result.output)
+        assert "--enrich-year-penalty" in output
+        assert "--enrich-retry-attemp" in output
+        assert "Attempts for transient" in output
+        assert "--enrich-retry-wait" in output
+        assert "--enrich-max-workers" in output
 
 
 def test_enrich_config_receives_quality_options() -> None:
@@ -166,7 +168,7 @@ def test_enrich_max_workers_option_rejects_zero(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 2
-    assert "--enrich-max-workers" in result.output
+    assert "--enrich-max-workers" in unstyle(result.output)
 
 
 # ---------------------------------------------------------------------------
