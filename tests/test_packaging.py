@@ -64,3 +64,11 @@ def test_readme_linked_workflows_exist() -> None:
     for workflow in (".github/workflows/ci.yml", ".github/workflows/publish.yml"):
         assert workflow in readme
         assert (ROOT / workflow).exists()
+
+
+def test_readme_links_first_user_and_ui_architecture_guides() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    for guide in ("docs/USER_GUIDE.md", "docs/UI_ARCHITECTURE.md"):
+        assert guide in readme
+        assert (ROOT / guide).exists()

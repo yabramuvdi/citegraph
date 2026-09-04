@@ -55,6 +55,15 @@ citegraph run ./pdfs --out ./out --enrich
 citegraph dedup ./out/references_raw.csv --out ./out
 ```
 
+## Documentation
+
+- [User guide](docs/USER_GUIDE.md) — staged tutorial, quality-control
+  checkpoints, output interpretation, privacy, costs, and troubleshooting.
+- [UI and application architecture](docs/UI_ARCHITECTURE.md) — proposed
+  boundary for a future researcher-facing interface while keeping the Python
+  engine independent.
+- [Release checklist](docs/RELEASE.md) — packaging and publishing procedure.
+
 ### Scanned PDFs
 
 If some of your PDFs are scanned (each page is a bitmap with no selectable text),
