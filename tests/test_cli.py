@@ -87,7 +87,12 @@ def test_convert_rejects_mutually_exclusive_ocr_flags(tmp_path: Path) -> None:
 
 def test_llm_concurrency_option_is_exposed_on_llm_commands() -> None:
     for command in ("run", "metadata", "references"):
-        result = runner.invoke(app, [command, "--help"])
+        result = runner.invoke(
+            app,
+            [command, "--help"],
+            color=False,
+            terminal_width=240,
+        )
         assert result.exit_code == 0, result.output
         assert "--llm-concurrency" in result.output
 
@@ -102,6 +107,8 @@ def test_llm_concurrency_option_rejects_zero(tmp_path: Path) -> None:
             "--out",
             str(tmp_path / "out"),
         ],
+        color=False,
+        terminal_width=240,
     )
 
     assert result.exit_code == 2
@@ -110,7 +117,12 @@ def test_llm_concurrency_option_rejects_zero(tmp_path: Path) -> None:
 
 def test_enrich_quality_options_are_exposed_on_enrichment_commands() -> None:
     for command in ("run", "enrich"):
-        result = runner.invoke(app, [command, "--help"])
+        result = runner.invoke(
+            app,
+            [command, "--help"],
+            color=False,
+            terminal_width=240,
+        )
         assert result.exit_code == 0, result.output
         assert "--enrich-year-penalty" in result.output
         assert "--enrich-retry-attemp" in result.output
@@ -149,6 +161,8 @@ def test_enrich_max_workers_option_rejects_zero(tmp_path: Path) -> None:
             "--out",
             str(tmp_path / "out"),
         ],
+        color=False,
+        terminal_width=240,
     )
 
     assert result.exit_code == 2

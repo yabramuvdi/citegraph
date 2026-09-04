@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
-    import tomli as tomllib
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,6 +26,29 @@ def test_all_extra_includes_pdf_and_enrichment_dependencies() -> None:
 
     assert any(dep.startswith("docling") for dep in extras["all"])
     assert any(dep.startswith("httpx") for dep in extras["all"])
+
+
+def test_supported_python_versions_are_declared() -> None:
+    project = _pyproject()["project"]
+    classifiers = project["classifiers"]
+
+    assert project["requires-python"] == ">=3.11"
+    assert "Programming Language :: Python :: 3.10" not in classifiers
+    for version in ("3.11", "3.12", "3.13"):
+        assert f"Programming Language :: Python :: {version}" in classifiers
+
+
+def test_sdist_excludes_repository_only_material() -> None:
+    sdist = _pyproject()["tool"]["hatch"]["build"]["targets"]["sdist"]
+
+    assert {
+        "/.claude",
+        "/AGENTS.md",
+        "/CLAUDE.md",
+        "/PROJECT_OVERVIEW.html",
+        "/STATUS.html",
+        "/research",
+    } <= set(sdist["exclude"])
 
 
 def test_package_version_is_single_sourced_with_init() -> None:

@@ -38,7 +38,8 @@ _TOKENS_PER_REFERENCE: int = 75      # one Reference JSON object
 _CHARS_PER_REFERENCE_APPROX: int = 175  # typical reference length in source text
 
 # Pricing table: (input USD / 1M tokens, output USD / 1M tokens).
-# Approximate rates as of mid-2025 — check https://ai.google.dev/pricing for
+# Approximate standard paid-tier rates as of 2026-09-04 — check
+# https://ai.google.dev/gemini-api/docs/pricing for
 # current numbers before trusting these for budget planning.
 _PRICING: dict[str, tuple[float, float]] = {
     "gemini-2.5-pro-preview":   (1.25, 10.00),
@@ -49,7 +50,7 @@ _PRICING: dict[str, tuple[float, float]] = {
     "gemini-1.5-pro":           (1.25,  5.00),
     "gemini-1.5-flash":         (0.075, 0.30),
     "gemini-1.5-flash-lite":    (0.075, 0.30),
-    "gemini-3.1-flash-lite":    (0.075, 0.30),
+    "gemini-3.1-flash-lite":    (0.25,  1.50),
 }
 
 

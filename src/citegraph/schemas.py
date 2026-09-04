@@ -77,7 +77,7 @@ class PipelineResult:
 
     Three pandas DataFrames mirror the on-disk CSVs:
 
-    - ``papers``     : one row per source paper, indexed by ``id``.
+    - ``papers``     : one row per source paper, with ``id`` as a column.
     - ``references`` : one row per *deduplicated* reference, indexed by ``id``.
     - ``graph``      : edges ``(citing_id, cited_id)``.
     """

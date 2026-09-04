@@ -15,11 +15,17 @@ CrossRef / OpenAlex. The result is three CSVs you can analyse directly:
 
 ## Install
 
+Requires Python 3.11 or newer.
+
 ```bash
-pip install citegraph                  # base install (Gemini + fuzzy dedup + graph queries)
-pip install "citegraph[pdf]"           # + PDF conversion via docling
+pip install "citegraph[pdf]"           # recommended: complete PDF-to-graph pipeline
+pip install citegraph                  # lightweight core for cached markdown/CSV workflows
 pip install "citegraph[all]"           # + PDF conversion and CrossRef/OpenAlex enrichment
 ```
+
+The quickstart below starts from PDFs, so it requires the `[pdf]` or `[all]`
+extra. The lightweight base install is useful when conversion happens elsewhere
+or you are resuming from existing markdown and CSV artifacts.
 
 You'll need a Google Gemini API key:
 
@@ -100,11 +106,11 @@ print(estimate.format_summary())
 ```
 
 Files whose `metadata/<stem>.json` and `references/<stem>.json` caches already
-exist are excluded from the totals. Pricing numbers are approximate Gemini
-rates; the table lives in
+exist are excluded from the totals. Pricing numbers are approximate standard
+paid-tier Gemini rates, last checked 2026-09-04; the table lives in
 [`src/citegraph/cost_estimation.py`](src/citegraph/cost_estimation.py) and
-should be checked against https://ai.google.dev/pricing before trusting the
-output for budgeting.
+should be checked against https://ai.google.dev/gemini-api/docs/pricing before
+trusting the output for budgeting.
 
 ## Real smoke test
 
@@ -381,7 +387,7 @@ pytest
 ruff check .
 ```
 
-CI runs the same lint + test commands on Python 3.10 / 3.11 / 3.12; see
+CI runs the same lint + test commands on Python 3.11 / 3.12 / 3.13; see
 [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 ## Releasing

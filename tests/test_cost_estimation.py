@@ -197,6 +197,40 @@ def test_cost_usd_known_model() -> None:
     assert abs(input_cost - 0.10) < 1e-9
 
 
+def test_cost_usd_current_default_model_pricing() -> None:
+    input_estimate = ExtractionEstimate(
+        model="gemini-3.1-flash-lite",
+        files=[
+            FileEstimate(
+                name="input.md",
+                metadata_cached=False,
+                references_cached=True,
+                metadata_input_tokens=1_000_000,
+                references_input_tokens=0,
+                estimated_n_references=0,
+            )
+        ],
+    )
+    output_estimate = ExtractionEstimate(
+        model="gemini-3.1-flash-lite",
+        files=[
+            FileEstimate(
+                name="output.md",
+                metadata_cached=True,
+                references_cached=False,
+                metadata_input_tokens=0,
+                references_input_tokens=0,
+                estimated_n_references=40_000,
+            )
+        ],
+    )
+
+    input_cost, _ = input_estimate.cost_usd() or (None, None)
+    _, output_cost = output_estimate.cost_usd() or (None, None)
+    assert input_cost == 0.25
+    assert output_cost == 4.5
+
+
 def test_cost_usd_unknown_model_returns_none() -> None:
     est = ExtractionEstimate(model="unknown-future-model", files=[])
     assert est.cost_usd() is None

@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>citegraph — Project review &amp; product direction</title>
+  <style>
+    :root {
+      --paper: #f4f0e6;
+      --paper-2: #ebe4d5;
+      --ink: #15221d;
+      --muted: #637068;
+      --rule: #cfc6b5;
+      --green: #0b6651;
+      --green-soft: #d8e6dd;
+      --red: #c9462d;
+      --red-soft: #f2d9d0;
+      --gold: #c1902f;
+      --gold-soft: #eee0b9;
+      --blue: #23577d;
+      --blue-soft: #d7e2e9;
+      --white: #fbf9f3;
+      --shadow: 0 18px 55px rgba(31, 43, 36, .11);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 82% 2%, rgba(193, 144, 47, .18), transparent 25rem),
+        linear-gradient(90deg, rgba(21, 34, 29, .025) 1px, transparent 1px),
+        var(--paper);
+      background-size: auto, 44px 44px, auto;
+      font-family: "Avenir Next", Avenir, "Gill Sans", sans-serif;
+      font-size: 16px;
+      line-height: 1.56;
+    }
+
+    a { color: var(--blue); text-underline-offset: 3px; }
+    a:hover { color: var(--red); }
+    code, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: .9em;
+    }
+    code {
+      padding: .08em .3em;
+      background: rgba(21, 34, 29, .07);
+      border-radius: 3px;
+    }
+
+    .shell {
+      width: min(1480px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 270px minmax(0, 1fr);
+      gap: 0;
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      padding: 34px 28px;
+      border-right: 1px solid var(--rule);
+      background: rgba(244, 240, 230, .88);
+      backdrop-filter: blur(14px);
+      overflow: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 34px;
+      font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      font-size: 23px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .mark {
+      width: 27px;
+      height: 27px;
+      position: relative;
+      border: 1px solid var(--ink);
+      border-radius: 50%;
+    }
+    .mark::before, .mark::after {
+      content: "";
+      position: absolute;
+      background: var(--red);
+      border-radius: 50%;
+    }
+    .mark::before { width: 7px; height: 7px; left: 4px; top: 9px; }
+    .mark::after { width: 7px; height: 7px; right: 4px; top: 9px; }
+
+    nav a {
+      display: block;
+      padding: 7px 0;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+      letter-spacing: .03em;
+    }
+    nav a:hover, nav a.active { color: var(--ink); }
+    nav a.active::before { content: "→ "; color: var(--red); }
+    .aside-note {
+      margin-top: 32px;
+      padding-top: 18px;
+      border-top: 1px solid var(--rule);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    main { min-width: 0; }
+    header.hero {
+      min-height: 690px;
+      padding: 74px clamp(34px, 7vw, 110px) 66px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--rule);
+      position: relative;
+      overflow: hidden;
+    }
+    header.hero::after {
+      content: "β";
+      position: absolute;
+      right: clamp(24px, 5vw, 84px);
+      top: 8px;
+      color: rgba(11, 102, 81, .08);
+      font: 600 440px/.9 "Iowan Old Style", Georgia, serif;
+      pointer-events: none;
+    }
+    .eyebrow {
+      position: relative;
+      z-index: 1;
+      color: var(--red);
+      font: 700 12px/1.2 "SFMono-Regular", monospace;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 {
+      font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      letter-spacing: -.03em;
+    }
+    h1 {
+      position: relative;
+      z-index: 1;
+      max-width: 950px;
+      margin: 22px 0 25px;
+      font-size: clamp(58px, 8vw, 112px);
+      line-height: .92;
+      font-weight: 600;
+    }
+    .deck {
+      position: relative;
+      z-index: 1;
+      max-width: 790px;
+      margin: 0;
+      font-size: clamp(20px, 2.1vw, 29px);
+      line-height: 1.35;
+      color: #39463f;
+    }
+    .verdict-strip {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 22px;
+      max-width: 930px;
+      margin-top: 54px;
+      padding-top: 22px;
+      border-top: 2px solid var(--ink);
+    }
+    .verdict-strip .label {
+      font: 700 11px/1.4 "SFMono-Regular", monospace;
+      text-transform: uppercase;
+      letter-spacing: .13em;
+      color: var(--muted);
+    }
+    .verdict-strip strong { font-size: 22px; line-height: 1.32; }
+
+    section {
+      padding: 82px clamp(34px, 7vw, 110px);
+      border-bottom: 1px solid var(--rule);
+    }
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(220px, .65fr) minmax(280px, 1.35fr);
+      gap: 50px;
+      align-items: end;
+      margin-bottom: 42px;
+    }
+    .kicker {
+      color: var(--red);
+      font: 700 11px/1 "SFMono-Regular", monospace;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    h2 {
+      margin: 9px 0 0;
+      font-size: clamp(39px, 5vw, 64px);
+      line-height: 1;
+      font-weight: 600;
+    }
+    .section-lede { margin: 0; color: var(--muted); font-size: 18px; }
+    h3 { margin: 0 0 10px; font-size: 25px; line-height: 1.1; }
+    h4 { margin: 0 0 8px; font-size: 15px; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border: 1px solid var(--ink);
+      box-shadow: var(--shadow);
+      background: var(--white);
+    }
+    .metric { padding: 24px; min-height: 135px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .metric:nth-child(3n) { border-right: 0; }
+    .metric:nth-last-child(-n+3) { border-bottom: 0; }
+    .metric .value { font: 600 35px/1 "Iowan Old Style", Georgia, serif; }
+    .metric .caption { margin-top: 10px; color: var(--muted); font-size: 13px; }
+    .signal { display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; }
+    .pass { background: var(--green); }
+    .warn { background: var(--gold); }
+    .fail { background: var(--red); }
+
+    .callout {
+      margin-top: 28px;
+      padding: 25px 28px;
+      background: var(--red-soft);
+      border-left: 4px solid var(--red);
+    }
+    .callout strong { display: block; margin-bottom: 4px; }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(110px, 1fr));
+      gap: 10px;
+      margin: 22px 0 38px;
+    }
+    .stage {
+      min-height: 150px;
+      padding: 17px 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background: var(--white);
+      border: 1px solid var(--rule);
+      position: relative;
+    }
+    .stage:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      z-index: 2;
+      right: -16px;
+      top: 55px;
+      width: 21px;
+      height: 27px;
+      display: grid;
+      place-items: center;
+      color: var(--red);
+      background: var(--paper);
+    }
+    .stage .num { color: var(--red); font: 700 11px/1 "SFMono-Regular", monospace; }
+    .stage b { font-size: 15px; line-height: 1.22; }
+    .stage small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .card {
+      padding: 25px;
+      background: rgba(251, 249, 243, .72);
+      border: 1px solid var(--rule);
+    }
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+    ul.clean { margin: 14px 0 0; padding: 0; list-style: none; }
+    ul.clean li { padding: 11px 0 11px 22px; border-top: 1px solid var(--rule); position: relative; }
+    ul.clean li::before { content: "↳"; position: absolute; left: 0; color: var(--red); }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--white); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 15px 17px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+    th { color: var(--muted); font: 700 10px/1.3 "SFMono-Regular", monospace; letter-spacing: .1em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { font-weight: 650; }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font: 700 10px/1.2 "SFMono-Regular", monospace;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .badge.good { color: var(--green); background: var(--green-soft); }
+    .badge.block { color: var(--red); background: var(--red-soft); }
+    .badge.partial { color: #795a18; background: var(--gold-soft); }
+    .badge.future { color: var(--blue); background: var(--blue-soft); }
+
+    .priority-list { counter-reset: priority; display: grid; gap: 12px; }
+    .priority {
+      counter-increment: priority;
+      display: grid;
+      grid-template-columns: 56px 1fr auto;
+      gap: 18px;
+      align-items: start;
+      padding: 20px;
+      background: var(--white);
+      border: 1px solid var(--rule);
+    }
+    .priority::before {
+      content: counter(priority, decimal-leading-zero);
+      color: var(--red);
+      font: 700 24px/1 "SFMono-Regular", monospace;
+    }
+    .priority p { margin: 4px 0 0; color: var(--muted); }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 72px 1fr 72px 1fr;
+      align-items: stretch;
+      margin: 36px 0;
+    }
+    .arch-box { padding: 25px; min-height: 170px; border: 1px solid var(--ink); background: var(--white); }
+    .arch-box.core { color: #fff; background: var(--green); }
+    .arch-arrow { display: grid; place-items: center; color: var(--red); font-size: 30px; }
+    .arch-box .mono { display: block; margin-bottom: 28px; opacity: .7; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+    .arch-box p { margin: 10px 0 0; font-size: 13px; opacity: .78; }
+
+    .recommendation {
+      padding: 36px;
+      color: #fff;
+      background: var(--ink);
+      box-shadow: var(--shadow);
+    }
+    .recommendation .kicker { color: #e6ad54; }
+    .recommendation h3 { margin: 8px 0 15px; font-size: 34px; }
+    .recommendation p { max-width: 840px; color: #cdd6d1; }
+
+    .roadmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+    .road { min-height: 240px; padding: 22px; background: var(--white); }
+    .road .phase { color: var(--red); font: 700 10px/1 "SFMono-Regular", monospace; letter-spacing: .1em; }
+    .road h3 { margin-top: 22px; font-size: 22px; }
+    .road p { color: var(--muted); font-size: 13px; }
+
+    .decision-box {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      margin-top: 24px;
+      background: var(--rule);
+      border: 1px solid var(--rule);
+    }
+    .decision { padding: 23px; background: var(--paper); }
+    .decision b { display: block; margin-bottom: 7px; }
+    .decision span { color: var(--muted); font-size: 13px; }
+
+    footer { padding: 40px clamp(34px, 7vw, 110px) 65px; color: var(--muted); font-size: 12px; }
+    .sources { columns: 2; column-gap: 40px; padding-left: 18px; }
+    .sources li { break-inside: avoid; margin-bottom: 9px; }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { display: none; }
+      .pipeline { grid-template-columns: repeat(3, 1fr); }
+      .stage:nth-child(3)::after { display: none; }
+      .roadmap { grid-template-columns: 1fr 1fr; }
+      .architecture { grid-template-columns: 1fr; gap: 10px; }
+      .architecture .arch-arrow { transform: rotate(90deg); text-align: center; }
+    }
+    @media (max-width: 720px) {
+      header.hero { min-height: 600px; padding-top: 45px; }
+      header.hero::after { font-size: 260px; top: 90px; }
+      .verdict-strip, .section-head { grid-template-columns: 1fr; gap: 12px; }
+      section { padding-top: 58px; padding-bottom: 58px; }
+      .metrics, .two-col, .decision-box { grid-template-columns: 1fr; }
+      .metric, .metric:nth-child(3n), .metric:nth-last-child(-n+3) { border-right: 0; border-bottom: 1px solid var(--rule); }
+      .metric:last-child { border-bottom: 0; }
+      .pipeline { grid-template-columns: 1fr 1fr; }
+      .stage::after { display: none !important; }
+      .priority { grid-template-columns: 44px 1fr; }
+      .priority .badge { grid-column: 2; justify-self: start; }
+      .architecture { grid-template-columns: 1fr; gap: 10px; }
+      .architecture .arch-arrow, .architecture .arch-box:last-child { display: block; }
+      .architecture .arch-arrow { transform: rotate(90deg); text-align: center; }
+      .roadmap { grid-template-columns: 1fr; }
+      .sources { columns: 1; }
+    }
+    @media print {
+      body { background: #fff; }
+      aside { display: none; }
+      .shell { display: block; }
+      header.hero { min-height: 0; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><span class="mark" aria-hidden="true"></span> citegraph</div>
+    <nav aria-label="Report sections">
+      <a href="#verdict">01 · Verdict</a>
+      <a href="#implemented">02 · What exists</a>
+      <a href="#release">03 · Release readiness</a>
+      <a href="#documentation">04 · Documentation gaps</a>
+      <a href="#plans">05 · Existing plans</a>
+      <a href="#architecture">06 · UI architecture</a>
+      <a href="#journey">07 · Researcher journey</a>
+      <a href="#roadmap">08 · Recommended roadmap</a>
+      <a href="#sources">09 · Evidence</a>
+    </nav>
+    <div class="aside-note">
+      Verified against <span class="mono">main@7843e91</span><br>
+      4 September 2026 · Europe/Zurich<br><br>
+      This is an audit, not an implementation specification.
+    </div>
+  </aside>
+
+  <main>
+    <header class="hero" id="verdict">
+      <div>
+        <div class="eyebrow">Project review · launch readiness · product direction</div>
+        <h1>Solid engine.<br>One release lap left.</h1>
+        <p class="deck">citegraph is no longer a prototype: it is a tested, staged Python pipeline with a real CLI, stable artifacts, enrichment, author resolution, and graph queries. It is suitable for a small private beta now. It is <em>not quite ready</em> for a public PyPI launch today.</p>
+      </div>
+      <div class="verdict-strip">
+        <span class="label">Verdict<br>for v0.1.0</span>
+        <strong>Release candidate after four things: make CI green, fix the Python-version promise, update cost estimates, and validate extraction quality on a hand-labelled real corpus.</strong>
+      </div>
+    </header>
+
+    <section aria-labelledby="evidence-title">
+      <div class="section-head">
+        <div><div class="kicker">Fresh evidence</div><h2 id="evidence-title">What was verified</h2></div>
+        <p class="section-lede">Local verification is strong. Public release state is not: the latest GitHub workflow is red, there are no tags/releases, and PyPI does not yet contain this project.</p>
+      </div>
+      <div class="metrics">
+        <div class="metric"><div class="value"><span class="signal pass"></span>231</div><div class="caption">test cases passed locally; one optional NetworkX test skips when the extra dependency is absent</div></div>
+        <div class="metric"><div class="value"><span class="signal pass"></span>Clean</div><div class="caption"><code>ruff check .</code> reports no issues</div></div>
+        <div class="metric"><div class="value"><span class="signal pass"></span>2 artifacts</div><div class="caption">wheel and source distribution build successfully</div></div>
+        <div class="metric"><div class="value"><span class="signal pass"></span>Pass</div><div class="caption">fresh wheel install, import, version, and CLI help all work with current dependencies</div></div>
+        <div class="metric"><div class="value"><span class="signal fail"></span>CI red</div><div class="caption">latest run fails on all three declared Python versions; build job itself passes</div></div>
+        <div class="metric"><div class="value"><span class="signal warn"></span>Unpublished</div><div class="caption">no Git tags, GitHub releases, or PyPI project; the exact PyPI name currently returns 404</div></div>
+      </div>
+      <div class="callout">
+        <strong>The code is healthier than the badge.</strong>
+        Python 3.10 has a real import failure because <code>datetime.UTC</code> was introduced in Python 3.11. The 3.11/3.12 failures are brittle assertions against Rich-formatted help text: long option names are visually present but split by ANSI formatting and terminal wrapping. Both still block a responsible release because <code>main</code> is red.
+      </div>
+    </section>
+
+    <section id="implemented">
+      <div class="section-head">
+        <div><div class="kicker">Current product</div><h2>What is implemented</h2></div>
+        <p class="section-lede">The package can run end-to-end or one checkpointed stage at a time. It turns a PDF corpus into a deduplicated, queryable citation graph and preserves enough diagnostics for recovery and audit.</p>
+      </div>
+
+      <div class="pipeline" role="img" aria-label="Six-stage citegraph pipeline">
+        <div class="stage"><span class="num">01</span><b>PDF → Markdown</b><small>Docling, recursive input, collision checks, OCR auto-fallback</small></div>
+        <div class="stage"><span class="num">02</span><b>Paper metadata</b><small>Gemini structured output, caches, duplicate-source detection</small></div>
+        <div class="stage"><span class="num">03</span><b>References</b><small>Bibliography slicing, truncation retry, missing-reference warnings</small></div>
+        <div class="stage"><span class="num">04</span><b>Dedup + edges</b><small>Fuzzy title/author/journal match with year-aware clustering</small></div>
+        <div class="stage"><span class="num">05</span><b>Enrichment</b><small>Optional CrossRef → OpenAlex lookup with retries and diagnostics</small></div>
+        <div class="stage"><span class="num">06</span><b>Authors</b><small>Canonical author identities, external IDs, aliases, review flags</small></div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Capability</th><th>What the user gets</th><th>Operational behavior</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Python library</td><td><code>Pipeline</code>, <code>PipelineResult</code>, Pydantic metadata/reference types, author parsing and normalization</td><td>Heavy dependencies are lazy; stages accept in-memory inputs or resume from disk</td><td><span class="badge good">Implemented</span></td></tr>
+            <tr><td>Command line</td><td><code>run</code>, <code>convert</code>, <code>metadata</code>, <code>references</code>, <code>dedup</code>, <code>enrich</code>, <code>authors</code>, <code>estimate</code>, <code>status</code></td><td>Cost confirmation before LLM calls; <code>--yes</code> for automation</td><td><span class="badge good">Implemented</span></td></tr>
+            <tr><td>Resumability</td><td>Markdown and per-paper JSON caches plus CSV stage outputs</td><td>Re-runs skip completed work; failed papers are retried because no bad cache is written</td><td><span class="badge good">Implemented</span></td></tr>
+            <tr><td>Failure handling</td><td>Conversion warnings, source duplicates, empty-reference papers, extraction failures, author review flags</td><td>Most warning sidecars follow “file absent = clean”; counts surface in run summary</td><td><span class="badge good">Implemented</span></td></tr>
+            <tr><td>Graph queries</td><td>Top-cited works/authors, cited-by, citers-of, author lookup and citation context, source-journal rollups</td><td><code>CitationGraph</code> loads CSVs; NetworkX export is optional and lazy</td><td><span class="badge good">Implemented</span></td></tr>
+            <tr><td>Quality measurement</td><td>Offline evaluator for metadata accuracy, reference precision/recall, optional dedup evaluation</td><td>Only a synthetic one-paper gold file is populated today</td><td><span class="badge partial">Scaffold only</span></td></tr>
+            <tr><td>Human review</td><td>Alias CSV and review sidecars exist as manual correction hooks</td><td>No interactive terminal or web review workflow exists yet</td><td><span class="badge future">Planned</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="two-col" style="margin-top:22px">
+        <div class="card">
+          <h3>Artifacts produced</h3>
+          <ul class="clean">
+            <li><code>papers.csv</code> — source-paper metadata and stable IDs</li>
+            <li><code>references_raw.csv</code> — every extracted citation event</li>
+            <li><code>references.csv</code> — canonical deduplicated cited works</li>
+            <li><code>citation_graph.csv</code> — citing → cited edges</li>
+            <li><code>authors.csv</code> and <code>author_citations.csv</code> — canonical people and occurrences</li>
+            <li>Optional enriched reference table, review CSV, summaries, manifests, caches, and diagnostics</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Existing corpus snapshot</h3>
+          <p>The checked-in working output demonstrates the full data shape on seven source papers:</p>
+          <ul class="clean">
+            <li>7 papers · 239 raw reference events · 229 canonical references</li>
+            <li>239 graph edges · 340 canonical authors · 458 author occurrences</li>
+            <li>The prior status report records 183 enrichment matches and 46 explicit misses</li>
+          </ul>
+          <p style="color:var(--muted);font-size:12px">Useful as a smoke artifact, but not a scientific validation set.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="release">
+      <div class="section-head">
+        <div><div class="kicker">Launch decision</div><h2>Are we ready?</h2></div>
+        <p class="section-lede"><strong>For trusted collaborators: yes.</strong> For an announced public beta: almost. The highest-risk gap is not missing functionality; it is an unproven compatibility and quality promise.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Area</th><th>Assessment</th><th>Evidence</th><th>Release consequence</th></tr></thead>
+          <tbody>
+            <tr><td>Core functionality</td><td><span class="badge good">Strong beta</span></td><td>End-to-end stages, caches, failure isolation, CLI and graph API are implemented</td><td>No feature blocker for v0.1.0</td></tr>
+            <tr><td>Automated quality</td><td><span class="badge partial">Mixed</span></td><td>231 local tests pass, but the latest public CI run is red</td><td><strong>Block release until CI is green</strong></td></tr>
+            <tr><td>Packaging</td><td><span class="badge good">Works</span></td><td>Wheel/sdist build, current Twine check, and clean wheel install pass</td><td>Ready after CI; trusted-publishing setup still must be confirmed</td></tr>
+            <tr><td>Python support</td><td><span class="badge block">Incorrect claim</span></td><td>Metadata promises 3.10; importing fails there via <code>datetime.UTC</code></td><td>Fix to <code>timezone.utc</code> or drop 3.10 everywhere</td></tr>
+            <tr><td>Model/cost configuration</td><td><span class="badge block">Stale cost</span></td><td>The default Gemini model is valid and stable, but code estimates $0.075/$0.30 per million tokens; current standard pricing is $0.25/$1.50</td><td>Update before users approve spend based on the estimator</td></tr>
+            <tr><td>Scientific validity</td><td><span class="badge block">Not established</span></td><td>The evaluation harness has one synthetic paper; no real gold corpus or published error analysis</td><td>Call the release beta and publish limitations; real-corpus evaluation is the key credibility task</td></tr>
+            <tr><td>Documentation</td><td><span class="badge partial">Good README, gaps</span></td><td>README is unusually detailed; no privacy guide, limitations page, API docs, citation file, changelog, or contribution guide</td><td>Close the trust/documentation gaps below</td></tr>
+            <tr><td>Distribution</td><td><span class="badge partial">Prepared</span></td><td>CI/publish workflows and checklist exist; no tag, GitHub release, or PyPI project yet</td><td>TestPyPI dry-run, then tag <code>v0.1.0</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="priority-list" style="margin-top:30px">
+        <div class="priority"><div><h3>Make the compatibility matrix true</h3><p>Fix the Python 3.10 import or change <code>requires-python</code>, classifiers, CI, and docs to 3.11+. Make CLI tests robust to Rich/ANSI wrapping, then obtain a green GitHub run.</p></div><span class="badge block">P0</span></div>
+        <div class="priority"><div><h3>Correct the cost estimator</h3><p>The configured model is current, but its price constants materially underestimate spend. Record a pricing “as of” date and make release-time verification explicit.</p></div><span class="badge block">P0</span></div>
+        <div class="priority"><div><h3>Run one real release candidate corpus</h3><p>Use a fresh, representative set—including scanned PDFs—and complete all stages from a clean environment. Hand-label at least 5 papers / roughly 150 references, including dedup pairs and author identity cases.</p></div><span class="badge block">P0</span></div>
+        <div class="priority"><div><h3>Make the first-run story honest</h3><p>The headline workflow starts with PDFs, but <code>pip install citegraph</code> omits Docling. Lead with <code>citegraph[pdf]</code> for the main use case, explain the lighter base install, and verify OCR requirements on macOS/Linux.</p></div><span class="badge partial">P1</span></div>
+        <div class="priority"><div><h3>Publish deliberately</h3><p>Confirm the PyPI trusted publisher, run the release checklist with current tooling, use TestPyPI once, then tag and create release notes. Keep the first release explicitly “beta.”</p></div><span class="badge partial">P1</span></div>
+      </div>
+    </section>
+
+    <section id="documentation">
+      <div class="section-head">
+        <div><div class="kicker">Trust surface</div><h2>Documentation still missing</h2></div>
+        <p class="section-lede">For a researcher-facing tool, documentation is part of correctness. People need to know what leaves their machine, what is probabilistic, what can be reviewed, and what claims the outputs can support.</p>
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <span class="badge block">Before v0.1.0</span>
+          <h3 style="margin-top:16px">Essential</h3>
+          <ul class="clean">
+            <li><strong>Data handling &amp; privacy.</strong> State that Markdown content is sent to Gemini; reference titles may be sent to CrossRef/OpenAlex; explain API-key storage and the implications for unpublished/confidential papers.</li>
+            <li><strong>Accuracy &amp; limitations.</strong> Explain LLM extraction errors, OCR failure modes, fuzzy-dedup false merges/splits, author ambiguity, language/layout limitations, and the need for human verification.</li>
+            <li><strong>Validated quickstart.</strong> A minimal, copy-paste path that installs the PDF extra, estimates cost, runs a tiny corpus, inspects warnings, and loads <code>CitationGraph</code>.</li>
+            <li><strong>Compatibility.</strong> Honest Python/OS support, external service requirements, Docling/OCR caveats, and tested dependency bounds.</li>
+            <li><strong>Release notes.</strong> A short <code>CHANGELOG.md</code> with v0.1.0 scope, known limitations, artifact compatibility, and model/pricing date.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <span class="badge partial">Soon after v0.1.0</span>
+          <h3 style="margin-top:16px">Important</h3>
+          <ul class="clean">
+            <li><strong>API reference.</strong> Generated pages for <code>Pipeline</code>, configuration objects, schemas, <code>CitationGraph</code>, exceptions, and artifact contracts.</li>
+            <li><strong>Troubleshooting.</strong> Scanned PDFs, empty bibliographies, rate limits, truncated LLM output, stale caches, dependency installation, and how to resume.</li>
+            <li><strong>Methods &amp; reproducibility.</strong> Prompts/model version, dedup scoring, thresholds, stable IDs, provenance manifests, and how to report a run in a paper.</li>
+            <li><strong>Citation.</strong> Add <code>CITATION.cff</code> (and eventually a DOI/Zenodo archive) so the target audience can cite the software.</li>
+            <li><strong>Community.</strong> <code>CONTRIBUTING.md</code>, support/issue templates, development setup, test strategy, and a small example corpus that is legally redistributable.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout" style="background:var(--gold-soft);border-color:var(--gold)">
+        <strong>Two documentation inconsistencies worth fixing immediately.</strong>
+        The quickstart calls <code>Pipeline.run()</code> after the base install even though PDF conversion is an optional extra. Separately, the <code>PipelineResult</code> docstring says <code>papers</code> is indexed by <code>id</code>, while the implemented and documented graph API intentionally keeps <code>id</code> as a column.
+      </div>
+    </section>
+
+    <section id="plans">
+      <div class="section-head">
+        <div><div class="kicker">Recovered roadmap</div><h2>Plans already made</h2></div>
+        <p class="section-lede">The existing <a href="STATUS.html">STATUS.html</a> is a detailed 25-milestone roadmap. It captures good design thinking, but its header is stale (21 June; 213 tests) and predates the latest release-hardening work.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Wave</th><th>Original intent</th><th>Current reading</th></tr></thead>
+          <tbody>
+            <tr><td>0 · Core pipeline</td><td>M01–M06: conversion, metadata, references, dedup, enrichment, authors</td><td>All code exists. M05 remains labelled “in progress” only because a larger 91-paper corpus validation was planned.</td></tr>
+            <tr><td>1 · Library surface</td><td>M07–M11: CLI, query view, diagnostics, cost estimate, offline tests</td><td>Implemented, with additional release workflows and wheel checks added afterward.</td></tr>
+            <tr><td>2 · Refinement</td><td>M12–M15: concurrency, deterministic normalization, external cross-checks, better canonical row merging</td><td>Concurrency is done. Python-side text normalization, metadata cross-checks, and canonical-record synthesis remain useful quality work.</td></tr>
+            <tr><td>3 · Enrichment expansion</td><td>M16–M19: Semantic Scholar, more fields, source-paper enrichment, year penalties/retries</td><td>Year-aware matching/retries are done. The rest is optional breadth, not a v0.1.0 blocker.</td></tr>
+            <tr><td>4 · Review UI</td><td>M20–M25: <code>eval_mode</code>, web shell, metadata/reference/dedup/author checkpoints</td><td>No UI code exists. The review concepts are valuable, but the new product vision is broader than this embedded checkpoint design.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="decision-box">
+        <div class="decision"><b>Keep</b><span>Stable decisions, review artifacts, metadata/reference editing, borderline dedup review, author alias curation, keyboard-efficient review.</span></div>
+        <div class="decision"><b>Revise</b><span>Replace <code>Pipeline(eval_mode="web")</code> with an application service that orchestrates the headless pipeline and persists jobs.</span></div>
+        <div class="decision"><b>Defer</b><span>Semantic Scholar and richer enrichment fields until real-corpus evaluation proves they solve a high-value gap.</span></div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="section-head">
+        <div><div class="kicker">Product architecture</div><h2>Library first, UI beside it</h2></div>
+        <p class="section-lede">Your intuition is right. The Python library should remain the independent engine and source of truth. The UI should depend on that engine through a small application/service layer—never duplicate algorithms or scrape CLI output.</p>
+      </div>
+
+      <div class="architecture" role="img" aria-label="Recommended layered architecture">
+        <div class="arch-box"><span class="mono">Interface</span><h3>Local browser UI</h3><p>Projects, file selection, progress, review, exploration, exports.</p></div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-box"><span class="mono">Application layer</span><h3>Jobs + decisions</h3><p>Run/resume/cancel, progress events, safe file handling, curation records.</p></div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-box core"><span class="mono">Independent package</span><h3>citegraph core</h3><p>Pipeline stages, schemas, artifact contracts, algorithms, provider adapters.</p></div>
+      </div>
+
+      <div class="recommendation">
+        <div class="kicker">Recommended shape</div>
+        <h3>A local-first web companion, in the same repository at first.</h3>
+        <p>Publish <code>citegraph</code> independently to PyPI. Add a top-level UI application with its own dependencies and entry point, importing the core package. Run a small local FastAPI backend and open the browser; use a focused JavaScript frontend only where it earns its keep (file/project screens, live progress, table editing, graph exploration). This keeps PDFs on the researcher’s machine except for the already-disclosed calls to Gemini and metadata providers.</p>
+        <p>Separate package boundaries now; separate repositories later only if deployment, teams, or release cadences actually diverge. Repository separation is not what creates architectural independence—the one-way dependency does.</p>
+      </div>
+
+      <div class="table-wrap" style="margin-top:30px">
+        <table>
+          <thead><tr><th>Option</th><th>Advantages</th><th>Costs / risks</th><th>Verdict</th></tr></thead>
+          <tbody>
+            <tr><td>Local-first companion<br><span class="mono">FastAPI + focused JS UI</span></td><td>Private by default; natural file picker; full design control; long-running jobs and review flows fit well; core stays independent</td><td>Requires packaging a small server and frontend; desktop distribution may come later</td><td><span class="badge good">Recommended</span></td></tr>
+            <tr><td>Python dashboard<br><span class="mono">Streamlit / Gradio</span></td><td>Fastest prototype; one language; useful for testing the workflow with a handful of researchers</td><td>Stateful review, resumable jobs, keyboard UX, and graph exploration can become awkward; harder to feel like a durable product</td><td><span class="badge partial">Prototype only</span></td></tr>
+            <tr><td>Hosted multi-user service<br><span class="mono">API + queue + storage + auth</span></td><td>No installation; easy updates; collaboration and shared projects become possible</td><td>Confidential PDFs, retention policy, account/security work, provider costs, job infrastructure, and support burden arrive immediately</td><td><span class="badge future">Later, if demanded</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="two-col" style="margin-top:22px">
+        <div class="card">
+          <h3>Core capabilities the UI needs first</h3>
+          <ul class="clean">
+            <li>Structured progress events instead of Rich-only rendering</li>
+            <li>Cancellation and durable job/stage state</li>
+            <li>Stable project IDs, artifact schema versions, and provenance</li>
+            <li>A documented decision/override schema keyed by stable entities</li>
+            <li>Typed service methods returning status/result DTOs—not console strings</li>
+            <li>Clear error categories with actionable, user-safe messages</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Boundaries to protect</h3>
+          <ul class="clean">
+            <li>The core must never import FastAPI, browser, or frontend code</li>
+            <li>The UI must not shell out to <code>citegraph</code> or parse terminal output</li>
+            <li>Provider keys stay server-side/local-backend side, never browser storage</li>
+            <li>Every edit becomes a persisted, replayable decision with provenance</li>
+            <li>Users can always export plain artifacts and leave the UI</li>
+            <li>Hosted mode, if added, uses the same application contract</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="journey">
+      <div class="section-head">
+        <div><div class="kicker">MVP scope</div><h2>The researcher journey</h2></div>
+        <p class="section-lede">The first UI should make the current pipeline understandable and recoverable. It does not need to expose every tuning knob or start with a spectacular network visualization.</p>
+      </div>
+      <div class="priority-list">
+        <div class="priority"><div><h3>Create a project</h3><p>Choose or drag in PDFs, name the corpus, select OCR mode, and see what stays local versus what is sent to external services.</p></div><span class="badge future">UI 1</span></div>
+        <div class="priority"><div><h3>Inspect before spending</h3><p>Show file count, conversion warnings, estimated tokens/cost, model, and a clear “start analysis” confirmation.</p></div><span class="badge future">UI 2</span></div>
+        <div class="priority"><div><h3>Run and resume</h3><p>Stage timeline, per-file progress, failures with retry actions, cancel/resume, and safe recovery after closing the browser.</p></div><span class="badge future">UI 3</span></div>
+        <div class="priority"><div><h3>Review what matters</h3><p>Start with warnings and a small sample, then support metadata edits, missing references, borderline dedup pairs, enrichment misses, and author aliases.</p></div><span class="badge future">UI 4</span></div>
+        <div class="priority"><div><h3>Explore and export</h3><p>Search/filter papers, references, and authors; view top-cited works and citation context; download all CSV/JSON artifacts. Add interactive graph navigation after table exploration is useful.</p></div><span class="badge future">UI 5</span></div>
+      </div>
+      <div class="callout" style="background:var(--blue-soft);border-color:var(--blue)">
+        <strong>Important product correction to the old roadmap.</strong>
+        Do not pause the pipeline inside a synchronous web checkpoint. Long PDF/OCR/LLM runs should be jobs with durable state; the UI observes progress and records decisions. Re-running affected downstream stages can then be explicit, understandable, and recoverable.
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <div class="section-head">
+        <div><div class="kicker">Forward plan</div><h2>A staged path</h2></div>
+        <p class="section-lede">Finish the public beta before opening a second product front. Then harden just enough core plumbing for a UI, validate the workflow with real researchers, and only later consider hosted infrastructure.</p>
+      </div>
+      <div class="roadmap">
+        <div class="road"><span class="phase">R0 · NOW</span><h3>Release the engine</h3><p>Green CI, honest Python support, current pricing, real gold evaluation, privacy/limitations docs, TestPyPI, v0.1.0 beta.</p></div>
+        <div class="road"><span class="phase">R1 · CONTRACTS</span><h3>Prepare for interfaces</h3><p>Progress events, durable jobs, cancellation, service DTOs, decision schema, artifact provenance. No UI styling yet.</p></div>
+        <div class="road"><span class="phase">R2 · MVP</span><h3>Local project runner</h3><p>Files, estimate, execute/resume, warnings, basic result tables, exports. Test with 3–5 researchers.</p></div>
+        <div class="road"><span class="phase">R3 · REVIEW</span><h3>Curation + exploration</h3><p>Metadata/reference correction, dedup decisions, enrichment misses, author aliases, richer search and graph views.</p></div>
+        <div class="road"><span class="phase">R4 · OPTIONAL</span><h3>Distribution choice</h3><p>Package as desktop app or add hosted projects only after evidence about installation friction, collaboration, privacy, and support.</p></div>
+      </div>
+      <div class="two-col" style="margin-top:30px">
+        <div class="card">
+          <h3>The next three concrete moves</h3>
+          <ol>
+            <li><strong>Release-hardening PR:</strong> fix CI/Python support, CLI assertions, current pricing, README install flow, and the incorrect <code>PipelineResult</code> docstring.</li>
+            <li><strong>Real-corpus evaluation:</strong> label representative papers/references/dedup pairs, run the maintained smoke script, publish results and limitations.</li>
+            <li><strong>v0.1.0 beta release:</strong> TestPyPI install, trusted publisher check, tag, GitHub release notes, PyPI verification.</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3>Decision to make after release</h3>
+          <p>Interview or observe 3–5 researchers using the CLI-assisted workflow. The key question is not “which frontend framework?” but <strong>where they lose confidence or get stuck</strong>: installation, cost, waiting, warnings, correction, or exploration.</p>
+          <p>Use that evidence to write the first UI specification. The architectural recommendation here deliberately leaves visual design and exact endpoint shape open until then.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="sources">
+      <div class="section-head">
+        <div><div class="kicker">Audit trail</div><h2>Evidence used</h2></div>
+        <p class="section-lede">Repository files were read at <code>7843e91</code>; commands were run on 4 September 2026. External links below are primary sources.</p>
+      </div>
+      <ul class="sources">
+        <li><a href="README.md">README.md</a> — public installation, workflow, artifacts, configuration, and release instructions</li>
+        <li><a href="STATUS.html">STATUS.html</a> — earlier 25-milestone roadmap and review-UI design</li>
+        <li><a href="docs/RELEASE.md">docs/RELEASE.md</a> — PyPI checklist</li>
+        <li><a href="pyproject.toml">pyproject.toml</a> — package metadata, dependencies, Python classifiers</li>
+        <li><a href=".github/workflows/ci.yml">CI workflow</a> and <a href=".github/workflows/publish.yml">publish workflow</a></li>
+        <li><a href="evaluation/README.md">evaluation harness</a> and <a href="evaluation/RESULTS.md">synthetic results</a></li>
+        <li><a href="https://github.com/yabramuvdi/citegraph/actions/runs/27939845662">latest GitHub Actions run</a> — public CI failure details</li>
+        <li><a href="https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite">official Gemini 3.1 Flash-Lite model page</a></li>
+        <li><a href="https://ai.google.dev/gemini-api/docs/pricing">official Gemini API pricing</a></li>
+        <li>Local checks: <code>pytest</code>, <code>ruff</code>, <code>python -m build</code>, current <code>twine check</code>, and fresh wheel installation</li>
+      </ul>
+    </section>
+
+    <footer>
+      citegraph project review · generated 4 September 2026 · no external assets or build step required
+    </footer>
+  </main>
+</div>
+
+<script>
+  const links = [...document.querySelectorAll('nav a')];
+  const sections = links.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      links.forEach(link => link.classList.toggle('active', link.getAttribute('href') === `#${visible.target.id}`));
+    }, { rootMargin: '-15% 0px -70% 0px', threshold: [0, .25, .6] });
+    sections.forEach(section => observer.observe(section));
+  }
+</script>
+</body>
+</html>
