@@ -359,7 +359,7 @@ def metadata(
 
     def _go() -> None:
         df = pipeline.extract_paper_metadata()
-        typer.echo(f"Wrote {pipeline.layout.papers_csv} ({len(df)} papers).")
+        typer.echo(f"Wrote {pipeline.layout.sources_csv} ({len(df)} sources).")
         if pipeline.layout.source_duplicates_json.exists():
             import json as _json
             groups = _json.loads(

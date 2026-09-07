@@ -96,7 +96,7 @@ def test_pipeline_end_to_end_no_network(tmp_path: Path) -> None:
     assert len(graph) == 2
     assert set(graph.columns) == {"citing_id", "cited_id"}
 
-    assert (tmp_path / "out" / "papers.csv").exists()
+    assert (tmp_path / "out" / "sources.csv").exists()
     assert (tmp_path / "out" / "references_raw.csv").exists()
     assert (tmp_path / "out" / "references.csv").exists()
     assert (tmp_path / "out" / "citation_graph.csv").exists()
@@ -134,6 +134,28 @@ def test_pipeline_run_returns_author_tables_and_manifest(
     assert "run_summary" in data["artifacts"]
 
 
+def test_metadata_stage_writes_sources_csv_with_work_ids(tmp_path: Path) -> None:
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    shutil.copy(FIXTURES / "sample_paper.md", md_dir / "sample_paper.md")
+
+    pipeline = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
+    df = pipeline.extract_paper_metadata(list(md_dir.glob("*.md")))
+
+    assert (tmp_path / "out" / "sources.csv").exists()
+    assert not (tmp_path / "out" / "papers.csv").exists()
+    assert df["id"].str.startswith("w-").all()
+    assert {
+        "id",
+        "source_file",
+        "Title",
+        "Authors",
+        "Authors_List",
+        "Journal",
+        "Year",
+    } <= set(df.columns)
+
+
 def test_pipeline_caches_metadata(tmp_path: Path) -> None:
     md_dir = tmp_path / "out" / "markdown"
     md_dir.mkdir(parents=True)
@@ -153,7 +175,7 @@ def test_pipeline_caches_metadata(tmp_path: Path) -> None:
     cache = tmp_path / "out" / "metadata" / "sample_paper.json"
     assert cache.exists()
 
-    reloaded = pd.read_csv(tmp_path / "out" / "papers.csv")
+    reloaded = pd.read_csv(tmp_path / "out" / "sources.csv")
     assert reloaded.iloc[0]["Title"].startswith("Governing Common-Pool Resources")
 
 
@@ -291,7 +313,7 @@ def test_progressive_stages_resume_from_disk(tmp_path: Path) -> None:
 
     assert len(refs) == 2
     assert len(graph) == 2
-    assert (tmp_path / "out" / "papers.csv").exists()
+    assert (tmp_path / "out" / "sources.csv").exists()
     assert (tmp_path / "out" / "references_raw.csv").exists()
 
 

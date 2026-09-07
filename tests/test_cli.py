@@ -249,8 +249,8 @@ def test_metadata_command_loads_cache_without_llm(tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["metadata", "--out", str(out)])
     assert result.exit_code == 0, result.output
-    assert "1 papers" in result.output
-    assert (out / "papers.csv").exists()
+    assert "1 sources" in result.output
+    assert (out / "sources.csv").exists()
 
 
 def test_references_yes_flag_skips_prompt_and_runs(tmp_path: Path) -> None:

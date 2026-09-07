@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from citegraph.ids import make_paper_id
+from citegraph.ids import make_work_id
 from citegraph.llm import GeminiClient, LLMError, parse_structured_response
 from citegraph.schemas import PaperMetadata
 
@@ -77,5 +77,5 @@ def metadata_to_record(meta: PaperMetadata, source_file: str) -> dict:
     """Convert a :class:`PaperMetadata` into a flat dict ready for a DataFrame."""
     record = meta.model_dump()
     record["source_file"] = source_file
-    record["id"] = make_paper_id(meta.Authors_List or meta.Authors, meta.Year, meta.Title)
+    record["id"] = make_work_id(meta.Authors_List or meta.Authors, meta.Year, meta.Title)
     return record

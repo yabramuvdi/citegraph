@@ -169,8 +169,8 @@ class Pipeline:
             )
         return paths
 
-    def _load_papers(self) -> pd.DataFrame:
-        path = self.layout.papers_csv
+    def _load_sources(self) -> pd.DataFrame:
+        path = self.layout.sources_csv
         if not path.exists():
             raise StageNotReadyError(
                 f"Missing {path}. Run `citegraph metadata` first."
@@ -275,8 +275,8 @@ class Pipeline:
         df = pd.DataFrame(records)
         if not df.empty:
             df = df.drop_duplicates(subset="id", keep="first").reset_index(drop=True)
-        df.to_csv(self.layout.papers_csv, index=False)
-        logger.info("Wrote %s (%d rows)", self.layout.papers_csv, len(df))
+        df.to_csv(self.layout.sources_csv, index=False)
+        logger.info("Wrote %s (%d rows)", self.layout.sources_csv, len(df))
 
         duplicates = detect_source_duplicates(records, self.dedup_config)
         write_source_duplicates(self.layout.source_duplicates_json, duplicates)
@@ -301,7 +301,7 @@ class Pipeline:
         if markdown_paths is None:
             markdown_paths = self._load_markdown_paths()
         if papers_df is None:
-            papers_df = self._load_papers()
+            papers_df = self._load_sources()
 
         source_to_id = dict(zip(papers_df["source_file"], papers_df["id"], strict=False))
 
@@ -484,7 +484,7 @@ class Pipeline:
             references = self._load_references()
         if papers is None:
             try:
-                papers = self._load_papers()
+                papers = self._load_sources()
             except StageNotReadyError:
                 papers = None  # reference-only mode is fine
         if graph is None and self.layout.graph_csv.exists():
