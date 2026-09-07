@@ -45,6 +45,11 @@ def _configure_logging(verbose: bool) -> None:
     )
 
 
+# Typer option defaults come from the config dataclass so the CLI and the
+# library surface can't drift apart.
+_DEDUP_DEFAULTS = DedupConfig()
+
+
 def _dedup_config(
     threshold: float,
     title_weight: float,
@@ -166,11 +171,13 @@ def run(
         help="Maximum concurrent CrossRef/OpenAlex enrichment lookups.",
     ),
     model: str | None = typer.Option(None, "--model", help="Gemini model id."),
-    threshold: float = typer.Option(85.0, "--threshold", help="Dedup similarity threshold."),
-    title_weight: float = typer.Option(0.7, "--title-weight"),
-    authors_weight: float = typer.Option(0.3, "--authors-weight"),
-    journal_weight: float = typer.Option(0.0, "--journal-weight"),
-    year_window: int = typer.Option(1, "--year-window"),
+    threshold: float = typer.Option(
+        _DEDUP_DEFAULTS.threshold, "--threshold", help="Dedup similarity threshold."
+    ),
+    title_weight: float = typer.Option(_DEDUP_DEFAULTS.title_weight, "--title-weight"),
+    authors_weight: float = typer.Option(_DEDUP_DEFAULTS.authors_weight, "--authors-weight"),
+    journal_weight: float = typer.Option(_DEDUP_DEFAULTS.journal_weight, "--journal-weight"),
+    year_window: int = typer.Option(_DEDUP_DEFAULTS.year_window, "--year-window"),
     llm_concurrency: int | None = typer.Option(
         None,
         "--llm-concurrency",
@@ -443,11 +450,11 @@ def dedup(
         help="Path to citations_raw.csv. Defaults to <out>/citations_raw.csv.",
     ),
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
-    threshold: float = typer.Option(85.0, "--threshold"),
-    title_weight: float = typer.Option(0.7, "--title-weight"),
-    authors_weight: float = typer.Option(0.3, "--authors-weight"),
-    journal_weight: float = typer.Option(0.0, "--journal-weight"),
-    year_window: int = typer.Option(1, "--year-window"),
+    threshold: float = typer.Option(_DEDUP_DEFAULTS.threshold, "--threshold"),
+    title_weight: float = typer.Option(_DEDUP_DEFAULTS.title_weight, "--title-weight"),
+    authors_weight: float = typer.Option(_DEDUP_DEFAULTS.authors_weight, "--authors-weight"),
+    journal_weight: float = typer.Option(_DEDUP_DEFAULTS.journal_weight, "--journal-weight"),
+    year_window: int = typer.Option(_DEDUP_DEFAULTS.year_window, "--year-window"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 4: canonicalize sources + citations into works and the citation graph."""

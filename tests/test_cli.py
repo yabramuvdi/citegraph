@@ -329,3 +329,30 @@ def test_help_lists_all_commands() -> None:
         "ui",
     ):
         assert cmd in result.output
+
+
+# ---------------------------------------------------------------------------
+# CLI defaults stay in sync with the config dataclasses
+# ---------------------------------------------------------------------------
+def test_cli_dedup_defaults_match_dedup_config() -> None:
+    """Every command exposing dedup knobs must default to DedupConfig's values.
+
+    DedupConfig was retuned for token_set_ratio (2847590); hardcoded typer
+    defaults silently diverged, so CLI runs clustered differently from
+    library runs and from the report's merge audit.
+    """
+    import inspect
+
+    from citegraph import cli
+    from citegraph.dedup import DedupConfig
+
+    cfg = DedupConfig()
+    knobs = ["threshold", "title_weight", "authors_weight", "journal_weight", "year_window"]
+    for command in (cli.run, cli.dedup):
+        params = inspect.signature(command).parameters
+        for knob in knobs:
+            option = params[knob].default
+            assert option.default == getattr(cfg, knob), (
+                f"cli.{command.__name__} --{knob.replace('_', '-')} defaults to "
+                f"{option.default}, but DedupConfig.{knob} is {getattr(cfg, knob)}"
+            )

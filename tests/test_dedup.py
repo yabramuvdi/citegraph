@@ -256,6 +256,86 @@ def test_canonicalize_returns_stable_work_ids(sample_references):
         assert cluster_id.startswith("w-")
 
 
+def test_canonicalize_disambiguates_colliding_work_ids():
+    """Two distinct works that slug to the same id must get unique ids.
+
+    Real-corpus case: two different Fehr/Fischbacher 2003 papers cited
+    without titles (one in Nature, one in Evol. Hum. Behav.) both slug
+    to w-fehr-2003-untitled but must not share a row in works.csv.
+    """
+    cit = pd.DataFrame(
+        [
+            {
+                "citing_id": "w-x",
+                "Title": "",
+                "Authors": "E. Fehr, U. Fischbacher",
+                "Authors_List": ["E. Fehr", "U. Fischbacher"],
+                "Journal": "Nature",
+                "Year": 2003,
+            },
+            {
+                "citing_id": "w-x",
+                "Title": "",
+                "Authors": "E. Fehr, U. Fischbacher",
+                "Authors_List": ["E. Fehr", "U. Fischbacher"],
+                "Journal": "Evol. Hum. Behav.",
+                "Year": 2003,
+            },
+        ]
+    )
+    works, mapping = _canonicalize_citations(cit)
+    assert works.index.is_unique, f"duplicate work ids: {list(works.index)}"
+    assert len(works) == 2
+    assert mapping[0] != mapping[1]
+    assert sorted(works["Journal"]) == ["Evol. Hum. Behav.", "Nature"]
+
+
+def test_id_collision_with_source_does_not_steal_ring0():
+    """A citation colliding with a source id must not inherit ring 0 / source_file.
+
+    Ring and source_file are joined back by id, so an unsuffixed collision
+    would make the citation row masquerade as a core work.
+    """
+    sources = pd.DataFrame(
+        [
+            {
+                "id": "w-fehr-2003-untitled",
+                "source_file": "fehr.md",
+                "Title": "A completely different treatise",
+                "Authors": "Q. Fehr",
+                "Authors_List": ["Q. Fehr"],
+                "Journal": "Econometrica",
+                "Year": 2003,
+            }
+        ]
+    )
+    cit = pd.DataFrame(
+        [
+            {
+                "citing_id": "w-fehr-2003-untitled",
+                "Title": "",
+                "Authors": "E. Fehr, U. Fischbacher",
+                "Authors_List": ["E. Fehr", "U. Fischbacher"],
+                "Journal": "Nature",
+                "Year": 2003,
+            }
+        ]
+    )
+    works, edges, _stats = canonicalize_works(
+        sources, cit, DedupConfig(), show_progress=False
+    )
+    assert works.index.is_unique
+    assert len(works) == 2
+    core = works[works["ring"] == 0]
+    assert len(core) == 1
+    assert core.iloc[0]["source_file"] == "fehr.md"
+    cited = works[works["ring"] != 0]
+    assert cited.iloc[0]["source_file"] == ""
+    # The edge must point at the disambiguated citation work, not the source.
+    assert edges.iloc[0]["cited_id"] == cited.index[0]
+    assert edges.iloc[0]["citing_id"] == "w-fehr-2003-untitled"
+
+
 def test_dedup_uses_candidate_blocking_for_unrelated_rows(monkeypatch):
     rows = []
     for i in range(30):

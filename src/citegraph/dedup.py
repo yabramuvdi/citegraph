@@ -216,6 +216,7 @@ def _cluster_rows(
     """
     cluster_ids: list[str | None] = [None] * len(df)
     representatives: list[tuple[str, dict]] = []
+    used_ids: set[str] = set()
     author_blocks, title_blocks, unknown_author = _candidate_index_lookup(df)
 
     for i in iter_with_progress(
@@ -228,6 +229,15 @@ def _cluster_rows(
             continue
         paper_i = _row_to_dict(df.iloc[i])
         cluster_id = make_cluster_id(i, df.iloc[i])
+        # Distinct works can slug to the same id (e.g. two untitled citations
+        # by the same first author and year); downstream tables join by id,
+        # so collisions get a deterministic -2/-3… suffix like author ids do.
+        if cluster_id in used_ids:
+            n = 2
+            while f"{cluster_id}-{n}" in used_ids:
+                n += 1
+            cluster_id = f"{cluster_id}-{n}"
+        used_ids.add(cluster_id)
         cluster_ids[i] = cluster_id
         representatives.append((cluster_id, paper_i))
 
