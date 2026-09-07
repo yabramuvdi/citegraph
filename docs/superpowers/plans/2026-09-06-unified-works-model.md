@@ -1186,24 +1186,31 @@ Tasks 1–13: **DONE** — all committed on branch `works-model` (14 commits,
 335 tests passing, ruff clean). The user's pre-existing uncommitted 0.1.x
 work is preserved in checkpoint commit `e875228` at the branch base.
 
-Task 14 (real-corpus verification): **IN PROGRESS — awaiting user go-ahead on Gemini spend**
-- Corpus: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/data` (92 PDFs, nested author dirs)
-- Out dir: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/citegraph_out`
-- Done (2026-09-07):
-  - Stage 1 convert complete: 92/92 markdowns. One scanned PDF
-    (`Cardenas__métodos experimentales`) was image-only; re-ran with
-    `--ocr-auto` → now 93 KB of text, `conversion_warnings.json` cleared.
-  - Clean-state re-verify: `pytest` green (exit 0), `ruff check .` clean.
-  - `citegraph estimate`: 92 metadata + 92 references calls on
-    gemini-3.1-flash-lite, ~880k input + ~996k output tokens,
-    **~$1.71 estimated** (pricing table is mid-2025 rates; treat as rough).
-- Next steps (blocked on explicit user approval — real API spend):
-  1. `citegraph metadata`, `citegraph references`, `citegraph dedup`,
-     `citegraph authors`, `citegraph report --open`
-     (skip `enrich` unless the user asks — it is slow but free)
-  2. verify: `works.csv` exists, ring-0 count ≈ 92, and
-     `citation_graph.csv` has edges whose `cited_id` is a ring-0 work
-     (core-cites-core fires on real data); `g.top_authors(15, ring=0)`
-     gives a sane core-author ranking
-  3. then superpowers:finishing-a-development-branch for merging
+Task 14 (real-corpus verification): **NEARLY DONE — enrichment redo in flight**
+- Corpus: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/data` (92 PDFs) →
+  `/Users/yabra/Dropbox/Consultoria/Maria/paper4/citegraph_out`
+- Done (2026-09-07): convert 92/92 (`--ocr-auto` fixed the one scanned PDF);
+  user approved ~$1.71 Gemini spend; metadata + references + dedup +
+  enrich + authors + report all ran end-to-end.
+- **Three real bugs found by this verification, all fixed with TDD and
+  committed on `works-model`:**
+  1. `make_work_id` collisions left duplicate ids in works.csv (two
+     untitled Fehr 2003 citations; a citation colliding with a source id
+     even inherited ring 0 + source_file) → `_cluster_rows` now suffixes
+     colliding cluster ids `-2`/`-3`, like author ids.
+  2. CLI dedup defaults (0.7/0.3/0.0) had drifted from the retuned
+     `DedupConfig()` (0.65/0.25/0.1) since commit 2847590 → typer
+     defaults now come from `DedupConfig` itself, with a sync test.
+  3. Enrichment cached transient `http_error` (429) misses as permanent —
+     an anonymous throttled run poisoned 3,149/3,456 lookups → cached
+     http_error misses are now retried on re-run.
+- Acceptance criteria verified after re-running dedup/authors/report:
+  ring-0 = 92 exactly, ids unique, 3,462 works, 4,685 edges, **163
+  core→core edges**, `g.top_authors(15, ring=0)` sane (Cardenas 38 core
+  works, compound surnames + ORCIDs correct).
+- In flight: enrichment redo with `--enrich-contact yabran.muvdi@gmail.com`
+  (user-approved) retrying the 3,149 throttled lookups, then authors +
+  report refresh.
+- Remaining: eyeball final report, then
+  superpowers:finishing-a-development-branch for merging.
      `works-model` into `main`
