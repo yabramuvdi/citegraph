@@ -166,7 +166,7 @@ def test_references_failure_does_not_block_other_papers(tmp_path: Path) -> None:
     papers = p.extract_paper_metadata()  # both succeed (no LLM call — cached)
     assert len(papers) == 2
 
-    raw_refs = p.extract_paper_references(papers_df=papers)
+    raw_refs = p.extract_paper_references(sources_df=papers)
     assert len(raw_refs) == 1, "only the good paper's refs should appear"
 
     failures_path = p.layout.references_failures_jsonl
@@ -195,7 +195,7 @@ def test_run_summary_includes_failure_counts(tmp_path: Path) -> None:
 
     # Skip stage 1 by pre-populating markdown (already done by _two_paper_setup).
     papers = pipeline.extract_paper_metadata()
-    raw_refs = pipeline.extract_paper_references(papers_df=papers)
+    raw_refs = pipeline.extract_paper_references(sources_df=papers)
     pipeline.deduplicate(raw_refs)
 
     # run() also writes the summary; we mimic the same call here.

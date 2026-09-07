@@ -97,7 +97,7 @@ def test_pipeline_end_to_end_no_network(tmp_path: Path) -> None:
     assert set(graph.columns) == {"citing_id", "cited_id"}
 
     assert (tmp_path / "out" / "sources.csv").exists()
-    assert (tmp_path / "out" / "references_raw.csv").exists()
+    assert (tmp_path / "out" / "citations_raw.csv").exists()
     assert (tmp_path / "out" / "references.csv").exists()
     assert (tmp_path / "out" / "citation_graph.csv").exists()
 
@@ -154,6 +154,21 @@ def test_metadata_stage_writes_sources_csv_with_work_ids(tmp_path: Path) -> None
         "Journal",
         "Year",
     } <= set(df.columns)
+
+
+def test_references_stage_writes_citations_raw_csv(tmp_path: Path) -> None:
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    shutil.copy(FIXTURES / "sample_paper.md", md_dir / "sample_paper.md")
+
+    pipeline = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
+    markdown_paths = list(md_dir.glob("*.md"))
+    sources = pipeline.extract_paper_metadata(markdown_paths)
+    raw = pipeline.extract_paper_references(markdown_paths, sources)
+
+    assert (tmp_path / "out" / "citations_raw.csv").exists()
+    assert not (tmp_path / "out" / "references_raw.csv").exists()
+    assert raw["citing_id"].str.startswith("w-").all()
 
 
 def test_pipeline_caches_metadata(tmp_path: Path) -> None:
@@ -279,7 +294,7 @@ def test_reference_extraction_runs_concurrently_and_preserves_order(
         show_progress=False,
     )
     refs = pipeline.extract_paper_references(
-        markdown_paths, papers_df=pd.DataFrame(paper_rows)
+        markdown_paths, sources_df=pd.DataFrame(paper_rows)
     )
 
     assert max_active > 1
@@ -307,14 +322,14 @@ def test_progressive_stages_resume_from_disk(tmp_path: Path) -> None:
     p1.extract_paper_metadata()
     p1.extract_paper_references()
 
-    # Second Pipeline instance to prove dedup picks up references_raw.csv from disk.
+    # Second Pipeline instance to prove dedup picks up citations_raw.csv from disk.
     p2 = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
     refs, graph = p2.deduplicate()
 
     assert len(refs) == 2
     assert len(graph) == 2
     assert (tmp_path / "out" / "sources.csv").exists()
-    assert (tmp_path / "out" / "references_raw.csv").exists()
+    assert (tmp_path / "out" / "citations_raw.csv").exists()
 
 
 def test_normalize_authors_writes_csvs_and_review(tmp_path: Path) -> None:

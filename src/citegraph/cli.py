@@ -414,7 +414,7 @@ def references(
 
     def _go() -> None:
         df = pipeline.extract_paper_references()
-        typer.echo(f"Wrote {pipeline.layout.references_raw_csv} ({len(df)} raw refs).")
+        typer.echo(f"Wrote {pipeline.layout.citations_raw_csv} ({len(df)} raw citations).")
         if pipeline.layout.papers_no_references_json.exists():
             import json as _json
             entries = _json.loads(
@@ -431,11 +431,11 @@ def references(
 
 @app.command()
 def dedup(
-    references_raw_csv: Path | None = typer.Argument(
+    citations_raw_csv: Path | None = typer.Argument(
         None,
         exists=True,
         dir_okay=False,
-        help="Path to references_raw.csv. Defaults to <out>/references_raw.csv.",
+        help="Path to citations_raw.csv. Defaults to <out>/citations_raw.csv.",
     ),
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
     threshold: float = typer.Option(85.0, "--threshold"),
@@ -451,7 +451,7 @@ def dedup(
     layout.ensure()
     cfg = _dedup_config(threshold, title_weight, authors_weight, journal_weight, year_window)
 
-    csv_path = references_raw_csv or layout.references_raw_csv
+    csv_path = citations_raw_csv or layout.citations_raw_csv
     if not csv_path.exists():
         typer.secho(
             f"Missing {csv_path}. Run `citegraph references --out {out}` first.",

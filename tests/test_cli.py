@@ -183,7 +183,7 @@ def test_dedup_missing_input_exits_nonzero(tmp_path: Path) -> None:
 def test_dedup_reports_missing_required_columns(tmp_path: Path) -> None:
     out = tmp_path / "out"
     out.mkdir()
-    raw = out / "references_raw.csv"
+    raw = out / "citations_raw.csv"
     raw.write_text("Title,Year\nA Paper,2020\n")
 
     result = runner.invoke(app, ["dedup", "--out", str(out)])
@@ -195,7 +195,7 @@ def test_dedup_reports_missing_required_columns(tmp_path: Path) -> None:
 def test_dedup_happy_path_writes_outputs(tmp_path: Path) -> None:
     out = tmp_path / "out"
     out.mkdir()
-    raw = out / "references_raw.csv"
+    raw = out / "citations_raw.csv"
     raw.write_text(
         "Title,Authors_List,Authors,Journal,Year,citing_id\n"
         "Governing the Commons,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,p-a\n"
@@ -263,7 +263,7 @@ def test_references_yes_flag_skips_prompt_and_runs(tmp_path: Path) -> None:
     result = runner.invoke(app, ["references", "--out", str(out), "--yes"])
     assert result.exit_code == 0, result.output
     assert "Cost estimate" not in result.output, "should be suppressed by --yes"
-    assert (out / "references_raw.csv").exists()
+    assert (out / "citations_raw.csv").exists()
 
 
 def test_references_command_skips_prompt_when_all_cached(tmp_path: Path) -> None:
@@ -275,7 +275,7 @@ def test_references_command_skips_prompt_when_all_cached(tmp_path: Path) -> None
     result = runner.invoke(app, ["references", "--out", str(out)])
     assert result.exit_code == 0, result.output
     assert "Cost estimate" not in result.output
-    assert (out / "references_raw.csv").exists()
+    assert (out / "citations_raw.csv").exists()
 
 
 # ---------------------------------------------------------------------------

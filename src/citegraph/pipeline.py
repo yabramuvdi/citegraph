@@ -177,8 +177,8 @@ class Pipeline:
             )
         return pd.read_csv(path)
 
-    def _load_raw_refs(self) -> pd.DataFrame:
-        path = self.layout.references_raw_csv
+    def _load_citations_raw(self) -> pd.DataFrame:
+        path = self.layout.citations_raw_csv
         if not path.exists():
             raise StageNotReadyError(
                 f"Missing {path}. Run `citegraph references` first."
@@ -296,14 +296,14 @@ class Pipeline:
     def extract_paper_references(
         self,
         markdown_paths: list[Path] | None = None,
-        papers_df: pd.DataFrame | None = None,
+        sources_df: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         if markdown_paths is None:
             markdown_paths = self._load_markdown_paths()
-        if papers_df is None:
-            papers_df = self._load_sources()
+        if sources_df is None:
+            sources_df = self._load_sources()
 
-        source_to_id = dict(zip(papers_df["source_file"], papers_df["id"], strict=False))
+        source_to_id = dict(zip(sources_df["source_file"], sources_df["id"], strict=False))
 
         duplicate_lookup: dict[str, dict] = {}
         if self.layout.source_duplicates_json.exists():
@@ -391,8 +391,8 @@ class Pipeline:
             {
                 "paper_id": citing_id,
                 "source_file": md_name,
-                "title": papers_df.loc[papers_df["id"] == citing_id, "Title"].iloc[0]
-                if not papers_df.loc[papers_df["id"] == citing_id].empty
+                "title": sources_df.loc[sources_df["id"] == citing_id, "Title"].iloc[0]
+                if not sources_df.loc[sources_df["id"] == citing_id].empty
                 else "",
             }
             for md_name, citing_id in source_to_id.items()
@@ -407,8 +407,8 @@ class Pipeline:
             )
 
         df = pd.DataFrame(rows)
-        df.to_csv(self.layout.references_raw_csv, index=False)
-        logger.info("Wrote %s (%d rows)", self.layout.references_raw_csv, len(df))
+        df.to_csv(self.layout.citations_raw_csv, index=False)
+        logger.info("Wrote %s (%d rows)", self.layout.citations_raw_csv, len(df))
         return df
 
     # ------------------------------------------------------------------
@@ -419,7 +419,7 @@ class Pipeline:
         raw_refs: pd.DataFrame | None = None,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         if raw_refs is None:
-            raw_refs = self._load_raw_refs()
+            raw_refs = self._load_citations_raw()
         require_columns(
             raw_refs,
             ["Title", "Year", "citing_id"],
