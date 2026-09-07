@@ -756,6 +756,48 @@ def test_enrichment_family_feeds_surname_lexicon():
     assert authors_df.iloc[0]["surname_norm"] == "guerra forero"
 
 
+def test_reversed_enrichment_author_order_does_not_swap_ids():
+    """Citation order and publication order can disagree — ids must follow names.
+
+    Real-corpus case: a citation lists 'Ibañez, Moya' but OpenAlex has
+    'Moya, Ibáñez'; blind positional pairing gave Ibáñez Moya's ORCID,
+    and the same-id rule then pulled Moya's solo core paper into her
+    cluster.
+    """
+    refs = _refs([
+        {"id": "r-1", "Title": "Joint paper",
+         "Authors_List": ["Ibañez, A.M.", "Moya, A."], "Year": 2010},
+        {"id": "r-2", "Title": "Solo paper",
+         "Authors_List": ["Andres Moya"], "Year": 2018},
+    ])
+    moya_ids = {"openalex_id": "A5102739955", "orcid": "0000-0003-0640-5802"}
+    enriched = pd.DataFrame(
+        [
+            {"id": "r-1",
+             "OpenAlex_Authors": [
+                 {"display_name": "Andres Moya", "family": None, "given": None,
+                  **moya_ids},
+                 {"display_name": "Ana María Ibáñez", "family": None, "given": None,
+                  "openalex_id": None, "orcid": None},
+             ]},
+            {"id": "r-2",
+             "OpenAlex_Authors": [
+                 {"display_name": "Andres Moya", "family": None, "given": None,
+                  **moya_ids},
+             ]},
+        ]
+    ).set_index("id")
+    authors_df, citations_df, _ = normalize_authors(works=refs, enriched_works=enriched)
+    moya = authors_df[authors_df["surname_norm"] == "moya"]
+    ibanez = authors_df[authors_df["surname_norm"] == "ibanez"]
+    assert len(moya) == 1
+    assert len(ibanez) == 1
+    assert moya.iloc[0]["orcid"] == moya_ids["orcid"]
+    assert not (isinstance(ibanez.iloc[0]["orcid"], str) and ibanez.iloc[0]["orcid"])
+    solo = citations_df[citations_df["record_id"] == "r-2"]
+    assert solo.iloc[0]["author_id"] == moya.index[0]
+
+
 def test_full_name_stuffed_family_does_not_poison_lexicon():
     """CrossRef sometimes stuffs the entire name into 'family' (given empty).
 

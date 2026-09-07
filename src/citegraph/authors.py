@@ -1337,7 +1337,9 @@ def _match_enrichment(
     if not enrich_authors:
         return None, None
     parsed_list = [p for p in all_parsed if p is not None]
-    # When list lengths match exactly, trust positional alignment.
+    # When list lengths match exactly, prefer positional alignment — but
+    # only when the surnames agree: citation order and publication order
+    # can disagree, and ids must never cross to a different surname.
     if len(parsed_list) == len(enrich_authors):
         # Find this parsed author's position in the filtered list.
         idx = 0
@@ -1346,7 +1348,15 @@ def _match_enrichment(
                 idx = sum(1 for q in list(all_parsed)[:i] if q is not None)
                 break
         item = enrich_authors[idx]
-        return item.get("openalex_id"), item.get("orcid")
+        cand = parse_author(item.get("display_name") or "", known_surnames=known_surnames)
+        # Token overlap, not equality: "Guerra" must still accept "Guerra
+        # Forero" (same person, different surname granularity) while
+        # "Ibañez" can never take an id parsed as "Moya".
+        if (
+            cand is not None
+            and set(cand.surname_norm.split()) & set(parsed.surname_norm.split())
+        ):
+            return item.get("openalex_id"), item.get("orcid")
     # Fallback: surname-fuzzy match. We strip diacritics on both sides and
     # parse the candidate with the same surname lexicon so a re-split
     # "Guerra Forero" still lines up with its enrichment display name.
