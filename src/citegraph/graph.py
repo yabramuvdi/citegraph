@@ -1,4 +1,4 @@
-"""A queryable view over the pipeline's three output CSVs.
+"""A queryable view over the pipeline's output CSVs.
 
 The pipeline writes everything you need to disk, but the package is called
 ``citegraph`` — so a small, polished class lives here to deliver on the
@@ -6,20 +6,23 @@ name. Construct from a finished pipeline run::
 
     from citegraph import CitationGraph
     g = CitationGraph.from_out_dir("./out")
-    g.n_papers, g.n_references, g.n_edges
+    g.n_core_works, g.n_works, g.n_edges
+    g.core                      # your own papers (ring 0)
     g.top_cited(n=10)
-    g.cited_by("p-doe-2020-some-paper")
-    g.citers_of("r-smith-1968-tragedy-of-the-commons")
+    g.top_authors(n=10, ring=0) # most prominent authors of YOUR papers
+    g.core_citations()          # who among your papers cites whom
+    g.cited_by("w-doe-2020-some-paper")
+    g.citers_of("w-smith-1968-tragedy-of-the-commons")
 
 Or directly from a :class:`~citegraph.PipelineResult`::
 
     result = pipe.run()
     g = CitationGraph.from_pipeline_result(result)
 
-The DataFrame asymmetry from the pipeline is preserved: ``papers`` keeps
-``id`` as a column (matching ``papers.csv``), ``references`` is indexed by
-``id`` (matching ``references.csv``). Methods do the right thing on each
-side; you should rarely need to think about it.
+Every bibliographic record is a *work* (``w-`` id), indexed by ``id`` in
+``works``. Two stored facts distinguish roles: ``ring`` (0 = seeded from
+your PDFs — the *core*; n = first discovered in a ring n-1 bibliography)
+and ``source_file`` (non-empty when we processed a PDF for it).
 """
 
 from __future__ import annotations
@@ -37,18 +40,19 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 class CitationGraph:
-    """A read-only view over papers, references, and citation edges."""
+    """A read-only view over canonical works and citation edges."""
 
     def __init__(
         self,
-        papers: pd.DataFrame,
-        references: pd.DataFrame,
+        works: pd.DataFrame,
         edges: pd.DataFrame,
         authors: pd.DataFrame | None = None,
         author_citations: pd.DataFrame | None = None,
     ) -> None:
-        self.papers = papers
-        self.references = references
+        # Accept both index-by-id (canonical) and id-as-column frames.
+        if "id" in works.columns:
+            works = works.set_index("id")
+        self.works = works
         self.edges = edges
         # Author tables are optional — the citegraph authors stage may not
         # have been run yet. Methods that need them check `has_authors`.
@@ -62,17 +66,25 @@ class CitationGraph:
     # ------------------------------------------------------------------
     @classmethod
     def from_out_dir(cls, out_dir: str | Path) -> CitationGraph:
-        """Load the three CSVs from a finished pipeline's ``out_dir``.
+        """Load the output CSVs from a finished pipeline's ``out_dir``.
 
         ``authors.csv`` and ``author_citations.csv`` are loaded too when
         present (i.e. after the ``citegraph authors`` stage has run).
         Their absence is silent — the rest of the API still works.
         """
         layout = OutLayout(Path(out_dir))
+        if not layout.works_csv.exists() and (layout.out_dir / "papers.csv").exists():
+            raise FileNotFoundError(
+                f"{layout.works_csv} not found, but legacy papers.csv exists. "
+                "This out_dir predates the works model. Re-run the cheap "
+                "downstream stages (per-paper caches are reused): "
+                f"citegraph metadata --out {out_dir} && "
+                f"citegraph references --out {out_dir} && "
+                f"citegraph dedup --out {out_dir} && "
+                f"citegraph authors --out {out_dir}"
+            )
         missing = [
-            p
-            for p in (layout.papers_csv, layout.references_csv, layout.graph_csv)
-            if not p.exists()
+            p for p in (layout.works_csv, layout.graph_csv) if not p.exists()
         ]
         if missing:
             raise FileNotFoundError(
@@ -89,8 +101,7 @@ class CitationGraph:
             if layout.author_citations_csv.exists() else None
         )
         return cls(
-            papers=pd.read_csv(layout.papers_csv),
-            references=pd.read_csv(layout.references_csv, index_col="id"),
+            works=pd.read_csv(layout.works_csv, index_col="id"),
             edges=pd.read_csv(layout.graph_csv),
             authors=authors_df,
             author_citations=author_citations_df,
@@ -100,8 +111,7 @@ class CitationGraph:
     def from_pipeline_result(cls, result: PipelineResult) -> CitationGraph:
         """Wrap the DataFrames returned by :meth:`Pipeline.run`."""
         return cls(
-            papers=result.papers,
-            references=result.references,
+            works=result.works,
             edges=result.graph,
             authors=result.authors,
             author_citations=result.author_citations,
@@ -111,51 +121,74 @@ class CitationGraph:
     # Counts
     # ------------------------------------------------------------------
     @property
-    def n_papers(self) -> int:
-        return len(self.papers)
+    def n_works(self) -> int:
+        return len(self.works)
 
     @property
-    def n_references(self) -> int:
-        return len(self.references)
+    def n_core_works(self) -> int:
+        return len(self.core)
 
     @property
     def n_edges(self) -> int:
         return len(self.edges)
 
     # ------------------------------------------------------------------
+    # Ring views
+    # ------------------------------------------------------------------
+    @property
+    def core(self) -> pd.DataFrame:
+        """The user's own papers: works at ring 0."""
+        if "ring" not in self.works.columns:
+            return self.works.iloc[0:0]
+        return self.works[self.works["ring"] == 0]
+
+    def ring(self, n: int) -> pd.DataFrame:
+        """Works at discovery depth ``n`` (0 = core)."""
+        if "ring" not in self.works.columns:
+            return self.works.iloc[0:0]
+        return self.works[self.works["ring"] == n]
+
+    def core_citations(self) -> pd.DataFrame:
+        """Edges where a core work cites another core work."""
+        ids = set(self.core.index)
+        return self.edges[
+            self.edges["citing_id"].isin(ids) & self.edges["cited_id"].isin(ids)
+        ].reset_index(drop=True)
+
+    # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
-    def cited_by(self, paper_id: str) -> pd.DataFrame:
-        """Return the references cited by a given source paper.
+    def cited_by(self, work_id: str) -> pd.DataFrame:
+        """Return the works cited by a given work.
 
-        ``paper_id`` is a ``p-…`` id from ``papers.csv``. Unknown ids return
-        an empty DataFrame rather than raising — calling code can branch on
-        ``len(...)``.
+        Unknown ids return an empty DataFrame rather than raising —
+        calling code can branch on ``len(...)``.
         """
-        cited_ids = self.edges.loc[self.edges["citing_id"] == paper_id, "cited_id"]
-        return self.references.loc[self.references.index.isin(cited_ids)]
+        cited_ids = self.edges.loc[self.edges["citing_id"] == work_id, "cited_id"]
+        return self.works.loc[self.works.index.isin(cited_ids)]
 
-    def citers_of(self, reference_id: str) -> pd.DataFrame:
-        """Return the source papers that cite a given reference."""
-        citing_ids = self.edges.loc[self.edges["cited_id"] == reference_id, "citing_id"]
-        return self.papers[self.papers["id"].isin(citing_ids)]
+    def citers_of(self, work_id: str) -> pd.DataFrame:
+        """Return the works that cite a given work."""
+        citing_ids = self.edges.loc[self.edges["cited_id"] == work_id, "citing_id"]
+        return self.works.loc[self.works.index.isin(citing_ids)]
 
     def top_cited(self, n: int = 20) -> pd.DataFrame:
-        """Return the ``n`` most-cited references in this corpus.
+        """Return the ``n`` most-cited works in this corpus.
 
-        The returned DataFrame is the references table filtered to the top
-        ``n`` rows and sorted by citation count (descending), with an extra
-        ``citation_count`` column. Counts the number of *distinct papers*
-        that cite each reference (the edge list is already deduplicated by
-        the pipeline, so each ``(citing_id, cited_id)`` pair is one vote).
+        The returned DataFrame is the works table filtered to the top
+        ``n`` rows and sorted by citation count (descending), with an
+        extra ``citation_count`` column. Counts the number of *distinct
+        citing works* (the edge list is already deduplicated by the
+        pipeline, so each ``(citing_id, cited_id)`` pair is one vote).
+        Core works cited within the corpus rank here too.
         """
         if self.edges.empty:
-            empty = self.references.iloc[0:0].copy()
+            empty = self.works.iloc[0:0].copy()
             empty["citation_count"] = pd.Series(dtype=int)
             return empty
         counts = self.edges.groupby("cited_id").size().sort_values(ascending=False)
         top_ids = counts.head(n).index
-        out = self.references.loc[self.references.index.isin(top_ids)].copy()
+        out = self.works.loc[self.works.index.isin(top_ids)].copy()
         out["citation_count"] = out.index.map(counts).astype(int)
         return out.sort_values("citation_count", ascending=False)
 
@@ -174,16 +207,42 @@ class CitationGraph:
                 "to produce authors.csv / author_citations.csv first."
             )
 
-    def top_cited_authors(self, n: int = 20) -> pd.DataFrame:
-        """Return the ``n`` authors with the most reference citations.
+    def top_authors(self, n: int = 20, ring: int | None = None) -> pd.DataFrame:
+        """Authors ranked by distinct works authored, optionally one ring only.
 
-        Counts each canonical author once per *reference appearance*
-        across the corpus — i.e. the number of cited works in which the
-        author's name appears. This is the metric users typically mean by
-        "most cited author".
+        ``ring=0`` answers "who are the most prominent authors of *my*
+        papers?". ``ring=None`` (default) spans the whole corpus. The
+        result carries an ``n_works_in_selection`` column with the count
+        that produced the ranking.
         """
         self._require_authors()
-        return self.authors.sort_values("n_reference_citations", ascending=False).head(n)
+        ac = self.author_citations
+        if ring is not None:
+            if "ring" not in self.works.columns:
+                ring_ids: set[str] = set()
+            else:
+                ring_ids = set(self.works.index[self.works["ring"] == ring])
+            ac = ac[ac["record_id"].isin(ring_ids)]
+        if ac.empty:
+            out = self.authors.iloc[0:0].copy()
+            out["n_works_in_selection"] = pd.Series(dtype=int)
+            return out
+        counts = ac.groupby("author_id")["record_id"].nunique().sort_values(ascending=False)
+        head = counts.head(n)
+        out = self.authors.loc[self.authors.index.isin(head.index)].copy()
+        out["n_works_in_selection"] = out.index.map(head).astype(int)
+        return out.sort_values("n_works_in_selection", ascending=False, kind="mergesort")
+
+    def top_cited_authors(self, n: int = 20) -> pd.DataFrame:
+        """Return the ``n`` authors receiving the most citations.
+
+        Ranked by ``n_citations_received`` — the number of citation
+        edges into any work the author appears on. This is the metric
+        users typically mean by "most cited author", and since core
+        works are citable it credits corpus-internal citations too.
+        """
+        self._require_authors()
+        return self.authors.sort_values("n_citations_received", ascending=False).head(n)
 
     def find_author(self, query: str) -> pd.DataFrame:
         """Return canonical authors whose surname or display name matches ``query``.
@@ -208,23 +267,23 @@ class CitationGraph:
         surnames = self.authors["surname_norm"].fillna("").map(_fold)
         names = self.authors["display_name"].fillna("").map(_fold)
         mask = surnames.str.contains(needle, regex=False) | names.str.contains(needle, regex=False)
-        return self.authors[mask].sort_values("n_reference_citations", ascending=False)
+        return self.authors[mask].sort_values("n_citations_received", ascending=False)
 
     def citations_of(self, author_id: str) -> pd.DataFrame:
-        """Return every reference in which ``author_id`` was cited.
+        """Return every cited work in which ``author_id`` appears.
 
-        Joins ``author_citations`` against ``references`` and includes
-        the citing-paper id so the caller can trace back to the source.
+        Joins ``author_citations`` against ``works`` and includes the
+        citing-work ids so the caller can trace back to the source.
         """
         context = self.citation_context_for_author(author_id)
         if context.empty:
-            out = self.references.iloc[0:0].copy()
+            out = self.works.iloc[0:0].copy()
             out["citing_paper_ids"] = pd.Series(dtype=object)
             out["n_citing_papers"] = pd.Series(dtype=int)
             return out
 
-        out = self.references.loc[
-            self.references.index.isin(context["cited_reference_id"])
+        out = self.works.loc[
+            self.works.index.isin(context["cited_reference_id"])
         ].copy()
         citing_ids = context.groupby("cited_reference_id")["citing_paper_id"].agg(
             lambda s: sorted(set(s))
@@ -234,18 +293,20 @@ class CitationGraph:
         return out
 
     def papers_citing_author(self, author_id: str) -> pd.DataFrame:
-        """Return source papers that cite at least one reference by ``author_id``."""
+        """Return works that cite at least one work by ``author_id``."""
         context = self.citation_context_for_author(author_id)
         citing_ids = set(context["citing_paper_id"].dropna().unique())
-        return self.papers[self.papers["id"].isin(citing_ids)]
+        return self.works.loc[self.works.index.isin(citing_ids)]
 
     def citation_context_for_author(self, author_id: str) -> pd.DataFrame:
-        """Return source-paper context for every citation of works by ``author_id``.
+        """Return citing-work context for every citation of works by ``author_id``.
 
-        The result is one row per ``source paper -> cited reference`` edge where
-        the cited reference has ``author_id`` among its canonical authors. This
+        The result is one row per ``citing work -> cited work`` edge where
+        the cited work has ``author_id`` among its canonical authors. This
         is the audit table behind claims like "100 papers cited Juan Camilo
-        Cardenas"; source-paper journal fields come from ``papers.csv``.
+        Cardenas"; citing-side journal fields come from ``works.csv``.
+        Cited core works count too — corpus-internal citations of an
+        author are part of their context.
         """
         self._require_authors()
         columns = [
@@ -263,10 +324,7 @@ class CitationGraph:
             "cited_reference_year",
         ]
         ac = self.author_citations
-        author_refs = ac[
-            (ac["author_id"] == author_id)
-            & (ac["record_kind"] == "reference")
-        ].copy()
+        author_refs = ac[ac["author_id"] == author_id].copy()
         if author_refs.empty or self.edges.empty:
             return pd.DataFrame(columns=columns)
 
@@ -282,22 +340,23 @@ class CitationGraph:
         if context.empty:
             return pd.DataFrame(columns=columns)
 
-        papers = self.papers.rename(
+        citing_side = self.works.reset_index()
+        citing_side = citing_side.rename(
             columns={
-                "id": "citing_paper_id",
+                citing_side.columns[0]: "citing_paper_id",
                 "Title": "source_paper_title",
                 "Journal": "source_paper_journal",
                 "Year": "source_paper_year",
             }
         )
         for col in ("source_paper_title", "source_paper_journal", "source_paper_year"):
-            if col not in papers.columns:
-                papers[col] = pd.NA
+            if col not in citing_side.columns:
+                citing_side[col] = pd.NA
 
-        references = self.references.reset_index()
-        references = references.rename(
+        cited_side = self.works.reset_index()
+        cited_side = cited_side.rename(
             columns={
-                references.columns[0]: "cited_reference_id",
+                cited_side.columns[0]: "cited_reference_id",
                 "Title": "cited_reference_title",
                 "Journal": "cited_reference_journal",
                 "Year": "cited_reference_year",
@@ -308,8 +367,8 @@ class CitationGraph:
             "cited_reference_journal",
             "cited_reference_year",
         ):
-            if col not in references.columns:
-                references[col] = pd.NA
+            if col not in cited_side.columns:
+                cited_side[col] = pd.NA
 
         author_display = (
             self.authors.loc[author_id, "display_name"]
@@ -318,7 +377,7 @@ class CitationGraph:
         )
         context["author_display_name"] = author_display
         context = context.merge(
-            papers[
+            citing_side[
                 [
                     "citing_paper_id",
                     "source_paper_title",
@@ -329,7 +388,7 @@ class CitationGraph:
             on="citing_paper_id",
             how="left",
         ).merge(
-            references[
+            cited_side[
                 [
                     "cited_reference_id",
                     "cited_reference_title",
@@ -345,11 +404,11 @@ class CitationGraph:
         ).reset_index(drop=True)
 
     def citing_papers_by_author(self, author_id: str) -> pd.DataFrame:
-        """Return distinct source papers that cite at least one work by ``author_id``.
+        """Return distinct works that cite at least one work by ``author_id``.
 
-        One source paper can cite several references by the same author; it
+        One citing work can cite several works by the same author; it
         still appears once here, with ``n_cited_references_by_author`` and the
-        cited reference ids/titles preserving the evidence.
+        cited work ids/titles preserving the evidence.
         """
         context = self.citation_context_for_author(author_id)
         columns = [
@@ -398,7 +457,7 @@ class CitationGraph:
         ).reset_index(drop=True)
 
     def source_journals_citing_author(self, author_id: str) -> pd.DataFrame:
-        """Count source-paper journals among papers that cite ``author_id``."""
+        """Count citing-work journals among works that cite ``author_id``."""
         papers = self.citing_papers_by_author(author_id)
         columns = ["source_paper_journal", "n_papers", "share_of_papers"]
         if papers.empty:
@@ -424,11 +483,11 @@ class CitationGraph:
     # Export
     # ------------------------------------------------------------------
     def to_networkx(self) -> nx.DiGraph:
-        """Return a ``networkx.DiGraph``: nodes are papers + references, edges go citing → cited.
+        """Return a ``networkx.DiGraph``: nodes are works, edges go citing → cited.
 
-        Requires ``networkx`` (not a default dependency). Each node gets a
-        ``kind`` attribute (``"paper"`` or ``"reference"``) plus the row's
-        metadata as additional attributes.
+        Requires ``networkx`` (not a default dependency). Each node
+        carries the work's row metadata as attributes — including
+        ``ring`` and ``source_file`` where present.
         """
         try:
             import networkx as nx
@@ -438,14 +497,9 @@ class CitationGraph:
             ) from exc
 
         g: nx.DiGraph = nx.DiGraph()
-        for _, row in self.papers.iterrows():
-            attrs: dict[str, Any] = {k: v for k, v in row.items() if k != "id"}
-            attrs["kind"] = "paper"
-            g.add_node(row["id"], **attrs)
-        for ref_id, row in self.references.iterrows():
-            attrs = dict(row.items())
-            attrs["kind"] = "reference"
-            g.add_node(ref_id, **attrs)
+        for work_id, row in self.works.iterrows():
+            attrs: dict[str, Any] = dict(row.items())
+            g.add_node(work_id, **attrs)
         for _, edge in self.edges.iterrows():
             g.add_edge(edge["citing_id"], edge["cited_id"])
         return g
@@ -456,6 +510,6 @@ class CitationGraph:
     def __repr__(self) -> str:
         author_suffix = f", {len(self.authors)} authors" if self.has_authors else ""
         return (
-            f"<CitationGraph: {self.n_papers} papers, "
-            f"{self.n_references} references, {self.n_edges} edges{author_suffix}>"
+            f"<CitationGraph: {self.n_core_works} core works, "
+            f"{self.n_works} works, {self.n_edges} edges{author_suffix}>"
         )

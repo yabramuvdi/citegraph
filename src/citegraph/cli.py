@@ -239,9 +239,14 @@ def run(
         typer.echo()
 
     result = pipeline.run()  # convert_pdfs() is idempotent — cached files are skipped
+    n_core = (
+        int((result.works["ring"] == 0).sum())
+        if "ring" in result.works.columns
+        else 0
+    )
     typer.echo(
-        f"Done. {len(result.papers)} papers, "
-        f"{len(result.references)} unique references, "
+        f"Done. {n_core} core works, "
+        f"{len(result.works)} works total, "
         f"{len(result.graph)} citation edges."
     )
     layout = pipeline.layout

@@ -13,100 +13,141 @@ from citegraph.schemas import PipelineResult
 
 @pytest.fixture()
 def small_graph() -> CitationGraph:
-    """A toy 3-papers / 4-references / 7-edges graph.
+    """A toy 3-core-works / 4-stubs / 7-edges graph.
 
-    Citation pattern (papers cite references):
-      p-a -> r-x, r-y, r-z
-      p-b -> r-x, r-y
-      p-c -> r-x, r-w
-    So r-x is most cited (3), r-y second (2), r-z and r-w tied (1).
+    Citation pattern (core works cite stubs):
+      w-a -> w-x, w-y, w-z
+      w-b -> w-x, w-y
+      w-c -> w-x, w-w
+    So w-x is most cited (3), w-y second (2), w-z and w-w tied (1).
     """
-    papers = pd.DataFrame(
+    works = pd.DataFrame(
         [
-            {"id": "p-a", "Title": "Paper A", "Year": 2020},
-            {"id": "p-b", "Title": "Paper B", "Year": 2021},
-            {"id": "p-c", "Title": "Paper C", "Year": 2022},
-        ]
-    )
-    references = pd.DataFrame(
-        [
-            {"id": "r-x", "Title": "Ref X", "Year": 1990},
-            {"id": "r-y", "Title": "Ref Y", "Year": 1995},
-            {"id": "r-z", "Title": "Ref Z", "Year": 2000},
-            {"id": "r-w", "Title": "Ref W", "Year": 2005},
+            {"id": "w-a", "ring": 0, "source_file": "a.pdf", "Title": "Paper A", "Year": 2020},
+            {"id": "w-b", "ring": 0, "source_file": "b.pdf", "Title": "Paper B", "Year": 2021},
+            {"id": "w-c", "ring": 0, "source_file": "c.pdf", "Title": "Paper C", "Year": 2022},
+            {"id": "w-x", "ring": 1, "source_file": "", "Title": "Ref X", "Year": 1990},
+            {"id": "w-y", "ring": 1, "source_file": "", "Title": "Ref Y", "Year": 1995},
+            {"id": "w-z", "ring": 1, "source_file": "", "Title": "Ref Z", "Year": 2000},
+            {"id": "w-w", "ring": 1, "source_file": "", "Title": "Ref W", "Year": 2005},
         ]
     ).set_index("id")
     edges = pd.DataFrame(
         [
-            {"citing_id": "p-a", "cited_id": "r-x"},
-            {"citing_id": "p-a", "cited_id": "r-y"},
-            {"citing_id": "p-a", "cited_id": "r-z"},
-            {"citing_id": "p-b", "cited_id": "r-x"},
-            {"citing_id": "p-b", "cited_id": "r-y"},
-            {"citing_id": "p-c", "cited_id": "r-x"},
-            {"citing_id": "p-c", "cited_id": "r-w"},
+            {"citing_id": "w-a", "cited_id": "w-x"},
+            {"citing_id": "w-a", "cited_id": "w-y"},
+            {"citing_id": "w-a", "cited_id": "w-z"},
+            {"citing_id": "w-b", "cited_id": "w-x"},
+            {"citing_id": "w-b", "cited_id": "w-y"},
+            {"citing_id": "w-c", "cited_id": "w-x"},
+            {"citing_id": "w-c", "cited_id": "w-w"},
         ]
     )
-    return CitationGraph(papers=papers, references=references, edges=edges)
+    return CitationGraph(works=works, edges=edges)
 
 
 # ---------------------------------------------------------------------------
 # Counts and repr
 # ---------------------------------------------------------------------------
 def test_counts(small_graph: CitationGraph) -> None:
-    assert small_graph.n_papers == 3
-    assert small_graph.n_references == 4
+    assert small_graph.n_works == 7
+    assert small_graph.n_core_works == 3
     assert small_graph.n_edges == 7
 
 
 def test_repr_summarises_shape(small_graph: CitationGraph) -> None:
     r = repr(small_graph)
-    assert "3 papers" in r
-    assert "4 references" in r
+    assert "3 core works" in r
+    assert "7 works" in r
     assert "7 edges" in r
+
+
+# ---------------------------------------------------------------------------
+# Ring views
+# ---------------------------------------------------------------------------
+def test_core_and_ring_views(small_graph: CitationGraph) -> None:
+    assert set(small_graph.core.index) == {"w-a", "w-b", "w-c"}
+    assert set(small_graph.ring(1).index) == {"w-x", "w-y", "w-z", "w-w"}
+    assert len(small_graph.ring(2)) == 0
+
+
+def test_core_citations_returns_core_to_core_edges_only(small_graph: CitationGraph) -> None:
+    # No core work cites another core work in this fixture.
+    assert small_graph.core_citations().empty
+
+    # Add one core->core edge and it shows up alone.
+    edges = pd.concat(
+        [small_graph.edges, pd.DataFrame([{"citing_id": "w-a", "cited_id": "w-b"}])],
+        ignore_index=True,
+    )
+    g = CitationGraph(works=small_graph.works, edges=edges)
+    cc = g.core_citations()
+    assert list(cc.itertuples(index=False)) == [("w-a", "w-b")]
 
 
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
-def test_cited_by_returns_correct_references(small_graph: CitationGraph) -> None:
-    refs = small_graph.cited_by("p-a")
-    assert set(refs.index) == {"r-x", "r-y", "r-z"}
+def test_cited_by_returns_correct_works(small_graph: CitationGraph) -> None:
+    refs = small_graph.cited_by("w-a")
+    assert set(refs.index) == {"w-x", "w-y", "w-z"}
 
 
-def test_cited_by_unknown_paper_returns_empty(small_graph: CitationGraph) -> None:
-    refs = small_graph.cited_by("p-does-not-exist")
+def test_cited_by_unknown_work_returns_empty(small_graph: CitationGraph) -> None:
+    refs = small_graph.cited_by("w-does-not-exist")
     assert len(refs) == 0
-    # Same column shape as the references table — safe to chain.
-    assert list(refs.columns) == list(small_graph.references.columns)
+    # Same column shape as the works table — safe to chain.
+    assert list(refs.columns) == list(small_graph.works.columns)
 
 
-def test_citers_of_returns_correct_papers(small_graph: CitationGraph) -> None:
-    papers = small_graph.citers_of("r-x")
-    assert set(papers["id"]) == {"p-a", "p-b", "p-c"}
+def test_citers_of_returns_correct_works(small_graph: CitationGraph) -> None:
+    citers = small_graph.citers_of("w-x")
+    assert set(citers.index) == {"w-a", "w-b", "w-c"}
 
 
-def test_citers_of_unknown_reference_returns_empty(small_graph: CitationGraph) -> None:
-    assert len(small_graph.citers_of("r-does-not-exist")) == 0
+def test_citers_of_unknown_work_returns_empty(small_graph: CitationGraph) -> None:
+    assert len(small_graph.citers_of("w-does-not-exist")) == 0
 
 
 def test_top_cited_orders_by_count(small_graph: CitationGraph) -> None:
     top = small_graph.top_cited(n=3)
-    assert list(top.index)[:1] == ["r-x"]  # 3 citations
-    assert top.loc["r-x", "citation_count"] == 3
-    assert top.loc["r-y", "citation_count"] == 2
+    assert list(top.index)[:1] == ["w-x"]  # 3 citations
+    assert top.loc["w-x", "citation_count"] == 3
+    assert top.loc["w-y", "citation_count"] == 2
     assert len(top) == 3
+
+
+def test_top_cited_includes_core_works() -> None:
+    works = pd.DataFrame(
+        [
+            {"id": "w-a", "ring": 0, "source_file": "a.pdf", "Title": "A", "Year": 2020},
+            {"id": "w-b", "ring": 0, "source_file": "b.pdf", "Title": "B", "Year": 2021},
+            {"id": "w-c", "ring": 1, "source_file": "", "Title": "C", "Year": 1990},
+        ]
+    ).set_index("id")
+    edges = pd.DataFrame(
+        [
+            {"citing_id": "w-a", "cited_id": "w-c"},
+            {"citing_id": "w-b", "cited_id": "w-c"},
+            {"citing_id": "w-a", "cited_id": "w-b"},  # core paper cited in-corpus
+        ]
+    )
+    g = CitationGraph(works=works, edges=edges)
+    top = g.top_cited(5)
+    assert "w-b" in top.index
+    assert top.loc["w-c", "citation_count"] == 2
+    assert top.loc["w-b", "citation_count"] == 1
 
 
 def test_top_cited_with_n_larger_than_corpus(small_graph: CitationGraph) -> None:
     top = small_graph.top_cited(n=100)
-    assert len(top) == small_graph.n_references
+    # Only works with at least one citation appear.
+    assert set(top.index) == {"w-x", "w-y", "w-z", "w-w"}
 
 
 def test_top_cited_on_empty_edges_returns_empty() -> None:
     g = CitationGraph(
-        papers=pd.DataFrame(columns=["id", "Title"]),
-        references=pd.DataFrame(columns=["Title"]).rename_axis("id"),
+        works=pd.DataFrame(columns=["ring", "source_file", "Title"]).rename_axis("id"),
         edges=pd.DataFrame(columns=["citing_id", "cited_id"]),
     )
     top = g.top_cited(n=10)
@@ -119,21 +160,20 @@ def test_top_cited_on_empty_edges_returns_empty() -> None:
 # ---------------------------------------------------------------------------
 def test_from_pipeline_result_round_trip(small_graph: CitationGraph) -> None:
     result = PipelineResult(
-        papers=small_graph.papers,
-        references=small_graph.references,
+        works=small_graph.works,
         graph=small_graph.edges,
     )
     g = CitationGraph.from_pipeline_result(result)
-    assert g.n_papers == small_graph.n_papers
+    assert g.n_works == small_graph.n_works
+    assert g.n_core_works == small_graph.n_core_works
     assert g.n_edges == small_graph.n_edges
-    assert g.top_cited(n=1).index.tolist() == ["r-x"]
+    assert g.top_cited(n=1).index.tolist() == ["w-x"]
 
 
 def test_from_pipeline_result_carries_author_tables() -> None:
     source = _graph_with_authors()
     result = PipelineResult(
-        papers=source.papers,
-        references=source.references,
+        works=source.works,
         graph=source.edges,
         authors=source.authors,
         author_citations=source.author_citations,
@@ -148,16 +188,15 @@ def test_from_pipeline_result_carries_author_tables() -> None:
 def test_from_out_dir_loads_csvs(tmp_path: Path, small_graph: CitationGraph) -> None:
     out = tmp_path / "out"
     out.mkdir()
-    small_graph.papers.to_csv(out / "papers.csv", index=False)
-    small_graph.references.to_csv(out / "references.csv")  # writes id as index column
+    small_graph.works.to_csv(out / "works.csv")  # writes id as index column
     small_graph.edges.to_csv(out / "citation_graph.csv", index=False)
 
     g = CitationGraph.from_out_dir(out)
-    assert g.n_papers == 3
-    assert g.n_references == 4
+    assert g.n_works == 7
+    assert g.n_core_works == 3
     assert g.n_edges == 7
     # Round-trip top_cited produces the same ranking.
-    assert g.top_cited(n=1).index.tolist() == ["r-x"]
+    assert g.top_cited(n=1).index.tolist() == ["w-x"]
 
 
 def test_from_out_dir_missing_files_raises(tmp_path: Path) -> None:
@@ -165,32 +204,40 @@ def test_from_out_dir_missing_files_raises(tmp_path: Path) -> None:
         CitationGraph.from_out_dir(tmp_path)
 
 
+def test_from_out_dir_legacy_layout_raises_with_migration_hint(tmp_path: Path) -> None:
+    pd.DataFrame({"id": ["p-x"]}).to_csv(tmp_path / "papers.csv", index=False)
+    with pytest.raises(FileNotFoundError, match="legacy"):
+        CitationGraph.from_out_dir(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Author queries
 # ---------------------------------------------------------------------------
 def _graph_with_authors() -> CitationGraph:
-    """Toy graph with two canonical authors and three reference citations."""
-    papers = pd.DataFrame(
+    """Toy graph with two canonical authors across core works and stubs."""
+    works = pd.DataFrame(
         [
-            {"id": "p-a", "Title": "Paper A", "Journal": "Ecological Economics", "Year": 2020},
-            {"id": "p-b", "Title": "Paper B", "Journal": "Ecological Economics", "Year": 2021},
-            {"id": "p-c", "Title": "Paper C", "Journal": "World Development", "Year": 2022},
-        ]
-    )
-    references = pd.DataFrame(
-        [
-            {"id": "r-1", "Title": "Ref 1", "Journal": "World Development", "Year": 1990},
-            {"id": "r-2", "Title": "Ref 2", "Journal": "Ecological Economics", "Year": 1995},
-            {"id": "r-3", "Title": "Ref 3", "Journal": "Child Development", "Year": 2000},
+            {"id": "w-a", "ring": 0, "source_file": "a.pdf",
+             "Title": "Paper A", "Journal": "Ecological Economics", "Year": 2020},
+            {"id": "w-b", "ring": 0, "source_file": "b.pdf",
+             "Title": "Paper B", "Journal": "Ecological Economics", "Year": 2021},
+            {"id": "w-c", "ring": 0, "source_file": "c.pdf",
+             "Title": "Paper C", "Journal": "World Development", "Year": 2022},
+            {"id": "w-1", "ring": 1, "source_file": "",
+             "Title": "Ref 1", "Journal": "World Development", "Year": 1990},
+            {"id": "w-2", "ring": 1, "source_file": "",
+             "Title": "Ref 2", "Journal": "Ecological Economics", "Year": 1995},
+            {"id": "w-3", "ring": 1, "source_file": "",
+             "Title": "Ref 3", "Journal": "Child Development", "Year": 2000},
         ]
     ).set_index("id")
     edges = pd.DataFrame(
         [
-            {"citing_id": "p-a", "cited_id": "r-1"},
-            {"citing_id": "p-a", "cited_id": "r-2"},
-            {"citing_id": "p-b", "cited_id": "r-1"},
-            {"citing_id": "p-c", "cited_id": "r-1"},
-            {"citing_id": "p-c", "cited_id": "r-3"},
+            {"citing_id": "w-a", "cited_id": "w-1"},
+            {"citing_id": "w-a", "cited_id": "w-2"},
+            {"citing_id": "w-b", "cited_id": "w-1"},
+            {"citing_id": "w-c", "cited_id": "w-1"},
+            {"citing_id": "w-c", "cited_id": "w-3"},
         ]
     )
     authors = pd.DataFrame(
@@ -204,9 +251,10 @@ def _graph_with_authors() -> CitationGraph:
                 "initials": "JC",
                 "openalex_id": None,
                 "orcid": None,
-                "n_occurrences": 2,
-                "n_reference_citations": 2,
-                "n_distinct_papers_citing": 1,
+                "n_works": 3,
+                "n_core_works": 1,
+                "n_citations_received": 4,
+                "n_distinct_citing_works": 3,
             },
             {
                 "id": "a-diamond-adele",
@@ -217,27 +265,28 @@ def _graph_with_authors() -> CitationGraph:
                 "initials": "A",
                 "openalex_id": None,
                 "orcid": None,
-                "n_occurrences": 1,
-                "n_reference_citations": 1,
-                "n_distinct_papers_citing": 1,
+                "n_works": 1,
+                "n_core_works": 0,
+                "n_citations_received": 1,
+                "n_distinct_citing_works": 1,
             },
         ]
     ).set_index("id")
     citations = pd.DataFrame(
         [
-            {"author_id": "a-cardenas-juan-camilo", "record_kind": "reference",
-             "record_id": "r-1", "position": 0, "citing_paper_id": "",
-             "raw_author": "Cárdenas, J.-C."},
-            {"author_id": "a-cardenas-juan-camilo", "record_kind": "reference",
-             "record_id": "r-2", "position": 0, "citing_paper_id": "",
-             "raw_author": "Cárdenas, Juan-Camilo"},
-            {"author_id": "a-diamond-adele", "record_kind": "reference",
-             "record_id": "r-3", "position": 0, "citing_paper_id": "",
-             "raw_author": "Diamond, Adele"},
+            # Cárdenas authored core work w-a and is cited via w-1 and w-2.
+            {"author_id": "a-cardenas-juan-camilo",
+             "record_id": "w-a", "position": 0, "raw_author": "Cárdenas, Juan-Camilo"},
+            {"author_id": "a-cardenas-juan-camilo",
+             "record_id": "w-1", "position": 0, "raw_author": "Cárdenas, J.-C."},
+            {"author_id": "a-cardenas-juan-camilo",
+             "record_id": "w-2", "position": 0, "raw_author": "Cárdenas, Juan-Camilo"},
+            {"author_id": "a-diamond-adele",
+             "record_id": "w-3", "position": 0, "raw_author": "Diamond, Adele"},
         ]
     )
     return CitationGraph(
-        papers=papers, references=references, edges=edges,
+        works=works, edges=edges,
         authors=authors, author_citations=citations,
     )
 
@@ -247,11 +296,29 @@ def test_has_authors_flag() -> None:
     assert g_with.has_authors is True
 
 
-def test_top_cited_authors_orders_by_count() -> None:
+def test_top_cited_authors_orders_by_citations_received() -> None:
     g = _graph_with_authors()
     top = g.top_cited_authors(n=10)
     assert list(top.index)[0] == "a-cardenas-juan-camilo"
-    assert int(top.iloc[0]["n_reference_citations"]) == 2
+    assert int(top.iloc[0]["n_citations_received"]) == 4
+
+
+def test_top_authors_ranks_by_works_and_filters_by_ring() -> None:
+    g = _graph_with_authors()
+
+    top_all = g.top_authors(n=10)
+    assert list(top_all.index)[0] == "a-cardenas-juan-camilo"
+    assert int(top_all.iloc[0]["n_works_in_selection"]) == 3
+
+    top_core = g.top_authors(n=10, ring=0)
+    # Only Cárdenas authored a core work (w-a).
+    assert list(top_core.index) == ["a-cardenas-juan-camilo"]
+    assert int(top_core.iloc[0]["n_works_in_selection"]) == 1
+
+
+def test_top_authors_raises_without_author_tables(small_graph: CitationGraph) -> None:
+    with pytest.raises(RuntimeError, match="Author tables"):
+        small_graph.top_authors(ring=0)
 
 
 def test_find_author_diacritic_insensitive() -> None:
@@ -264,49 +331,49 @@ def test_find_author_diacritic_insensitive() -> None:
     assert list(hits_partial.index) == ["a-cardenas-juan-camilo"]
 
 
-def test_citations_of_returns_referenced_works() -> None:
+def test_citations_of_returns_cited_works() -> None:
     g = _graph_with_authors()
     refs = g.citations_of("a-cardenas-juan-camilo")
-    assert set(refs.index) == {"r-1", "r-2"}
-    assert refs.loc["r-1", "citing_paper_ids"] == ["p-a", "p-b", "p-c"]
-    assert refs.loc["r-2", "citing_paper_ids"] == ["p-a"]
+    assert set(refs.index) == {"w-1", "w-2"}
+    assert refs.loc["w-1", "citing_paper_ids"] == ["w-a", "w-b", "w-c"]
+    assert refs.loc["w-2", "citing_paper_ids"] == ["w-a"]
 
 
-def test_papers_citing_author_returns_source_papers() -> None:
+def test_papers_citing_author_returns_citing_works() -> None:
     g = _graph_with_authors()
     papers = g.papers_citing_author("a-diamond-adele")
-    assert set(papers["id"]) == {"p-c"}
+    assert set(papers.index) == {"w-c"}
 
 
-def test_citation_context_for_author_joins_source_papers_to_cited_references() -> None:
+def test_citation_context_for_author_joins_citing_works_to_cited_works() -> None:
     g = _graph_with_authors()
 
     context = g.citation_context_for_author("a-cardenas-juan-camilo")
 
     assert len(context) == 4
-    assert set(context["citing_paper_id"]) == {"p-a", "p-b", "p-c"}
-    assert set(context["cited_reference_id"]) == {"r-1", "r-2"}
+    assert set(context["citing_paper_id"]) == {"w-a", "w-b", "w-c"}
+    assert set(context["cited_reference_id"]) == {"w-1", "w-2"}
     row = context[
-        (context["citing_paper_id"] == "p-a")
-        & (context["cited_reference_id"] == "r-2")
+        (context["citing_paper_id"] == "w-a")
+        & (context["cited_reference_id"] == "w-2")
     ].iloc[0]
     assert row["source_paper_journal"] == "Ecological Economics"
     assert row["cited_reference_title"] == "Ref 2"
     assert row["raw_author"] == "Cárdenas, Juan-Camilo"
 
 
-def test_citing_papers_by_author_counts_distinct_source_papers() -> None:
+def test_citing_papers_by_author_counts_distinct_citing_works() -> None:
     g = _graph_with_authors()
 
     papers = g.citing_papers_by_author("a-cardenas-juan-camilo")
 
-    assert list(papers["paper_id"]) == ["p-a", "p-b", "p-c"]
-    assert papers.loc[papers["paper_id"] == "p-a", "n_cited_references_by_author"].iloc[0] == 2
-    assert papers.loc[papers["paper_id"] == "p-a", "cited_reference_ids"].iloc[0] == ["r-1", "r-2"]
-    assert papers.loc[papers["paper_id"] == "p-b", "n_cited_references_by_author"].iloc[0] == 1
+    assert list(papers["paper_id"]) == ["w-a", "w-b", "w-c"]
+    assert papers.loc[papers["paper_id"] == "w-a", "n_cited_references_by_author"].iloc[0] == 2
+    assert papers.loc[papers["paper_id"] == "w-a", "cited_reference_ids"].iloc[0] == ["w-1", "w-2"]
+    assert papers.loc[papers["paper_id"] == "w-b", "n_cited_references_by_author"].iloc[0] == 1
 
 
-def test_source_journals_citing_author_counts_source_paper_journals() -> None:
+def test_source_journals_citing_author_counts_citing_work_journals() -> None:
     g = _graph_with_authors()
 
     journals = g.source_journals_citing_author("a-cardenas-juan-camilo")
@@ -328,11 +395,12 @@ def test_to_networkx_builds_directed_graph(small_graph: CitationGraph) -> None:
     nx = pytest.importorskip("networkx")
     g = small_graph.to_networkx()
     assert isinstance(g, nx.DiGraph)
-    assert g.number_of_nodes() == small_graph.n_papers + small_graph.n_references
+    assert g.number_of_nodes() == small_graph.n_works
     assert g.number_of_edges() == small_graph.n_edges
-    # Node attributes preserve the kind tag.
-    assert g.nodes["p-a"]["kind"] == "paper"
-    assert g.nodes["r-x"]["kind"] == "reference"
+    # Node attributes carry the works-model facts.
+    assert g.nodes["w-a"]["ring"] == 0
+    assert g.nodes["w-x"]["ring"] == 1
+    assert g.nodes["w-a"]["source_file"] == "a.pdf"
     # Edge direction: citing -> cited.
-    assert g.has_edge("p-a", "r-x")
-    assert not g.has_edge("r-x", "p-a")
+    assert g.has_edge("w-a", "w-x")
+    assert not g.has_edge("w-x", "w-a")

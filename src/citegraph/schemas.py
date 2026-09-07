@@ -75,15 +75,15 @@ class CitationLink(BaseModel):
 class PipelineResult:
     """Container returned by :meth:`citegraph.Pipeline.run`.
 
-    Three pandas DataFrames mirror the on-disk CSVs:
+    Pandas DataFrames mirroring the on-disk CSVs:
 
-    - ``papers``     : one row per source paper, with ``id`` as a column.
-    - ``references`` : one row per *deduplicated* reference, indexed by ``id``.
-    - ``graph``      : edges ``(citing_id, cited_id)``.
+    - ``works`` : one row per canonical work, indexed by ``id``; the
+      ``ring`` column marks provenance (0 = the user's core PDFs) and
+      ``source_file`` is non-empty for processed PDFs.
+    - ``graph`` : edges ``(citing_id, cited_id)`` between works.
     """
 
-    papers: pd.DataFrame
-    references: pd.DataFrame
+    works: pd.DataFrame
     graph: pd.DataFrame
     authors: pd.DataFrame | None = None
     author_citations: pd.DataFrame | None = None

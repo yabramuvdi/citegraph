@@ -6,7 +6,7 @@ See :class:`citegraph.Pipeline` for the high-level entry point::
 
     pipe = Pipeline(pdf_dir="./pdfs", out_dir="./out")
     result = pipe.run()
-    result.papers, result.references, result.graph
+    result.works, result.graph
 """
 
 from __future__ import annotations

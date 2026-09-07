@@ -565,19 +565,29 @@ class Pipeline:
     # ------------------------------------------------------------------
     def run(self) -> PipelineResult:
         markdown_paths = self.convert_pdfs()
-        papers = self.extract_paper_metadata(markdown_paths)
-        raw_refs = self.extract_paper_references(markdown_paths, papers)
-        references, graph = self.deduplicate(papers, raw_refs)
-        references = self.maybe_enrich(references)
-        authors_df, citations_df = self.normalize_authors(
-            works=references, graph=graph
-        )
+        sources = self.extract_paper_metadata(markdown_paths)
+        citations_raw = self.extract_paper_references(markdown_paths, sources)
+        works, graph = self.deduplicate(sources, citations_raw)
+        works = self.maybe_enrich(works)
+        authors_df, citations_df = self.normalize_authors(works=works, graph=graph)
 
+        ring0 = (
+            set(works.index[works["ring"] == 0])
+            if "ring" in works.columns
+            else set()
+        )
+        n_core_to_core = int(
+            (graph["citing_id"].isin(ring0) & graph["cited_id"].isin(ring0)).sum()
+        )
         run_summary = {
-            "n_papers": int(len(papers)),
-            "n_references_raw": int(len(raw_refs)),
-            "n_references_dedup": int(len(references)),
+            "n_works": int(len(works)),
+            "n_core_works": int(len(ring0)),
+            "n_citations_raw": int(len(citations_raw)),
             "n_edges": int(len(graph)),
+            "n_core_to_core_edges": n_core_to_core,
+            "n_self_loops_dropped": int(
+                self._canonicalize_stats.get("n_self_loops_dropped", 0)
+            ),
             "n_authors": int(len(authors_df)),
             "n_author_citations": int(len(citations_df)),
             "n_author_review_flags": count_author_review(self.layout.author_review_json),
@@ -597,9 +607,9 @@ class Pipeline:
             self.layout,
             stage="run",
             artifacts={
-                "papers": self.layout.papers_csv,
-                "references_raw": self.layout.references_raw_csv,
-                "references": self.layout.references_csv,
+                "sources": self.layout.sources_csv,
+                "citations_raw": self.layout.citations_raw_csv,
+                "works": self.layout.works_csv,
                 "citation_graph": self.layout.graph_csv,
                 "authors": self.layout.authors_csv,
                 "author_citations": self.layout.author_citations_csv,
@@ -613,8 +623,7 @@ class Pipeline:
             },
         )
         return PipelineResult(
-            papers=papers,
-            references=references,
+            works=works,
             graph=graph,
             authors=authors_df,
             author_citations=citations_df,

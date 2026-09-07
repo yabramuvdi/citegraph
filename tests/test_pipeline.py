@@ -132,6 +132,32 @@ def test_pipeline_run_returns_author_tables_and_manifest(
     assert data["schema_version"] == 1
     assert data["package_version"] == "0.1.0"
     assert "run_summary" in data["artifacts"]
+    assert "works" in data["artifacts"]
+
+
+def test_run_summary_reports_works_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    shutil.copy(FIXTURES / "sample_paper.md", md_dir / "sample_paper.md")
+
+    pipeline = Pipeline(
+        pdf_dir=tmp_path / "pdfs",
+        out_dir=tmp_path / "out",
+        client=_FakeClient(),
+        show_progress=False,
+    )
+    monkeypatch.setattr(pipeline, "convert_pdfs", lambda: [md_dir / "sample_paper.md"])
+
+    result = pipeline.run()
+
+    summary = json.loads((tmp_path / "out" / "run_summary.json").read_text())
+    assert summary["n_works"] == len(result.works)
+    assert summary["n_core_works"] == int((result.works["ring"] == 0).sum())
+    assert "n_core_to_core_edges" in summary
+    assert "n_self_loops_dropped" in summary
+    assert not hasattr(result, "papers")
 
 
 def test_metadata_stage_writes_sources_csv_with_work_ids(tmp_path: Path) -> None:
