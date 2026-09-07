@@ -35,10 +35,10 @@ def _write_corpus(out: Path) -> None:
             ),
             encoding="utf-8",
         )
-    (out / "papers.csv").write_text(
+    (out / "sources.csv").write_text(
         "id,Title,Authors,Journal,Year,source_file\n"
-        "p-one-2020-alpha,Alpha Paper,Some One,J,2020,alpha.md\n"
-        "p-one-2020-beta,Beta Paper,Some One,J,2020,beta.md\n",
+        "w-one-2020-alpha,Alpha Paper,Some One,J,2020,alpha.md\n"
+        "w-one-2020-beta,Beta Paper,Some One,J,2020,beta.md\n",
         encoding="utf-8",
     )
 
@@ -97,7 +97,7 @@ def test_api_data_reflects_corpus(served_corpus) -> None:
     assert recent, "recent_files must list the corpus files"
     assert {"path", "size", "mtime"} <= set(recent[0])
     paths = {f["path"] for f in recent}
-    assert "papers.csv" in paths
+    assert "sources.csv" in paths
     # Newest-first ordering.
     mtimes = [f["mtime"] for f in recent]
     assert mtimes == sorted(mtimes, reverse=True)

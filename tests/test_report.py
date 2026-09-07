@@ -38,10 +38,10 @@ def _write_partial_corpus(out: Path) -> None:
             ),
             encoding="utf-8",
         )
-    (out / "papers.csv").write_text(
+    (out / "sources.csv").write_text(
         "id,Title,Authors,Journal,Year,source_file\n"
-        "p-one-2020-alpha,Alpha Paper,Some One,J,2020,alpha.md\n"
-        "p-one-2020-beta,Beta Paper,Some One,J,2020,beta.md\n",
+        "w-one-2020-alpha,Alpha Paper,Some One,J,2020,alpha.md\n"
+        "w-one-2020-beta,Beta Paper,Some One,J,2020,beta.md\n",
         encoding="utf-8",
     )
 
@@ -90,24 +90,27 @@ def _write_full_corpus(out: Path) -> None:
     (out / "references" / "beta.json").write_text(json.dumps(refs[:6]), encoding="utf-8")
 
     # Dedup artifacts: a mergeable duplicate pair plus a Year=0 row.
-    (out / "references_raw.csv").write_text(
+    (out / "citations_raw.csv").write_text(
         "Title,Authors_List,Authors,Journal,Year,citing_id\n"
-        "Governing the Commons,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,p-one-2020-alpha\n"
-        "Governing the commons.,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,p-one-2020-beta\n"
-        "Tragedy of the Commons,\"['Garrett Hardin']\",\"Hardin, G.\",Science,0,p-one-2020-alpha\n",
+        "Governing the Commons,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,w-one-2020-alpha\n"
+        "Governing the commons.,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,w-one-2020-beta\n"
+        "Tragedy of the Commons,\"['Garrett Hardin']\",\"Hardin, G.\",Science,0,w-one-2020-alpha\n",
         encoding="utf-8",
     )
-    (out / "references.csv").write_text(
-        "id,Title,Authors,Journal,Year\n"
-        "r-ostrom-1990-governing-the-commons,Governing the Commons,\"Ostrom, E.\",CUP,1990\n"
-        "r-hardin-0-tragedy-of-the-commons,Tragedy of the Commons,\"Hardin, G.\",Science,0\n",
+    (out / "works.csv").write_text(
+        "id,ring,source_file,Title,Authors,Journal,Year\n"
+        "w-one-2020-alpha,0,alpha.md,Alpha Paper,Some One,J,2020\n"
+        "w-one-2020-beta,0,beta.md,Beta Paper,Some One,J,2020\n"
+        "w-ostrom-1990-governing-the-commons,1,,Governing the Commons,\"Ostrom, E.\",CUP,1990\n"
+        "w-hardin-0-tragedy-of-the-commons,1,,Tragedy of the Commons,\"Hardin, G.\",Science,0\n",
         encoding="utf-8",
     )
     (out / "citation_graph.csv").write_text(
         "citing_id,cited_id\n"
-        "p-one-2020-alpha,r-ostrom-1990-governing-the-commons\n"
-        "p-one-2020-beta,r-ostrom-1990-governing-the-commons\n"
-        "p-one-2020-alpha,r-hardin-0-tragedy-of-the-commons\n",
+        "w-one-2020-alpha,w-ostrom-1990-governing-the-commons\n"
+        "w-one-2020-beta,w-ostrom-1990-governing-the-commons\n"
+        "w-one-2020-alpha,w-hardin-0-tragedy-of-the-commons\n"
+        "w-one-2020-alpha,w-one-2020-beta\n",
         encoding="utf-8",
     )
 
@@ -198,7 +201,7 @@ def test_full_corpus_flags_all_problem_categories(tmp_path: Path) -> None:
     assert len(audit) == 1
     assert len(audit[0]["members"]) == 2
     assert {m["citing_id"] for m in audit[0]["members"]} == {
-        "p-one-2020-alpha", "p-one-2020-beta",
+        "w-one-2020-alpha", "w-one-2020-beta",
     }
 
     # A healthy paper with <5 references gets flagged as suspicious... but 6 is fine.
@@ -296,3 +299,31 @@ def test_html_escapes_hostile_titles(tmp_path: Path) -> None:
 
     assert "<script>alert" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+# ---------------------------------------------------------------------------
+# 6. Works model: ring summary, core-to-core edges, legacy detection
+# ---------------------------------------------------------------------------
+def test_report_data_includes_ring_summary(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _write_full_corpus(out)
+
+    data = collect_report_data(out)
+
+    # collect_report_data returns a JSON-normalized payload: keys are strings.
+    assert data["ring_counts"] == {"0": 2, "1": 2}
+    assert data["core_to_core_edges"] == [
+        {"citing_id": "w-one-2020-alpha", "cited_id": "w-one-2020-beta"}
+    ]
+    html = build_report_html(data)
+    assert "core" in html.lower()
+
+
+def test_report_flags_legacy_out_dir(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "papers.csv").write_text("id,Title\np-x,Foo\n", encoding="utf-8")
+
+    data = collect_report_data(out)
+
+    assert any("legacy" in str(e.get("error", "")).lower() for e in data["errors"])

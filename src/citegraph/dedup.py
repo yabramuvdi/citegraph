@@ -420,6 +420,10 @@ def canonicalize_works(
     stats = {
         "n_self_loops_dropped": int(n_self_loops),
         "n_source_duplicates_merged": int(n_src - len(ring0_ids)),
+        # Per-citation-row canonical id, aligned with citations_raw order.
+        # Lets callers (e.g. the report's merge audit) reconstruct which
+        # raw citation events merged into which work.
+        "citation_cluster_ids": [str(c) for c in cluster_ids[n_src:]],
     }
     logger.info(
         "Canonicalized %d sources + %d citations into %d works (%d edges)",

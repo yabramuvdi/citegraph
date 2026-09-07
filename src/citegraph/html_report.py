@@ -30,7 +30,7 @@ from typing import Any
 
 import pandas as pd
 
-from citegraph.dedup import DedupConfig, dedup_references
+from citegraph.dedup import DedupConfig, canonicalize_works
 from citegraph.io import OutLayout
 
 __all__ = ["collect_report_data", "build_report_html", "write_report"]
@@ -271,27 +271,41 @@ def collect_report_data(out_dir: Path, *, include_markdown_previews: bool = True
     data["papers"] = papers
 
     # --- flat CSV artifacts -------------------------------------------
-    papers_df = (
-        _read_csv_safe(layout.papers_csv, errors) if layout.papers_csv.exists() else None
+    sources_df = (
+        _read_csv_safe(layout.sources_csv, errors) if layout.sources_csv.exists() else None
     )
     raw_refs_df = (
-        _read_csv_safe(layout.references_raw_csv, errors)
-        if layout.references_raw_csv.exists()
+        _read_csv_safe(layout.citations_raw_csv, errors)
+        if layout.citations_raw_csv.exists()
         else None
     )
-    refs_df = (
-        _read_csv_safe(layout.references_csv, errors, index_col="id")
-        if layout.references_csv.exists()
+    works_df = (
+        _read_csv_safe(layout.works_csv, errors, index_col="id")
+        if layout.works_csv.exists()
         else None
     )
     graph_df = (
         _read_csv_safe(layout.graph_csv, errors) if layout.graph_csv.exists() else None
     )
     enriched_df = (
-        _read_csv_safe(layout.enriched_references_csv, errors)
-        if layout.enriched_references_csv.exists()
+        _read_csv_safe(layout.enriched_works_csv, errors)
+        if layout.enriched_works_csv.exists()
         else None
     )
+
+    # Pre-works-model out_dirs: surface as a finding, never a crash.
+    legacy_papers_csv = layout.out_dir / "papers.csv"
+    if works_df is None and legacy_papers_csv.exists():
+        errors.append(
+            {
+                "path": str(legacy_papers_csv),
+                "error": (
+                    "legacy pre-works-model artifacts detected — re-run "
+                    "`citegraph metadata`, `citegraph references`, and "
+                    "`citegraph dedup` (per-paper caches are reused)"
+                ),
+            }
+        )
     misses_df = (
         _read_csv_safe(layout.enrichment_misses_csv, errors)
         if layout.enrichment_misses_csv.exists()
@@ -334,14 +348,39 @@ def collect_report_data(out_dir: Path, *, include_markdown_previews: bool = True
         n_meta=n_meta,
         n_ref=n_ref,
         n_ref_expected=n_ref_expected,
-        refs_df=refs_df,
+        works_df=works_df,
         graph_df=graph_df,
         enriched_df=enriched_df,
         authors_df=authors_df,
     )
 
+    # --- works-model summary ------------------------------------------
+    ring_counts: dict[int, int] = {}
+    core_to_core: list[dict] = []
+    if works_df is not None and "ring" in works_df.columns:
+        rings = pd.to_numeric(works_df["ring"], errors="coerce")
+        ring_counts = {
+            int(k): int(v) for k, v in rings.value_counts().items() if pd.notna(k)
+        }
+        if graph_df is not None and {"citing_id", "cited_id"} <= set(graph_df.columns):
+            ring0 = set(works_df.index[rings == 0])
+            cc = graph_df[
+                graph_df["citing_id"].isin(ring0) & graph_df["cited_id"].isin(ring0)
+            ]
+            core_to_core = [
+                {"citing_id": _as_str(r["citing_id"]), "cited_id": _as_str(r["cited_id"])}
+                for _, r in cc.iterrows()
+            ]
+    data["ring_counts"] = ring_counts
+    data["core_to_core_edges"] = core_to_core
+
     # --- panels -------------------------------------------------------
-    data["dedup"] = _collect_dedup_panel(raw_refs_df, refs_df, graph_df, errors, layout)
+    data["dedup"] = _collect_dedup_panel(
+        raw_refs_df, works_df, graph_df, errors, layout, sources_df=sources_df
+    )
+    if data["dedup"] is not None:
+        data["dedup"]["ring_counts"] = ring_counts
+        data["dedup"]["core_to_core"] = core_to_core
     data["enrichment"] = _collect_enrichment_panel(enriched_df, misses_df, enrichment_summary)
     data["authors"] = _collect_authors_panel(authors_df, author_citations_df, author_review)
 
@@ -374,13 +413,13 @@ def collect_report_data(out_dir: Path, *, include_markdown_previews: bool = True
         layout,
         errors,
         rows=[
-            ("papers.csv", layout.papers_csv, papers_df is not None, "stage 2"),
-            ("references_raw.csv", layout.references_raw_csv, raw_refs_df is not None, "stage 3"),
-            ("references.csv", layout.references_csv, refs_df is not None, "stage 4"),
+            ("sources.csv", layout.sources_csv, sources_df is not None, "stage 2"),
+            ("citations_raw.csv", layout.citations_raw_csv, raw_refs_df is not None, "stage 3"),
+            ("works.csv", layout.works_csv, works_df is not None, "stage 4"),
             ("citation_graph.csv", layout.graph_csv, graph_df is not None, "stage 4"),
             (
-                "enriched_references.csv",
-                layout.enriched_references_csv,
+                "enriched_works.csv",
+                layout.enriched_works_csv,
                 enriched_df is not None,
                 "stage 5 (optional)",
             ),
@@ -567,7 +606,7 @@ def _collect_stages(
     n_meta: int,
     n_ref: int,
     n_ref_expected: int,
-    refs_df: pd.DataFrame | None,
+    works_df: pd.DataFrame | None,
     graph_df: pd.DataFrame | None,
     enriched_df: pd.DataFrame | None,
     authors_df: pd.DataFrame | None,
@@ -594,29 +633,29 @@ def _collect_stages(
             "hint": f"citegraph convert <pdf_dir> --out {out}" if not n_md else "",
         },
         cache_stage(
-            "metadata", n_meta, n_md, layout.papers_csv.exists(), f"citegraph metadata --out {out}"
+            "metadata", n_meta, n_md, layout.sources_csv.exists(), f"citegraph metadata --out {out}"
         ),
         cache_stage(
             "references",
             n_ref,
             n_ref_expected,
-            layout.references_raw_csv.exists(),
+            layout.citations_raw_csv.exists(),
             f"citegraph references --out {out}",
         ),
     ]
 
-    have_refs = refs_df is not None
+    have_works = works_df is not None
     have_graph = graph_df is not None
-    if have_refs and have_graph:
+    if have_works and have_graph:
         stages.append(
             {
                 "label": "dedup",
                 "status": "done",
-                "detail": f"{len(refs_df)} canonical / {len(graph_df)} edges",
+                "detail": f"{len(works_df)} works / {len(graph_df)} edges",
                 "hint": "",
             }
         )
-    elif layout.references_csv.exists() or layout.graph_csv.exists():
+    elif layout.works_csv.exists() or layout.graph_csv.exists():
         stages.append(
             {
                 "label": "dedup",
@@ -639,7 +678,7 @@ def _collect_stages(
         {
             "label": "enrich",
             "status": "done" if enriched_df is not None else "optional_not_run",
-            "detail": f"{len(enriched_df)} references"
+            "detail": f"{len(enriched_df)} works"
             if enriched_df is not None
             else "optional, not run",
             "hint": "" if enriched_df is not None else f"citegraph enrich --out {out}",
@@ -660,17 +699,19 @@ def _collect_stages(
 
 def _collect_dedup_panel(
     raw_refs_df: pd.DataFrame | None,
-    refs_df: pd.DataFrame | None,
+    works_df: pd.DataFrame | None,
     graph_df: pd.DataFrame | None,
     errors: list[dict],
     layout: OutLayout,
+    *,
+    sources_df: pd.DataFrame | None = None,
 ) -> dict | None:
-    if raw_refs_df is None or refs_df is None:
+    if raw_refs_df is None or works_df is None:
         return None
 
     panel: dict = {
         "n_raw": int(len(raw_refs_df)),
-        "n_canonical": int(len(refs_df)),
+        "n_canonical": int(len(works_df)),
         "n_edges": int(len(graph_df)) if graph_df is not None else None,
     }
 
@@ -699,33 +740,42 @@ def _collect_dedup_panel(
     else:
         panel["n_short_titles"] = 0
 
-    # Top-10 most-cited canonical references.
+    # Top-10 most-cited canonical works (core works rank here too).
     top_cited: list[dict] = []
     if graph_df is not None and "cited_id" in graph_df.columns:
         counts = graph_df.groupby("cited_id").size().sort_values(ascending=False).head(10)
         for cited_id, n in counts.items():
             title = year = None
-            if cited_id in refs_df.index:
-                ref_row = refs_df.loc[cited_id]
-                if isinstance(ref_row, pd.DataFrame):  # duplicate ids — take the first
-                    ref_row = ref_row.iloc[0]
-                title = _as_str(ref_row.get("Title"))
-                year = _as_int(ref_row.get("Year"))
+            if cited_id in works_df.index:
+                work_row = works_df.loc[cited_id]
+                if isinstance(work_row, pd.DataFrame):  # duplicate ids — take the first
+                    work_row = work_row.iloc[0]
+                title = _as_str(work_row.get("Title"))
+                year = _as_int(work_row.get("Year"))
             top_cited.append(
                 {"id": _as_str(cited_id), "title": title, "year": year, "count": int(n)}
             )
     panel["top_cited"] = top_cited
 
-    # Merge audit: recompute the clustering with default DedupConfig so the
-    # user can inspect every cluster that absorbed more than one citation
+    # Merge audit: recompute the canonicalization with default DedupConfig so
+    # the user can inspect every cluster that absorbed more than one citation
     # event. Failure here (bad columns etc.) is recorded, not raised.
     panel["merge_audit"] = []
     panel["merge_audit_truncated"] = 0
     try:
         raw = raw_refs_df.reset_index(drop=True)
-        _, mapping = dedup_references(raw, DedupConfig(), show_progress=False)
+        if sources_df is None:
+            sources_for_audit = pd.DataFrame(
+                columns=["id", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
+            )
+        else:
+            sources_for_audit = sources_df
+        _, _, audit_stats = canonicalize_works(
+            sources_for_audit, raw, DedupConfig(), show_progress=False
+        )
+        mapping = audit_stats["citation_cluster_ids"]
         members_by_cluster: dict[str, list[int]] = {}
-        for idx, cluster_id in mapping.items():
+        for idx, cluster_id in enumerate(mapping):
             members_by_cluster.setdefault(str(cluster_id), []).append(int(idx))
         multi = sorted(
             ((cid, idxs) for cid, idxs in members_by_cluster.items() if len(idxs) > 1),
@@ -745,7 +795,7 @@ def _collect_dedup_panel(
                 )
             panel["merge_audit"].append({"id": cluster_id, "members": members})
     except Exception as exc:  # noqa: BLE001 - audit is best-effort
-        _record_error(errors, layout.references_raw_csv, exc)
+        _record_error(errors, layout.citations_raw_csv, exc)
 
     return panel
 
@@ -845,15 +895,16 @@ def _collect_authors_panel(
     }
 
     top: list[dict] = []
-    if "n_reference_citations" in authors_df.columns:
-        ranked = authors_df.sort_values("n_reference_citations", ascending=False).head(10)
+    if "n_citations_received" in authors_df.columns:
+        ranked = authors_df.sort_values("n_citations_received", ascending=False).head(10)
         for author_id, row in ranked.iterrows():
             top.append(
                 {
                     "id": _as_str(author_id),
                     "display_name": _as_str(row.get("display_name")),
-                    "n_reference_citations": _as_int(row.get("n_reference_citations")),
-                    "n_occurrences": _as_int(row.get("n_occurrences")),
+                    "n_citations_received": _as_int(row.get("n_citations_received")),
+                    "n_works": _as_int(row.get("n_works")),
+                    "n_core_works": _as_int(row.get("n_core_works")),
                 }
             )
     panel["top_cited"] = top
@@ -1127,15 +1178,35 @@ def _render_dedup_section(panel: dict | None) -> str:
     if panel is None:
         return _placeholder("Dedup", "citegraph dedup --out <out>")
 
+    ring_counts = panel.get("ring_counts") or {}
+    # The payload is JSON-normalized, so ring keys arrive as strings.
+    n_core = int(ring_counts.get("0", ring_counts.get(0, 0)))
     stats = (
         '<div class="stat-row">'
         f'<div class="stat"><span class="stat-n">{panel["n_raw"]}</span>raw citation events</div>'
-        f'<div class="stat"><span class="stat-n">{panel["n_canonical"]}</span>canonical references</div>'
+        f'<div class="stat"><span class="stat-n">{panel["n_canonical"]}</span>canonical works</div>'
+        f'<div class="stat"><span class="stat-n">{n_core}</span>core works (ring 0)</div>'
         f'<div class="stat"><span class="stat-n">{_num(panel["n_edges"], 0)}</span>graph edges</div>'
         f'<div class="stat"><span class="stat-n">{panel["n_missing_year"]}</span>missing year (Year=0)</div>'
         f'<div class="stat"><span class="stat-n">{panel["n_empty_authors"]}</span>empty authors</div>'
         f'<div class="stat"><span class="stat-n">{panel["n_short_titles"]}</span>suspicious short titles</div>'
         "</div>"
+    )
+
+    core_to_core = panel.get("core_to_core") or []
+    core_rows = "".join(
+        f"<tr><td class='mono'>{_esc(e['citing_id'])}</td>"
+        f"<td class='mono'>{_esc(e['cited_id'])}</td></tr>"
+        for e in core_to_core
+    )
+    core_html = (
+        "<h3>Core cites core</h3>"
+        '<p class="soft">Citations where both ends are ring-0 works — your own '
+        "papers citing each other.</p>"
+        '<div class="table-scroll"><table><thead><tr><th>citing</th><th>cited</th>'
+        f"</tr></thead><tbody>{core_rows}</tbody></table></div>"
+        if core_to_core
+        else ""
     )
 
     top_rows = "".join(
@@ -1144,7 +1215,7 @@ def _render_dedup_section(panel: dict | None) -> str:
         for t in panel["top_cited"]
     )
     top_html = (
-        "<h3>Top cited references</h3>"
+        "<h3>Top cited works</h3>"
         '<div class="table-scroll"><table><thead><tr><th>id</th><th>title</th>'
         "<th>year</th><th>citations</th></tr></thead>"
         f"<tbody>{top_rows}</tbody></table></div>"
@@ -1184,7 +1255,7 @@ def _render_dedup_section(panel: dict | None) -> str:
             "citation event (recomputed with default DedupConfig).</p>"
         )
 
-    return stats + top_html + audit_html
+    return stats + core_html + top_html + audit_html
 
 
 def _render_enrichment_section(panel: dict | None) -> str:
@@ -1267,14 +1338,15 @@ def _render_authors_section(panel: dict | None) -> str:
 
     top_rows = "".join(
         f"<tr><td class='mono'>{_esc(t['id'])}</td><td>{_esc(t['display_name'])}</td>"
-        f"<td class='num'>{_num(t['n_reference_citations'], 0)}</td>"
-        f"<td class='num'>{_num(t['n_occurrences'], 0)}</td></tr>"
+        f"<td class='num'>{_num(t['n_citations_received'], 0)}</td>"
+        f"<td class='num'>{_num(t['n_works'], 0)}</td>"
+        f"<td class='num'>{_num(t['n_core_works'], 0)}</td></tr>"
         for t in panel["top_cited"]
     )
     top_html = (
         "<h3>Most-cited authors</h3>"
         '<div class="table-scroll"><table><thead><tr><th>id</th><th>name</th>'
-        "<th>reference citations</th><th>occurrences</th></tr></thead>"
+        "<th>citations received</th><th>works</th><th>core works</th></tr></thead>"
         f"<tbody>{top_rows}</tbody></table></div>"
         if top_rows
         else ""
