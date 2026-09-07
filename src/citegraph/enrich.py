@@ -320,12 +320,14 @@ def _normalize_record(item: dict, source: str) -> dict:
     The author lists are returned as parallel arrays:
 
     - ``Authors_List`` — display names, preserved for backwards compat.
-    - ``OpenAlex_Authors`` — a list of ``{display_name, openalex_id,
-      orcid}`` dicts in the same positional order. Carries the
-      authoritative identifiers that the author-normalization stage
-      uses as ground truth. CrossRef populates ``orcid`` only when the
-      record explicitly carries one; ``openalex_id`` is always ``None``
-      from CrossRef.
+    - ``OpenAlex_Authors`` — a list of ``{display_name, family, given,
+      openalex_id, orcid}`` dicts in the same positional order. Carries
+      the authoritative identifiers that the author-normalization stage
+      uses as ground truth, plus CrossRef's structured ``family``/
+      ``given`` split, which feeds the author stage's compound-surname
+      lexicon. CrossRef populates ``orcid`` only when the record
+      explicitly carries one; ``openalex_id`` is always ``None`` from
+      CrossRef, and OpenAlex provides no family/given split.
     """
     if source == "crossref":
         author_objs = []
@@ -338,7 +340,13 @@ def _normalize_record(item: dict, source: str) -> dict:
                 # CrossRef returns ORCIDs as full URLs; keep just the id.
                 orcid = orcid.rstrip("/").rsplit("/", 1)[-1]
             author_objs.append(
-                {"display_name": display, "openalex_id": None, "orcid": orcid}
+                {
+                    "display_name": display,
+                    "family": family,
+                    "given": given,
+                    "openalex_id": None,
+                    "orcid": orcid,
+                }
             )
         authors = [a["display_name"] for a in author_objs if a["display_name"]]
         title = (item.get("title") or [""])[0]
@@ -363,7 +371,13 @@ def _normalize_record(item: dict, source: str) -> dict:
                 orcid = orcid.rstrip("/").rsplit("/", 1)[-1]
             if display:
                 author_objs.append(
-                    {"display_name": display, "openalex_id": oa_id, "orcid": orcid}
+                    {
+                        "display_name": display,
+                        "family": None,
+                        "given": None,
+                        "openalex_id": oa_id,
+                        "orcid": orcid,
+                    }
                 )
         authors = [a["display_name"] for a in author_objs]
         title = item.get("title") or item.get("display_name") or ""

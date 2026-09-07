@@ -46,7 +46,6 @@ def test_sdist_excludes_repository_only_material() -> None:
         "/AGENTS.md",
         "/CLAUDE.md",
         "/PROJECT_OVERVIEW.html",
-        "/STATUS.html",
         "/research",
     } <= set(sdist["exclude"])
 

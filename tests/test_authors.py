@@ -469,6 +469,468 @@ def test_normalize_authors_does_not_pair_first_last_chunks():
     assert set(authors_df["surname_norm"]) == {"bochet", "page", "putterman"}
 
 
+# ---------------------------------------------------------------------------
+# Spanish / multi-part name handling (evidence-driven re-parse)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_vancouver_surname_then_initials():
+    """'Guerra JA' is Vancouver style: surname first, bare initials last."""
+    for raw, surname, initials in [
+        ("Guerra JA", "Guerra", "JA"),
+        ("Cardenas JC", "Cardenas", "JC"),
+        ("Rand DG", "Rand", "DG"),
+    ]:
+        p = parse_author(raw)
+        assert p is not None, raw
+        assert p.surname == surname
+        assert p.initials == initials
+        assert p.has_full_first is False
+
+
+def test_parse_vancouver_with_periods_rescued():
+    """'Guerra J.A.' / 'Diamond A.' must parse, not be dropped as initial-only surnames."""
+    p = parse_author("Guerra J.A.")
+    assert p is not None and p.surname == "Guerra" and p.initials == "JA"
+    p = parse_author("Diamond A.")
+    assert p is not None and p.surname == "Diamond" and p.initials == "A"
+    p = parse_author("Smith J")
+    assert p is not None and p.surname == "Smith" and p.initials == "J"
+
+
+def test_parse_trailing_et_al_stripped():
+    p = parse_author("B. Puranen et al.")
+    assert p is not None and p.surname == "Puranen" and p.initials == "B"
+    p = parse_author("Barreteau, et al.")
+    assert p is not None and p.surname == "Barreteau"
+
+
+def test_parse_corporate_author_kept_whole():
+    for raw in [
+        "Centro Nacional de Memoria Histórica",
+        "The World Bank",
+        "American Psychiatric Association",
+        "NRC (National Research Council)",
+    ]:
+        p = parse_author(raw)
+        assert p is not None, raw
+        assert p.is_corporate is True
+        assert p.given_names == ()
+    p = parse_author("Centro Nacional de Memoria Histórica")
+    assert p.surname_norm == "centro nacional de memoria historica"
+
+
+def test_parse_person_not_flagged_corporate():
+    for raw in ["Diamond, Adele", "Juan de la Cruz", "Banks, J.", "Adele Diamond"]:
+        p = parse_author(raw)
+        assert p is not None and p.is_corporate is False, raw
+
+
+def test_parse_y_connector_extends_surname():
+    p = parse_author("José Ortega y Gasset")
+    assert p is not None
+    assert p.surname == "Ortega y Gasset"
+    assert p.given_names == ("José",)
+
+
+def test_parse_y_initial_not_treated_as_connector():
+    p = parse_author("Che, Y.-K.")
+    assert p is not None and p.surname == "Che" and p.initials == "YK"
+    p = parse_author("John Y. Smith")
+    assert p is not None and p.surname == "Smith"
+
+
+def test_norm_surname_hyphen_equals_space():
+    a = parse_author("Casas-Casas, Andrés")
+    b = parse_author("Casas Casas, Andrés")
+    assert a is not None and b is not None
+    assert a.surname_norm == b.surname_norm == "casas casas"
+
+
+def test_normalize_merges_hyphenated_and_spaced_surnames():
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Casas-Casas, Andrés"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Casas Casas, Andrés"], "Year": 2012},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+
+
+def test_parse_ocr_spaced_apostrophe_cleaned():
+    """OCR-mangled accents ('B ' enabou') must normalize to the real surname."""
+    p = parse_author("B ' enabou, R")
+    assert p is not None and p.surname_norm == "benabou"
+    p = parse_author("Ib ' a ˜ nez, A.M.")
+    assert p is not None and p.surname_norm == "ibanez"
+    # Genuine apostrophe surnames (no surrounding spaces) are untouched.
+    p = parse_author("O'Neill, J.")
+    assert p is not None and p.surname == "O'Neill" and p.surname_norm == "oneill"
+
+
+def test_hyphenated_and_spaced_given_names_share_one_cluster():
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Cárdenas, Juan-Camilo"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Cardenas, Juan Camilo"], "Year": 2012},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Juan-Camilo Cardenas"], "Year": 2014},
+        {"id": "r-4", "Title": "T4", "Authors_List": ["Cardenas, J.C."], "Year": 2016},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    assert int(authors_df.iloc[0]["n_reference_citations"]) == 4
+
+
+def test_known_surname_resplits_no_comma_name():
+    p = parse_author("Jose Alberto Guerra Forero", known_surnames={"guerra forero"})
+    assert p is not None
+    assert p.surname == "Guerra Forero"
+    assert p.given_names == ("Jose", "Alberto")
+
+
+def test_comma_form_corroborates_compound_surname_end_to_end():
+    """'Guerra Forero, J.A.' in the corpus teaches the no-comma form its boundary."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Guerra Forero, J.A."], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Jose Alberto Guerra Forero"], "Year": 2012},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    only = authors_df.iloc[0]
+    assert only["surname_norm"] == "guerra forero"
+    assert only["display_name"] == "Jose Alberto Guerra Forero"
+
+
+def test_hyphenated_surname_attests_spaced_compound():
+    """'Polania-Reyes' (one token) proves 'Polanía Reyes' (two tokens) is a surname."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Sandra Polania-Reyes"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Sandra Polanía Reyes"], "Year": 2012},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["surname_norm"] == "polania reyes"
+
+
+def test_unattested_compound_stays_conservative_but_flagged():
+    """No corroboration -> keep the last-token parse, show the full name, flag for review."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Jose Alberto Guerra Forero"], "Year": 2010},
+    ])
+    authors_df, _, review = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    only = authors_df.iloc[0]
+    assert only["surname_norm"] == "forero"  # conservative: no evidence invented
+    assert only["display_name"] == "Jose Alberto Guerra Forero"  # but nothing is dropped
+    assert any("compound" in (r["reason"] or "") for r in review)
+
+
+def test_bare_lexicon_word_does_not_resplit_middle_names():
+    """A single-word surname elsewhere must never trigger a compound re-split."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Knowles, B."], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Caitlin Knowles Myers"], "Year": 2012},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert set(authors_df["surname_norm"]) == {"knowles", "myers"}
+
+
+def test_maynard_smith_comma_form_corroborates():
+    """Evidence-driven splitting works for non-Spanish compounds too."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Maynard Smith, J."], "Year": 1982},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["John Maynard Smith"], "Year": 1974},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["surname_norm"] == "maynard smith"
+
+
+def test_incompatible_second_initial_not_absorbed():
+    """'Cardenas, J.P.' must not join Juan-Camilo even with co-author overlap."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1",
+         "Authors_List": ["Cardenas, Juan-Camilo", "Ostrom, E."], "Year": 2010},
+        {"id": "r-2", "Title": "T2",
+         "Authors_List": ["Cardenas, J.P.", "Ostrom, E."], "Year": 2012},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    cardenas = authors_df[authors_df["surname_norm"] == "cardenas"]
+    assert len(cardenas) == 2
+
+
+def test_identical_raw_strings_cluster_together():
+    """Two 'Diamond, A.' records move as one unit instead of splitting by context."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1",
+         "Authors_List": ["Diamond, Adele", "Posner, M."], "Year": 2010},
+        {"id": "r-2", "Title": "T2",
+         "Authors_List": ["Diamond, Andrew", "Zhou, K."], "Year": 2011},
+        {"id": "r-3", "Title": "T3",
+         "Authors_List": ["Diamond, A.", "Posner, M."], "Year": 2012},
+        {"id": "r-4", "Title": "T4",
+         "Authors_List": ["Diamond, A."], "Year": 2013},
+    ])
+    authors_df, citations_df, _ = normalize_authors(references=refs)
+    adele = authors_df[authors_df["display_name"].str.contains("Adele", case=False)]
+    aid = adele.index[0]
+    adele_records = set(citations_df[citations_df["author_id"] == aid]["record_id"])
+    assert {"r-1", "r-3", "r-4"} <= adele_records
+
+
+def test_display_keeps_full_given_sequence():
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Ceballos, Jorge Luis"], "Year": 2010},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert authors_df.iloc[0]["display_name"] == "Jorge Luis Ceballos"
+
+
+def test_corporate_cluster_flagged_in_review():
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["The World Bank"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["The World Bank"], "Year": 2012},
+    ])
+    authors_df, _, review = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["display_name"] == "The World Bank"
+    assert any("corporate" in (r["reason"] or "") for r in review)
+
+
+def test_bridge_single_surname_into_compound_with_exact_given():
+    """'Reyes, Sandra' joins 'Polanía Reyes, Sandra' on the exact-given match."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Polanía Reyes, Sandra"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Reyes, Sandra"], "Year": 2012},
+    ])
+    authors_df, citations_df, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    only = authors_df.iloc[0]
+    assert only["surname_norm"] == "polania reyes"
+    assert set(citations_df["record_id"]) == {"r-1", "r-2"}
+
+
+def test_initials_only_never_bridge_into_compound():
+    """'Reyes, S.' has no exact given-name evidence and must stay apart."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Polanía Reyes, Sandra"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Reyes, S."], "Year": 2014},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 2
+
+
+def test_same_external_id_merges_across_surname_blocks():
+    """External ids are ground truth even when blocking disagrees."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Guerra Forero, J.A."], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Guerra, Jose Alberto"], "Year": 2012},
+    ])
+    enriched = pd.DataFrame(
+        [
+            {"id": "r-1",
+             "OpenAlex_Authors": [{"display_name": "Jose Alberto Guerra Forero",
+                                   "openalex_id": "A77", "orcid": None}]},
+            {"id": "r-2",
+             "OpenAlex_Authors": [{"display_name": "Jose Alberto Guerra Forero",
+                                   "openalex_id": "A77", "orcid": None}]},
+        ]
+    ).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    assert len(authors_df) == 1
+
+
+def test_enrichment_family_feeds_surname_lexicon():
+    """An enrichment 'family' field corroborates a compound surname split."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1",
+         "Authors_List": ["Jose Alberto Guerra Forero"], "Year": 2010},
+    ])
+    enriched = pd.DataFrame(
+        [
+            {"id": "r-1",
+             "OpenAlex_Authors": [{"display_name": "Jose Alberto Guerra Forero",
+                                   "family": "Guerra Forero",
+                                   "openalex_id": None, "orcid": None}]},
+        ]
+    ).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["surname_norm"] == "guerra forero"
+
+
+def test_typo_variant_full_names_merge():
+    """A one-letter typo ('Camillo') must not fork an anchor and strand initials."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Cardenas, Juan Camilo"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Cardenas, Juan Camilo"], "Year": 2011},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Cardenas, Juan Camillo"], "Year": 2012},
+        {"id": "r-4", "Title": "T4", "Authors_List": ["Cardenas, J.C."], "Year": 2014},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 1
+    # The most frequent spelling wins the display, never the typo.
+    assert authors_df.iloc[0]["display_name"] == "Juan Camilo Cardenas"
+
+
+def test_gendered_name_pairs_stay_apart():
+    """Gabriel/Gabriela and Daniel/Daniela are different people, not typos."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["García, Gabriel"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["García, Gabriela"], "Year": 2012},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Rodríguez, Daniel"], "Year": 2010},
+        {"id": "r-4", "Title": "T4", "Authors_List": ["Rodríguez, Daniela"], "Year": 2012},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 4
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: precision guards and cross-block invariants
+# ---------------------------------------------------------------------------
+
+
+def test_initials_prefix_alone_does_not_merge():
+    """'Smith, J.' and 'Smith, J.C.' have zero full-name evidence — keep apart."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Smith, J."], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Smith, J.C."], "Year": 2012},
+    ])
+    authors_df, _, _ = normalize_authors(references=refs)
+    assert len(authors_df) == 2
+
+
+def test_external_id_union_is_transitive():
+    """A cluster carrying two external ids must pull both id-groups together."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["García, Gabriel"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Márquez, Gabriel"], "Year": 2012},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["García Márquez, Gabriel"], "Year": 2014},
+    ])
+    enriched = pd.DataFrame(
+        [
+            {"id": "r-1",
+             "OpenAlex_Authors": [{"display_name": "Gabriel García Márquez",
+                                   "openalex_id": "A1", "orcid": None}]},
+            {"id": "r-2",
+             "OpenAlex_Authors": [{"display_name": "Gabriel García Márquez",
+                                   "openalex_id": None, "orcid": "0000-1"}]},
+            {"id": "r-3",
+             "OpenAlex_Authors": [{"display_name": "Gabriel García Márquez",
+                                   "openalex_id": "A1", "orcid": "0000-1"}]},
+        ]
+    ).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    assert len(authors_df) == 1
+
+
+def test_external_cluster_variant_anchors_no_id_records():
+    """Any attested variant in an id-cluster can anchor a no-id cluster."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Cardenas, Juan Camilo"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Cardenas, Camilo"], "Year": 2012},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Cardenas, Camilo"], "Year": 2014},
+    ])
+    enriched = pd.DataFrame(
+        [
+            {"id": "r-1",
+             "OpenAlex_Authors": [{"display_name": "Juan Camilo Cardenas",
+                                   "openalex_id": "A9", "orcid": None}]},
+            {"id": "r-2",
+             "OpenAlex_Authors": [{"display_name": "Juan Camilo Cardenas",
+                                   "openalex_id": "A9", "orcid": None}]},
+        ]
+    ).set_index("id")
+    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    assert len(authors_df) == 1
+
+
+def test_cross_block_merge_id_independent_of_row_order():
+    """A cluster spanning surname blocks must not name itself by row order."""
+    rows = [
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Guerra, Jose Alberto"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Guerra Forero, Jose Alberto"], "Year": 2012},
+    ]
+    enriched_rows = [
+        {"id": "r-1",
+         "OpenAlex_Authors": [{"display_name": "Jose Alberto Guerra Forero",
+                               "openalex_id": "A77", "orcid": None}]},
+        {"id": "r-2",
+         "OpenAlex_Authors": [{"display_name": "Jose Alberto Guerra Forero",
+                               "openalex_id": "A77", "orcid": None}]},
+    ]
+    fwd, _, _ = normalize_authors(
+        references=_refs(rows),
+        enriched_references=pd.DataFrame(enriched_rows).set_index("id"),
+    )
+    rev, _, _ = normalize_authors(
+        references=_refs(rows[::-1]),
+        enriched_references=pd.DataFrame(enriched_rows[::-1]).set_index("id"),
+    )
+    assert len(fwd) == len(rev) == 1
+    assert list(fwd.index) == list(rev.index)
+    # The more specific (compound) surname names the merged cluster.
+    assert fwd.iloc[0]["surname_norm"] == "guerra forero"
+
+
+def test_dutch_t_and_quoted_nicknames_preserved():
+    """OCR cleanup must not fuse legitimate spaced apostrophes."""
+    p = parse_author("van 't Hoff, J.")
+    assert p is not None
+    assert p.surname_norm == "van t hoff"
+    p = parse_author("Sandra 'Sandy' Smith")
+    assert p is not None and p.surname == "Smith"
+
+
+def test_short_allcaps_names_not_garbled():
+    p = parse_author("LI X")
+    assert p is not None and p.surname == "LI" and p.initials == "X"
+    p = parse_author("LEE KY")
+    assert p is not None and p.surname == "LEE" and p.initials == "KY"
+    # Two short tokens are genuinely ambiguous ('Bo XU' is a caps surname,
+    # 'Ma JA' could be Vancouver); fall back to the conservative last-token
+    # parse rather than inventing an initials reading.
+    p = parse_author("Bo XU")
+    assert p is not None and p.surname == "XU"
+    p = parse_author("Ibáñez ÁC")
+    assert p is not None and p.surname_norm == "ibanez" and p.has_full_first is False
+
+
+def test_person_with_affiliation_parens_not_corporate():
+    p = parse_author("Smith, J. (MIT)")
+    assert p is not None
+    assert p.is_corporate is False
+    assert p.surname == "Smith"
+
+
+def test_two_token_person_with_corporate_word_surname():
+    p = parse_author("Steven Bank")
+    assert p is not None and p.is_corporate is False and p.surname == "Bank"
+    # Corporate-word-first two-token names are still institutions.
+    p = parse_author("Fundación Natura")
+    assert p is not None and p.is_corporate is True
+
+
+def test_ambiguous_full_name_cluster_flagged_for_review():
+    """Bare 'Adele' compatible with two middle-initial variants: split + flagged."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Diamond, Adele"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, Adele B."], "Year": 2012},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Diamond, Adele C."], "Year": 2014},
+    ])
+    authors_df, _, review = normalize_authors(references=refs)
+    assert len(authors_df) == 3  # B. and C. conflict; bare Adele is ambiguous
+    assert any("ambiguous" in (r["reason"] or "") for r in review)
+
+
+def test_ids_stable_with_lexicon_reparse():
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Guerra Forero, J.A."], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Jose Alberto Guerra Forero"], "Year": 2012},
+    ])
+    a1, _, _ = normalize_authors(references=refs)
+    a2, _, _ = normalize_authors(references=refs)
+    assert list(a1.index) == list(a2.index)
+
+
 def test_dedup_to_authors_round_trip_via_csv(tmp_path: Path):
     """End-to-end: raw refs → dedup → CSV round-trip → normalize_authors.
 

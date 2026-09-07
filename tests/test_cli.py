@@ -279,10 +279,34 @@ def test_references_command_skips_prompt_when_all_cached(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# authors — stale-enrichment warning
+# ---------------------------------------------------------------------------
+def test_authors_cli_warns_on_unmaterialized_enrichment(tmp_path: Path) -> None:
+    """Enrichment caches without enriched_references.csv get a yellow hint."""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "references.csv").write_text(
+        'id,Title,Authors_List,Year\nr-1,T1,"[\'Ostrom, Elinor\']",1990\n',
+        encoding="utf-8",
+    )
+    (out / "enrichment").mkdir()
+    (out / "enrichment" / "r-1.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(app, ["authors", "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    plain = unstyle(result.output)
+    assert "enriched_references.csv" in plain
+    assert "citegraph enrich" in plain
+
+
+# ---------------------------------------------------------------------------
 # --help surface
 # ---------------------------------------------------------------------------
 def test_help_lists_all_commands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for cmd in ("run", "convert", "metadata", "references", "dedup", "estimate", "status"):
+    for cmd in (
+        "run", "convert", "metadata", "references", "dedup", "estimate", "status", "report",
+        "ui",
+    ):
         assert cmd in result.output

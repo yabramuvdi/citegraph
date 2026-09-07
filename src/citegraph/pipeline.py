@@ -500,6 +500,18 @@ class Pipeline:
                 def _parse(val: object) -> object:
                     return parse_openalex_authors(val)
                 enriched["OpenAlex_Authors"] = enriched["OpenAlex_Authors"].map(_parse)
+        else:
+            n_cached = self.layout.enrichment_cache_count()
+            if n_cached:
+                logger.warning(
+                    "%d cached enrichment result(s) exist in %s but "
+                    "enriched_references.csv is missing — the enrich stage was "
+                    "interrupted before its final write. Run `citegraph enrich` "
+                    "before `citegraph authors` so OpenAlex/ORCID ids anchor "
+                    "author clustering.",
+                    n_cached,
+                    self.layout.enrichment_dir,
+                )
 
         aliases = load_aliases(self.layout.author_aliases_csv)
 

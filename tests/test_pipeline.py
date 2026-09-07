@@ -318,6 +318,60 @@ def test_normalize_authors_writes_csvs_and_review(tmp_path: Path) -> None:
     assert {"reference", "paper"}.issubset(set(citations_df["record_kind"]))
 
 
+def _out_with_references(tmp_path: Path) -> Path:
+    """Minimal out dir holding just a references.csv for the authors stage."""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "references.csv").write_text(
+        'id,Title,Authors_List,Year\nr-1,T1,"[\'Ostrom, Elinor\']",1990\n',
+        encoding="utf-8",
+    )
+    return out
+
+
+def test_authors_warns_when_enrichment_cache_lacks_csv(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Cached enrichment results without enriched_references.csv must not be
+    silently ignored — that state loses every OpenAlex/ORCID signal."""
+    out = _out_with_references(tmp_path)
+    (out / "enrichment").mkdir()
+    (out / "enrichment" / "r-1.json").write_text("{}", encoding="utf-8")
+
+    pipeline = Pipeline(pdf_dir=None, out_dir=out, client=_FakeClient())
+    with caplog.at_level("WARNING", logger="citegraph.pipeline"):
+        pipeline.normalize_authors()
+    assert any("enriched_references.csv" in r.message for r in caplog.records)
+    assert any("citegraph enrich" in r.message for r in caplog.records)
+
+
+def test_authors_no_enrichment_warning_when_csv_present(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    out = _out_with_references(tmp_path)
+    (out / "enrichment").mkdir()
+    (out / "enrichment" / "r-1.json").write_text("{}", encoding="utf-8")
+    (out / "enriched_references.csv").write_text(
+        "id,OpenAlex_Authors\nr-1,[]\n", encoding="utf-8"
+    )
+
+    pipeline = Pipeline(pdf_dir=None, out_dir=out, client=_FakeClient())
+    with caplog.at_level("WARNING", logger="citegraph.pipeline"):
+        pipeline.normalize_authors()
+    assert not any("enriched_references.csv is missing" in r.message for r in caplog.records)
+
+
+def test_authors_no_enrichment_warning_without_cache_dir(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    out = _out_with_references(tmp_path)
+
+    pipeline = Pipeline(pdf_dir=None, out_dir=out, client=_FakeClient())
+    with caplog.at_level("WARNING", logger="citegraph.pipeline"):
+        pipeline.normalize_authors()
+    assert not any("enriched_references.csv is missing" in r.message for r in caplog.records)
+
+
 def test_stage_not_ready_when_upstream_missing(tmp_path: Path) -> None:
     p = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
 

@@ -49,6 +49,18 @@ class OutLayout:
     def enrichment_dir(self) -> Path:
         return self.out_dir / "enrichment"
 
+    def enrichment_cache_count(self) -> int:
+        """Number of per-reference enrichment cache files on disk.
+
+        Non-zero while ``enriched_references.csv`` is absent means the
+        enrich stage was interrupted before its final CSV write — the
+        authors stage warns about that state instead of silently
+        clustering without external ids.
+        """
+        if not self.enrichment_dir.is_dir():
+            return 0
+        return sum(1 for _ in self.enrichment_dir.glob("*.json"))
+
     @property
     def papers_csv(self) -> Path:
         return self.out_dir / "papers.csv"
@@ -116,6 +128,10 @@ class OutLayout:
     @property
     def artifact_manifest_json(self) -> Path:
         return self.out_dir / "artifact_manifest.json"
+
+    @property
+    def report_html(self) -> Path:
+        return self.out_dir / "report.html"
 
     def ensure(self) -> None:
         for d in (

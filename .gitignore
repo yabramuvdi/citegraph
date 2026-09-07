@@ -41,6 +41,10 @@ htmlcov/
 
 # Pipeline outputs (local runs)
 out/
+out_archive/
 
 # Notebooks are local exploratory artifacts.
 *.ipynb
+
+# ...except the curated example notebook.
+!examples/quickstart.ipynb

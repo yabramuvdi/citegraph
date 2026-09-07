@@ -41,19 +41,59 @@ _REF_HEADER_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# Any markdown header, capturing its level — used to find where a non-final
+# references section ends.
+_ANY_HEADER_RE = re.compile(r"^(\#{1,6})\s", re.MULTILINE)
 
-def split_at_references_header(content: str) -> tuple[str, str | None]:
-    """Return ``(body, refs)`` split at the bibliography header.
 
-    Locates the *last* :data:`_REF_HEADER_RE` match (bibliographies come at
-    the end of a paper). If none is found, returns ``(content, None)`` so
-    callers can decide how to react to the missing header.
+def split_reference_sections(content: str) -> tuple[str, list[str]]:
+    """Return ``(body, sections)`` — all bibliography sections in ``content``.
+
+    Multi-chapter documents (PhD theses, edited volumes) carry one references
+    section per chapter; every :data:`_REF_HEADER_RE` match starts a section.
+    A non-final section ends at the next header of the same or higher level
+    (sub-headers like ``### Books`` inside a bibliography don't terminate it);
+    the final section runs to end-of-file, so single-bibliography papers
+    behave exactly as they always have. ``body`` is everything outside the
+    sections. No match returns ``(content, [])``.
     """
     matches = list(_REF_HEADER_RE.finditer(content))
     if not matches:
+        return content, []
+
+    sections: list[str] = []
+    body_parts: list[str] = []
+    cursor = 0
+    for i, match in enumerate(matches):
+        start = match.start()
+        if start < cursor:
+            continue  # nested inside the previous section; already captured
+        body_parts.append(content[cursor:start])
+        end = len(content)
+        if i < len(matches) - 1:
+            level = len(re.match(r"\#+", match.group(0)).group(0))
+            for header in _ANY_HEADER_RE.finditer(content, match.end()):
+                if len(header.group(1)) <= level:
+                    end = header.start()
+                    break
+        sections.append(content[start:end])
+        cursor = end
+    body_parts.append(content[cursor:])
+    return "".join(body_parts), sections
+
+
+def split_at_references_header(content: str) -> tuple[str, str | None]:
+    """Return ``(body, refs)`` with all bibliography sections in ``refs``.
+
+    Joins every section found by :func:`split_reference_sections` (a single
+    section comes back byte-identical to the raw slice). If none is found,
+    returns ``(content, None)`` so callers can decide how to react to the
+    missing header.
+    """
+    body, sections = split_reference_sections(content)
+    if not sections:
         return content, None
-    cut = matches[-1].start()
-    return content[:cut], content[cut:]
+    return body, "\n\n".join(sections)
 
 
 def slice_to_references_section(content: str) -> tuple[str, bool]:
@@ -167,16 +207,25 @@ def extract_references_from_markdown(
     content = markdown_path.read_text(encoding="utf-8")
 
     body_for_sanity_check: str | None = None
+    sections = [content]
     if slice_to_references:
-        body, refs = split_at_references_header(content)
-        if refs is not None:
+        body, found_sections = split_reference_sections(content)
+        if found_sections:
             logger.debug(
-                "Sliced %s to references section: %d -> %d chars",
+                "Sliced %s to %d references section(s): %d -> %d chars",
                 markdown_path.name,
+                len(found_sections),
                 len(content),
-                len(refs),
+                sum(len(s) for s in found_sections),
             )
-            content = refs
+            if len(found_sections) > 1:
+                logger.info(
+                    "Found %d references sections in %s (multi-chapter document); "
+                    "extracting each separately",
+                    len(found_sections),
+                    markdown_path.name,
+                )
+            sections = found_sections
             body_for_sanity_check = body
         else:
             logger.info(
@@ -184,8 +233,27 @@ def extract_references_from_markdown(
                 markdown_path.name,
             )
 
-    prompt = _build_prompt(content)
     initial_cap = max_output_tokens or client.default_max_output_tokens
+    parsed: list[Reference] = []
+    for idx, section in enumerate(sections):
+        label = markdown_path.name
+        if len(sections) > 1:
+            label = f"{markdown_path.name} (section {idx + 1}/{len(sections)})"
+        parsed.extend(
+            _extract_section(client=client, section=section, label=label, initial_cap=initial_cap)
+        )
+
+    if body_for_sanity_check is not None:
+        _check_extracted_count(markdown_path, body_for_sanity_check, len(parsed))
+
+    return parsed
+
+
+def _extract_section(
+    *, client: GeminiClient, section: str, label: str, initial_cap: int
+) -> list[Reference]:
+    """Run the extraction call for one references section, with truncation retry."""
+    prompt = _build_prompt(section)
 
     def _call(cap: int):
         return client.generate_structured(
@@ -205,7 +273,7 @@ def extract_references_from_markdown(
             logger.warning(
                 "References response for %s was truncated at %d tokens; "
                 "retrying with cap %d",
-                markdown_path.name,
+                label,
                 initial_cap,
                 retry_cap,
             )
@@ -214,27 +282,21 @@ def extract_references_from_markdown(
                 logger.error(
                     "References response for %s still truncated at %d tokens; "
                     "extracted list will be incomplete",
-                    markdown_path.name,
+                    label,
                     retry_cap,
                 )
         else:
             logger.error(
                 "References response for %s truncated at hard cap %d tokens; "
                 "cannot retry — extracted list will be incomplete",
-                markdown_path.name,
+                label,
                 initial_cap,
             )
 
     parsed = parse_structured_response(response, schema=Reference)
     if not isinstance(parsed, list):
-        logger.warning(
-            "Expected a list of references for %s, got %r", markdown_path.name, type(parsed)
-        )
+        logger.warning("Expected a list of references for %s, got %r", label, type(parsed))
         return []
-
-    if body_for_sanity_check is not None:
-        _check_extracted_count(markdown_path, body_for_sanity_check, len(parsed))
-
     return parsed
 
 

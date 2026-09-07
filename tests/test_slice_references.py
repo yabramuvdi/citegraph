@@ -31,7 +31,7 @@ def test_slicer_matches_common_header_forms(header: str) -> None:
     assert "1. Smith" in sliced
 
 
-def test_slicer_uses_last_match_when_multiple_present() -> None:
+def test_slicer_skips_headers_with_trailing_text() -> None:
     body = (
         "## References to Foo\n"
         "Body mentioning prior references.\n"
@@ -40,7 +40,8 @@ def test_slicer_uses_last_match_when_multiple_present() -> None:
     )
     sliced, found = slice_to_references_section(body)
     assert found is True
-    # The last (real) References header is what we slice from.
+    # "## References to Foo" is not a bibliography header; slicing starts at
+    # the real one.
     assert sliced.startswith("## References\n")
 
 

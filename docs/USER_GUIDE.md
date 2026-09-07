@@ -151,9 +151,15 @@ This produces `authors.csv` and `author_citations.csv`. External OpenAlex and
 ORCID identifiers are treated as stronger identity evidence than name strings.
 If `author_review.json` exists, inspect the flagged clusters.
 
+By default clustering is precision-first (`--merge-mode strict`): an
+initial-only name merges into a full-name cluster only when the match is
+unambiguous. Pass `--merge-mode loose` to collapse every
+(surname, first-initial) combination instead when recall matters more.
+
 For a manual correction, create `author_aliases.csv` with
-`cluster_id,canonical_id` columns, then rerun `citegraph authors`. Keep this file
-with the corpus; it records a research decision.
+`cluster_id,canonical_id` columns, then rerun `citegraph authors` (or pass an
+external file via `--aliases`). Keep this file with the corpus; it records a
+research decision.
 
 ## 4. Check status and preserve provenance
 

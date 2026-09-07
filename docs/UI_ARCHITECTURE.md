@@ -1,7 +1,12 @@
 # UI and Application Boundary
 
-Status: proposed architecture for the first researcher-facing application. It
-does not describe functionality already present in the Python package.
+Status: proposed architecture for the first researcher-facing application.
+An MVP slice now exists in the package: `citegraph ui` serves a read-only
+live monitor over the same data contract as `citegraph report`
+(`collect_report_data`), refreshing as artifacts appear in the out
+directory. The job service / control plane described below (create, cost
+approval, cancellation, review decisions) remains future work and is not
+implemented.
 
 ## Decision
 

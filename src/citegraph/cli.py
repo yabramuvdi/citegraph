@@ -5,7 +5,11 @@ Two ways to use it:
 - ``citegraph run`` runs the full pipeline end-to-end.
 - The per-stage commands (``convert``, ``metadata``, ``references``,
   ``dedup``, ``enrich``) run one stage at a time, reading prior outputs
-  from ``--out``. ``citegraph status`` reports which artifacts exist.
+  from ``--out``. ``citegraph status`` reports which artifacts exist,
+  ``citegraph report`` writes a self-contained ``report.html`` QC
+  dashboard summarizing whatever has been produced so far, and
+  ``citegraph ui`` serves a read-only live monitor that re-renders as a
+  run progresses.
 """
 
 from __future__ import annotations
@@ -588,6 +592,17 @@ def authors(
             raise typer.Exit(code=1)
 
     def _go() -> None:
+        layout = pipeline.layout
+        if not layout.enriched_references_csv.exists():
+            n_cached = layout.enrichment_cache_count()
+            if n_cached:
+                typer.secho(
+                    f"{n_cached} cached enrichment result(s) found in "
+                    f"{layout.enrichment_dir} but enriched_references.csv is "
+                    "missing. Run `citegraph enrich` first so OpenAlex/ORCID "
+                    "ids anchor author clustering.",
+                    fg=typer.colors.YELLOW,
+                )
         authors_df, citations_df = pipeline.normalize_authors()
         typer.echo(
             f"Clustered {len(citations_df)} author occurrences into "
@@ -606,6 +621,85 @@ def authors(
             )
 
     _run_stage(_go, next_hint=None)
+
+
+@app.command()
+def report(
+    out: Path = typer.Option(Path("./out"), "--out", "-o"),
+    open_browser: bool = typer.Option(
+        False, "--open", help="Open the written report.html in a web browser."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Write a self-contained QC dashboard (``report.html``) into ``--out``.
+
+    Reads whatever artifacts exist — it is safe (and useful) to re-run
+    after every pipeline stage. No LLM or network calls are made.
+    """
+    _configure_logging(verbose)
+    if not out.is_dir():
+        typer.secho(
+            f"Output directory does not exist: {out}. "
+            f"Run `citegraph convert <pdf_dir> --out {out}` first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    from citegraph.html_report import collect_report_data, write_report
+
+    data = collect_report_data(out)
+    path = write_report(out, data=data)
+    typer.echo(f"Wrote {path}.")
+    n_problems = data.get("problems", {}).get("total", 0)
+    if n_problems:
+        typer.secho(
+            f"{n_problems} problem(s) flagged — open the report for details.",
+            fg=typer.colors.YELLOW,
+        )
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(path.resolve().as_uri())
+
+
+@app.command()
+def ui(
+    out: Path = typer.Option(Path("./out"), "--out", "-o"),
+    port: int = typer.Option(8765, "--port", help="Port to serve on (binds 127.0.0.1 only)."),
+    open_browser: bool = typer.Option(
+        False, "--open", help="Open the live monitor in a web browser."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Serve a read-only live monitor for ``--out`` on localhost.
+
+    Polls the out directory as pipeline stages run and re-renders stage
+    progress, problems, recent file activity, and the per-paper table.
+    It never writes into ``--out`` and works before the directory exists
+    (the page fills in as artifacts appear). Ctrl+C stops it.
+    """
+    _configure_logging(verbose)
+    from citegraph.webui import create_server
+
+    server = create_server(out, port=port, verbose=verbose)
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    typer.echo(f"citegraph live monitor: {url}  (watching {out}; Ctrl+C to stop)")
+    if not out.is_dir():
+        typer.secho(
+            f"{out} does not exist yet — the page will fill in once a stage writes to it.",
+            fg=typer.colors.YELLOW,
+        )
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        typer.echo("\nStopped.")
+    finally:
+        server.server_close()
 
 
 @app.command()

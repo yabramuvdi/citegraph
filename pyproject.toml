@@ -74,7 +74,6 @@ exclude = [
   "/AGENTS.md",
   "/CLAUDE.md",
   "/PROJECT_OVERVIEW.html",
-  "/STATUS.html",
   "/research",
 ]
 

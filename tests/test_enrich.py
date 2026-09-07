@@ -78,6 +78,16 @@ def test_normalize_record_openalex():
     assert record["enrichment_source"] == "openalex"
 
 
+def test_normalize_record_crossref_keeps_family_and_given():
+    """CrossRef's structured family/given split is an authoritative surname
+    boundary — the author-normalization stage feeds it into its surname
+    lexicon, so it must survive flattening."""
+    record = _normalize_record(_CROSSREF_ITEM, "crossref")
+    author = record["OpenAlex_Authors"][0]
+    assert author["family"] == "Vaswani"
+    assert author["given"] == "Ashish"
+
+
 def test_normalize_record_openalex_allows_missing_source():
     item = {
         **_OPENALEX_ITEM,

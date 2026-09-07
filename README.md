@@ -6,12 +6,15 @@ Build a deduplicated citation graph from a folder of academic PDFs.
 [`docling`](https://github.com/DS4SD/docling), uses Google Gemini to extract
 the paper's own bibliographic metadata and its full reference list, runs a
 fuzzy deduplication pass on the references (rapidfuzz on title + authors +
-year), and optionally enriches references with canonical metadata from
-CrossRef / OpenAlex. The result is three CSVs you can analyse directly:
+year), optionally enriches references with canonical metadata from
+CrossRef / OpenAlex, and clusters author names across the corpus into
+canonical author records. The result is five CSVs you can analyse directly:
 
 - `papers.csv` &mdash; one row per source paper.
 - `references.csv` &mdash; one row per cited reference (deduplicated).
 - `citation_graph.csv` &mdash; `(citing_id, cited_id)` edges.
+- `authors.csv` &mdash; one row per canonical author (deduplicated across the corpus).
+- `author_citations.csv` &mdash; one row per author occurrence, with back-pointers.
 
 ## Install
 
@@ -59,6 +62,9 @@ citegraph dedup ./out/references_raw.csv --out ./out
 
 - [User guide](docs/USER_GUIDE.md) — staged tutorial, quality-control
   checkpoints, output interpretation, privacy, costs, and troubleshooting.
+- [Quickstart notebook](examples/quickstart.ipynb) — runnable tour of both
+  pipeline modes, the cost estimator, dedup and enrichment review, author
+  normalization, and the graph queries.
 - [UI and application architecture](docs/UI_ARCHITECTURE.md) — proposed
   boundary for a future researcher-facing interface while keeping the Python
   engine independent.
@@ -120,6 +126,35 @@ paid-tier Gemini rates, last checked 2026-09-04; the table lives in
 [`src/citegraph/cost_estimation.py`](src/citegraph/cost_estimation.py) and
 should be checked against https://ai.google.dev/gemini-api/docs/pricing before
 trusting the output for budgeting.
+
+### Reviewing a run
+
+`citegraph report` writes a single self-contained `report.html` into the out
+directory: stage progress, a problems summary, a per-paper table with expandable
+metadata / reference / markdown previews, a dedup merge audit, enrichment match
+quality, author-cluster review, and an artifact integrity check. It makes no
+API or network calls and reads whatever artifacts exist, so it is designed to
+be re-run after every stage — sections for stages you haven't run yet show a
+placeholder with the command to run next.
+
+```bash
+citegraph report --out ./out          # write ./out/report.html
+citegraph report --out ./out --open   # …and open it in your browser
+```
+
+### Live monitoring UI (MVP)
+
+`citegraph ui` serves the same information as a small local web app that
+refreshes itself while a run is in progress: stage progress, problems, recent
+file activity, and the per-paper table update every couple of seconds as
+artifacts land in the out directory. It is read-only (it never writes into
+`--out`), binds to `127.0.0.1` only, and needs no extra dependencies. This is
+the MVP slice of the researcher-facing application sketched in
+[docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md).
+
+```bash
+citegraph ui --out ./out --open       # http://127.0.0.1:8765/ — Ctrl+C to stop
+```
 
 ## Real smoke test
 
@@ -194,14 +229,19 @@ PDFs ──docling──▶ markdown ──Gemini──▶ metadata + references
                                           │
                                           ▼
                                   citation_graph.csv
+                                          │
+                                          ▼
+                             author normalization
+                          (authors.csv + author_citations.csv)
 ```
 
 ## Output schema
 
-After a run, `out_dir/` contains the four CSVs below plus a few sidecar
+After a run, `out_dir/` contains the six CSVs below plus a few sidecar
 files described at the end of this section. The per-stage caches live
-under `markdown/`, `metadata/<paper-id>.json`, and
-`references/<paper-id>.json` &mdash; safe to inspect, safe to delete to
+under `markdown/`, `metadata/<paper-id>.json`,
+`references/<paper-id>.json`, and (when enrichment runs)
+`enrichment/` &mdash; safe to inspect, safe to delete to
 force a re-extraction.
 
 ### `papers.csv` &mdash; one row per source paper
@@ -251,6 +291,40 @@ A reference cited by N papers appears N times here, with N different `citing_id`
 | `citing_id` | string | `p-…` |
 | `cited_id` | string | `r-…` |
 
+### `authors.csv` &mdash; canonical authors, indexed by `id`
+
+Produced by the author-normalization stage (`citegraph authors`, also part of
+`citegraph run`). Sorted by `n_reference_citations`, descending.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` (index) | string | `a-<surname>-<given>`, deterministic across runs |
+| `display_name` | string | canonical human-readable name for the cluster |
+| `surname` | string | as parsed from the best variant |
+| `surname_norm` | string | diacritic-stripped surname used for blocking |
+| `canonical_given` | string | longest full first name observed (or initials) |
+| `initials` | string | canonical initials |
+| `openalex_id` | string | OpenAlex author id when enrichment provided one |
+| `orcid` | string | ORCID when enrichment provided one |
+| `n_occurrences` | int | total name occurrences merged into this cluster |
+| `n_reference_citations` | int | cited works in which this author's name appears |
+| `n_distinct_papers_citing` | int | distinct source papers citing this author |
+
+### `author_citations.csv` &mdash; one row per author occurrence
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `author_id` | string | the `a-…` cluster this occurrence was assigned to |
+| `record_kind` | string | `"reference"` or `"paper"` |
+| `record_id` | string | the `r-…` / `p-…` record the name appeared on |
+| `position` | int | author position on that record (0-based) |
+| `citing_paper_id` | string | for reference occurrences, the citing `p-…` id |
+| `raw_author` | string | the original author string before parsing |
+
+Hand-curated overrides go in `out_dir/author_aliases.csv`
+(`cluster_id,canonical_id` columns, applied last); rerun `citegraph authors`
+after editing it. Low-confidence clusters are flagged in `author_review.json`.
+
 ### Querying the graph
 
 For ad-hoc analysis there's a small `CitationGraph` class. Construct it
@@ -298,13 +372,15 @@ They are created only when the condition they describe actually occurred, so
 `path.exists()` is a sufficient check. Enrichment review files are different:
 they are written when stage 5 runs so you can inspect match quality.
 
-- `run_summary.json` &mdash; counts for the whole run: `n_papers`, `n_references_raw`, `n_references_dedup`, `n_edges`, `n_metadata_failures`, `n_references_failures`, `n_source_duplicates`, `n_papers_no_references`, `n_conversion_warnings`, plus the model id and dedup configuration.
+- `run_summary.json` &mdash; counts for the whole run: `n_papers`, `n_references_raw`, `n_references_dedup`, `n_edges`, `n_authors`, `n_author_citations`, `n_author_review_flags`, `n_metadata_failures`, `n_references_failures`, `n_source_duplicates`, `n_papers_no_references`, `n_conversion_warnings`, plus the model id and the dedup / author configuration.
+- `artifact_manifest.json` &mdash; written by `citegraph run`: package version, stage, artifact paths, and the configuration used. Archive it with the CSVs for provenance.
 - `metadata_failures.jsonl` and `references_failures.jsonl` &mdash; one JSON line per failed paper: `{source_file, stage, error_class, error_message}`. The pipeline keeps going past per-paper failures; re-running will retry them (their caches were not written).
 - `source_duplicates.json` &mdash; written when two differently-named PDFs contain the same paper (detected by the same fuzzy-match logic used for reference deduplication). Each entry names the canonical source file, the duplicate file(s), and the paper title. The duplicate PDFs are silently skipped in the references stage; remove them from `pdf_dir` and re-run to clean up.
 - `papers_no_references.json` &mdash; written when a paper is successfully processed but the LLM returned an empty reference list. Each entry has `paper_id`, `source_file`, and `title`. Common causes: image-only PDFs (see `--ocr-auto` / `--ocr`), papers with no bibliography section, or Gemini returning an empty list despite the content being present.
 - `conversion_warnings.json` &mdash; written after stage 1 when any output markdown appears to be image-only (scanned PDF converted without OCR). Each entry has `source_file` and a human-readable `reason`. Re-run stage 1 with `--ocr-auto` to regenerate only the flagged files with OCR, or `--ocr` to force OCR for every PDF.
 - `enrichment_summary.json` &mdash; written by stage 5 when enrichment runs. Contains match/miss counts, source counts, match rate, and the `EnrichConfig` values used.
 - `enrichment_misses.csv` &mdash; written by stage 5 when enrichment runs. Lists unmatched references with their miss reason so they can be inspected or curated later.
+- `author_review.json` &mdash; written by the authors stage when a cluster looks low-confidence (initial-only name with several citations and no external id). Inspect the flagged clusters and record decisions in `author_aliases.csv`.
 
 ## Evaluation
 
@@ -330,6 +406,7 @@ deduplication F1. Numbers from the reference run are reported in
 | `enrich` | `False` | run a CrossRef/OpenAlex pass over the deduplicated references (requires the `[crossref]` or `[all]` extra) |
 | `enrich_config` | `EnrichConfig()` | tune the enrichment pass &mdash; see below |
 | `dedup_config` | `DedupConfig()` | tune the fuzzy dedup &mdash; see below |
+| `author_config` | `AuthorClusterConfig()` | tune author clustering &mdash; see below |
 | `llm_concurrency` | `4` | maximum concurrent Gemini extraction calls for metadata/references (or set `CITEGRAPH_LLM_CONCURRENCY`). CLI flag on LLM stages: `--llm-concurrency` |
 | `overwrite_markdown` | `False` | re-run docling even when a cached `.md` exists (PDF conversion requires the `[pdf]` or `[all]` extra) |
 | `recursive` | `False` | walk subdirectories of `pdf_dir`. Cache filenames are disambiguated by relative path (e.g. `journal_X/foo.pdf` → `journal_X__foo.md`); a clear error is raised if two PDFs would still collide. CLI flag: `--recursive` / `-r` |
@@ -375,6 +452,25 @@ pipe = Pipeline(
     ),
 )
 ```
+
+Author clustering is tuned through `AuthorClusterConfig`:
+
+```python
+from citegraph.authors import AuthorClusterConfig
+
+pipe = Pipeline(
+    pdf_dir="./pdfs",
+    out_dir="./out",
+    author_config=AuthorClusterConfig(
+        merge_mode="strict",   # precision-first (default); "loose" collapses
+                               # by (surname, first-initial) regardless
+    ),
+)
+```
+
+On the CLI: `citegraph authors --merge-mode strict|loose`, plus `--aliases`
+to point at a hand-curated `cluster_id,canonical_id` override CSV (defaults
+to `<out>/author_aliases.csv` when it exists).
 
 The CLI exposes the same knobs as flags &mdash; see `citegraph run --help`.
 
