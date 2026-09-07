@@ -212,6 +212,24 @@ def test_openalex_empty_title_returns_none():
     client.get.assert_not_called()
 
 
+def test_openalex_sends_mailto_param_for_polite_pool():
+    """OpenAlex's polite pool keys on a mailto query param, not the User-Agent."""
+    client = MagicMock()
+    client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
+    cfg = EnrichConfig(title_match_threshold=90.0, contact_email="who@example.org")
+    _openalex_lookup("Attention Is All You Need", 2017, cfg, client)
+    params = client.get.call_args.kwargs["params"]
+    assert params["mailto"] == "who@example.org"
+
+
+def test_openalex_omits_mailto_when_no_contact_email():
+    client = MagicMock()
+    client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
+    _openalex_lookup("Attention Is All You Need", 2017, _CFG, client)
+    params = client.get.call_args.kwargs["params"]
+    assert "mailto" not in params
+
+
 # ---------------------------------------------------------------------------
 # enrich_works — integration over a DataFrame
 # ---------------------------------------------------------------------------

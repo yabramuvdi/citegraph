@@ -158,6 +158,10 @@ def _openalex_lookup_report(
         "search": title,
         "per-page": cfg.rows,
     }
+    # OpenAlex's polite pool keys on a mailto query param (the User-Agent
+    # form only covers CrossRef) — anonymous callers get throttled hard.
+    if cfg.contact_email:
+        params["mailto"] = cfg.contact_email
     try:
         payload = _request_json(
             client,
