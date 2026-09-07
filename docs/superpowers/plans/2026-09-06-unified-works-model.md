@@ -1177,3 +1177,34 @@ git commit -m "refactor: remove legacy papers/references code paths; docs for wo
 - [ ] **Step 2:** Dry-run the migration path on one of the user's real out_dirs (ask the user which; do NOT run enrichment against the network without their go-ahead): `citegraph metadata --out <dir> && citegraph references --out <dir> && citegraph dedup --out <dir> && citegraph status --out <dir>`. Confirm: `works.csv` exists, `n_core_works` equals the old paper count, `citation_graph.csv` contains at least one edge whose `cited_id` is a ring-0 work (core-cites-core actually fires on real data).
 - [ ] **Step 3:** `citegraph report --out <dir> --open` — eyeball the ring summary and core→core table.
 - [ ] **Step 4:** Report results to the user; hand off to superpowers:finishing-a-development-branch.
+
+---
+
+## Execution status (updated 2026-09-07)
+
+Tasks 1–13: **DONE** — all committed on branch `works-model` (14 commits,
+335 tests passing, ruff clean). The user's pre-existing uncommitted 0.1.x
+work is preserved in checkpoint commit `e875228` at the branch base.
+
+Task 14 (real-corpus verification): **IN PROGRESS**
+- Corpus: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/data` (~100 PDFs, nested author dirs)
+- Out dir: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/citegraph_out`
+- Stage 1 (convert) is running as a detached nohup process, log at
+  `<out_dir>/convert.log`; conversion is per-PDF checkpointed, so if it
+  died just re-run the same command — it resumes:
+  `citegraph convert "<pdf_dir>" --out "<out_dir>" --recursive`
+- Next steps once markdown/ stops growing:
+  1. check `<out_dir>/conversion_warnings.json` (image-only scans → consider `--ocr-auto`)
+  2. `citegraph estimate --out "<out_dir>"` (no API calls)
+  3. **report the estimated Gemini cost to the user and STOP — do not run
+     `citegraph metadata` / `citegraph references` without their explicit
+     go-ahead** (real API spend)
+  4. after approval: `citegraph metadata`, `citegraph references`,
+     `citegraph dedup`, `citegraph authors`, `citegraph report --open`
+     (skip `enrich` unless the user asks — it is slow but free)
+  5. verify: `works.csv` exists, ring-0 count ≈ number of PDFs, and
+     `citation_graph.csv` has edges whose `cited_id` is a ring-0 work
+     (core-cites-core fires on real data); `g.top_authors(15, ring=0)`
+     gives a sane core-author ranking
+  6. then superpowers:finishing-a-development-branch for merging
+     `works-model` into `main`
