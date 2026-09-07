@@ -453,8 +453,12 @@ def _enrich_one(
                 cache_path = legacy
         if cache_path.exists():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            row_dict.update(_with_cache_diagnostics(cached))
-            return row_dict
+            # An http_error miss is a transient outage (rate limit, 5xx,
+            # timeout), not a lookup result — fall through and retry the
+            # providers instead of serving it forever.
+            if cached.get("enrichment_miss_reason") != "http_error":
+                row_dict.update(_with_cache_diagnostics(cached))
+                return row_dict
 
     title = str(row.get("Title") or "")
     authors = str(row.get("Authors") or "")

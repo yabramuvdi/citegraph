@@ -486,6 +486,44 @@ def test_enrich_works_caches_misses(tmp_path):
     assert second.iloc[0]["enrichment_status"] == "miss"
 
 
+def test_enrich_works_retries_cached_http_error_miss(tmp_path):
+    """A cached http_error miss is a transient outage, not a result — re-runs retry it.
+
+    Real-corpus case: an anonymous, heavily-throttled run cached thousands
+    of 429s as permanent misses that a plain re-run would never retry.
+    """
+    df = _make_df()
+
+    from citegraph.io import OutLayout
+    layout = OutLayout(tmp_path)
+    layout.ensure()
+
+    poisoned = {
+        "doi": None,
+        "enrichment_source": None,
+        "enrichment_status": "miss",
+        "enrichment_miss_reason": "http_error",
+    }
+    cache_file = layout.enrichment_dir / "r-vaswani-2017-attention.json"
+    cache_file.write_text(json.dumps(poisoned), encoding="utf-8")
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        result = enrich_works(df, cfg=_CFG, layout=layout)
+
+    mock_client.get.assert_called()
+    row = result.iloc[0]
+    assert row["enrichment_status"] == "matched"
+    assert row["doi"] == "10.48550/arxiv.1706.03762"
+    cached = json.loads(cache_file.read_text())
+    assert cached["enrichment_status"] == "matched"
+
+
 def test_enrich_works_writes_misses_and_summary(tmp_path):
     df = _make_df()
 
