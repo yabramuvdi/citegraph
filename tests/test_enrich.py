@@ -13,7 +13,7 @@ from citegraph.enrich import (
     _crossref_lookup,
     _normalize_record,
     _openalex_lookup,
-    enrich_references,
+    enrich_works,
 )
 
 # ---------------------------------------------------------------------------
@@ -213,7 +213,7 @@ def test_openalex_empty_title_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# enrich_references — integration over a DataFrame
+# enrich_works — integration over a DataFrame
 # ---------------------------------------------------------------------------
 
 def _make_df() -> pd.DataFrame:
@@ -231,7 +231,7 @@ def _make_df() -> pd.DataFrame:
     ).set_index("id")
 
 
-def test_enrich_references_crossref_match():
+def test_enrich_works_crossref_match():
     df = _make_df()
     mock_client = MagicMock()
     mock_client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
@@ -240,7 +240,7 @@ def test_enrich_references_crossref_match():
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=_CFG)
+        result = enrich_works(df, cfg=_CFG)
 
     assert "doi" in result.columns
     assert result.iloc[0]["doi"] == "10.48550/arxiv.1706.03762"
@@ -250,7 +250,7 @@ def test_enrich_references_crossref_match():
     assert bool(result.iloc[0]["enrichment_year_match"]) is True
 
 
-def test_enrich_references_openalex_fallback():
+def test_enrich_works_openalex_fallback():
     """CrossRef returns no match; OpenAlex fallback succeeds."""
     df = _make_df()
     mock_client = MagicMock()
@@ -263,12 +263,12 @@ def test_enrich_references_openalex_fallback():
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=_CFG)
+        result = enrich_works(df, cfg=_CFG)
 
     assert result.iloc[0]["enrichment_source"] == "openalex"
 
 
-def test_enrich_references_no_match():
+def test_enrich_works_no_match():
     """Both APIs return nothing; original row preserved with doi=None."""
     df = _make_df()
     mock_client = MagicMock()
@@ -278,7 +278,7 @@ def test_enrich_references_no_match():
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=_CFG)
+        result = enrich_works(df, cfg=_CFG)
 
     assert result.iloc[0]["doi"] is None
     assert result.iloc[0]["Title"] == "Attention Is All You Need"
@@ -286,7 +286,7 @@ def test_enrich_references_no_match():
     assert result.iloc[0]["enrichment_miss_reason"] == "no_openalex_candidates"
 
 
-def test_enrich_references_reports_year_mismatch_miss():
+def test_enrich_works_reports_year_mismatch_miss():
     df = _make_df()
     wrong_year = {
         **_CROSSREF_ITEM,
@@ -303,7 +303,7 @@ def test_enrich_references_reports_year_mismatch_miss():
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=cfg)
+        result = enrich_works(df, cfg=cfg)
 
     row = result.iloc[0]
     assert row["enrichment_status"] == "miss"
@@ -314,7 +314,7 @@ def test_enrich_references_reports_year_mismatch_miss():
     assert row["enrichment_candidate_title"] == "Attention Is All You Need"
 
 
-def test_enrich_references_reports_below_threshold_miss():
+def test_enrich_works_reports_below_threshold_miss():
     df = _make_df()
     unrelated = {
         **_CROSSREF_ITEM,
@@ -330,7 +330,7 @@ def test_enrich_references_reports_below_threshold_miss():
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=_CFG)
+        result = enrich_works(df, cfg=_CFG)
 
     row = result.iloc[0]
     assert row["enrichment_status"] == "miss"
@@ -339,7 +339,7 @@ def test_enrich_references_reports_below_threshold_miss():
     assert row["enrichment_title_score"] < _CFG.title_match_threshold
 
 
-def test_enrich_references_reports_http_error_miss():
+def test_enrich_works_reports_http_error_miss():
     df = _make_df()
     mock_client = MagicMock()
     mock_client.__enter__ = lambda s: mock_client
@@ -348,14 +348,14 @@ def test_enrich_references_reports_http_error_miss():
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=_CFG)
+        result = enrich_works(df, cfg=_CFG)
 
     row = result.iloc[0]
     assert row["enrichment_status"] == "miss"
     assert row["enrichment_miss_reason"] == "http_error"
 
 
-def test_enrich_references_uses_cache(tmp_path):
+def test_enrich_works_uses_cache(tmp_path):
     """A cached result is returned without hitting the API."""
     df = _make_df()
     enrichment_dir = tmp_path / "enrichment"
@@ -383,13 +383,13 @@ def test_enrich_references_uses_cache(tmp_path):
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=_CFG, layout=layout)
+        result = enrich_works(df, cfg=_CFG, layout=layout)
 
     mock_client.get.assert_not_called()
     assert result.iloc[0]["doi"] == "cached-doi"
 
 
-def test_enrich_references_backfills_diagnostics_for_legacy_cache(tmp_path):
+def test_enrich_works_backfills_diagnostics_for_legacy_cache(tmp_path):
     """Old cache files without diagnostic columns still produce matched rows."""
     df = _make_df()
     enrichment_dir = tmp_path / "enrichment"
@@ -417,7 +417,7 @@ def test_enrich_references_backfills_diagnostics_for_legacy_cache(tmp_path):
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        result = enrich_references(df, cfg=_CFG, layout=layout)
+        result = enrich_works(df, cfg=_CFG, layout=layout)
 
     assert result.iloc[0]["enrichment_status"] == "matched"
     assert result.iloc[0]["enrichment_miss_reason"] is None
@@ -425,7 +425,7 @@ def test_enrich_references_backfills_diagnostics_for_legacy_cache(tmp_path):
     assert summary["n_matched"] == 1
 
 
-def test_enrich_references_writes_cache(tmp_path):
+def test_enrich_works_writes_cache(tmp_path):
     """A successful API result is persisted to the cache directory."""
     df = _make_df()
 
@@ -440,7 +440,7 @@ def test_enrich_references_writes_cache(tmp_path):
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        enrich_references(df, cfg=_CFG, layout=layout)
+        enrich_works(df, cfg=_CFG, layout=layout)
 
     cache_file = layout.enrichment_dir / "r-vaswani-2017-attention.json"
     assert cache_file.exists()
@@ -450,7 +450,7 @@ def test_enrich_references_writes_cache(tmp_path):
     assert cached["enrichment_title_score"] == 100.0
 
 
-def test_enrich_references_caches_misses(tmp_path):
+def test_enrich_works_caches_misses(tmp_path):
     """No-match rows are cached so reruns do not repeatedly hit the APIs."""
     df = _make_df()
 
@@ -465,7 +465,7 @@ def test_enrich_references_caches_misses(tmp_path):
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        first = enrich_references(df, cfg=_CFG, layout=layout)
+        first = enrich_works(df, cfg=_CFG, layout=layout)
 
     cache_file = layout.enrichment_dir / "r-vaswani-2017-attention.json"
     assert cache_file.exists()
@@ -480,13 +480,13 @@ def test_enrich_references_caches_misses(tmp_path):
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client_2))
-        second = enrich_references(df, cfg=_CFG, layout=layout)
+        second = enrich_works(df, cfg=_CFG, layout=layout)
 
     mock_client_2.get.assert_not_called()
     assert second.iloc[0]["enrichment_status"] == "miss"
 
 
-def test_enrich_references_writes_misses_and_summary(tmp_path):
+def test_enrich_works_writes_misses_and_summary(tmp_path):
     df = _make_df()
 
     from citegraph.io import OutLayout
@@ -500,7 +500,7 @@ def test_enrich_references_writes_misses_and_summary(tmp_path):
 
     with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
         mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
-        enrich_references(df, cfg=_CFG, layout=layout)
+        enrich_works(df, cfg=_CFG, layout=layout)
 
     assert layout.enrichment_misses_csv.exists()
     misses = pd.read_csv(layout.enrichment_misses_csv)
@@ -528,3 +528,71 @@ def test_enrich_config_user_agent_with_email():
 def test_enrich_config_user_agent_no_email():
     cfg = EnrichConfig()
     assert cfg.user_agent == "citegraph/0.1"
+
+
+# ---------------------------------------------------------------------------
+# works-model behaviors: legacy cache fallback + per-ring summary
+# ---------------------------------------------------------------------------
+def test_enrich_one_falls_back_to_legacy_cache_filename(tmp_path):
+    """A w-<slug> lookup must serve a pre-works-model r-<slug> cache file."""
+    from citegraph.enrich import EnrichConfig, _enrich_one
+
+    legacy = {
+        "doi": "10.1/x",
+        "enrichment_source": "crossref",
+        "enrichment_status": "matched",
+        "Title": "Cached",
+    }
+    (tmp_path / "r-ostrom-1990-governing.json").write_text(json.dumps(legacy))
+    row = pd.Series({"Title": "Governing", "Authors": "Ostrom", "Year": 1990})
+
+    out = _enrich_one(
+        "w-ostrom-1990-governing", row, EnrichConfig(), None, tmp_path
+    )
+    assert out["doi"] == "10.1/x"  # served from the legacy r- cache, no network
+
+
+def test_enrichment_summary_breaks_down_by_ring(tmp_path):
+    from citegraph.enrich import enrich_works
+    from citegraph.io import OutLayout
+
+    df = pd.DataFrame(
+        [
+            {
+                "id": "w-doe-2021-core-paper",
+                "ring": 0,
+                "Title": "Core Paper",
+                "Authors": "Doe, J.",
+                "Authors_List": ["Doe, J."],
+                "Journal": "J",
+                "Year": 2021,
+            },
+            {
+                "id": "w-vaswani-2017-attention",
+                "ring": 1,
+                "Title": "Attention Is All You Need",
+                "Authors": "Ashish Vaswani",
+                "Authors_List": ["Ashish Vaswani"],
+                "Journal": "",
+                "Year": 2017,
+            },
+        ]
+    ).set_index("id")
+
+    layout = OutLayout(tmp_path)
+    layout.ensure()
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.return_value = _mock_crossref_response([])
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        enrich_works(df, cfg=_CFG, layout=layout)
+
+    summary = json.loads(layout.enrichment_summary_json.read_text())
+    assert summary["by_ring"] == {
+        "0": {"n": 1, "n_matched": 0},
+        "1": {"n": 1, "n_matched": 0},
+    }

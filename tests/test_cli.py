@@ -282,7 +282,7 @@ def test_references_command_skips_prompt_when_all_cached(tmp_path: Path) -> None
 # authors — stale-enrichment warning
 # ---------------------------------------------------------------------------
 def test_authors_cli_warns_on_unmaterialized_enrichment(tmp_path: Path) -> None:
-    """Enrichment caches without enriched_references.csv get a yellow hint."""
+    """Enrichment caches without enriched_works.csv get a yellow hint."""
     out = tmp_path / "out"
     out.mkdir()
     (out / "works.csv").write_text(
@@ -295,7 +295,7 @@ def test_authors_cli_warns_on_unmaterialized_enrichment(tmp_path: Path) -> None:
     result = runner.invoke(app, ["authors", "--out", str(out)])
     assert result.exit_code == 0, result.output
     plain = unstyle(result.output)
-    assert "enriched_references.csv" in plain
+    assert "enriched_works.csv" in plain
     assert "citegraph enrich" in plain
 
 

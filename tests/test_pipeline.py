@@ -388,7 +388,7 @@ def _out_with_references(tmp_path: Path) -> Path:
 def test_authors_warns_when_enrichment_cache_lacks_csv(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Cached enrichment results without enriched_references.csv must not be
+    """Cached enrichment results without enriched_works.csv must not be
     silently ignored — that state loses every OpenAlex/ORCID signal."""
     out = _out_with_references(tmp_path)
     (out / "enrichment").mkdir()
@@ -397,7 +397,7 @@ def test_authors_warns_when_enrichment_cache_lacks_csv(
     pipeline = Pipeline(pdf_dir=None, out_dir=out, client=_FakeClient())
     with caplog.at_level("WARNING", logger="citegraph.pipeline"):
         pipeline.normalize_authors()
-    assert any("enriched_references.csv" in r.message for r in caplog.records)
+    assert any("enriched_works.csv" in r.message for r in caplog.records)
     assert any("citegraph enrich" in r.message for r in caplog.records)
 
 
@@ -407,14 +407,14 @@ def test_authors_no_enrichment_warning_when_csv_present(
     out = _out_with_references(tmp_path)
     (out / "enrichment").mkdir()
     (out / "enrichment" / "r-1.json").write_text("{}", encoding="utf-8")
-    (out / "enriched_references.csv").write_text(
+    (out / "enriched_works.csv").write_text(
         "id,OpenAlex_Authors\nr-1,[]\n", encoding="utf-8"
     )
 
     pipeline = Pipeline(pdf_dir=None, out_dir=out, client=_FakeClient())
     with caplog.at_level("WARNING", logger="citegraph.pipeline"):
         pipeline.normalize_authors()
-    assert not any("enriched_references.csv is missing" in r.message for r in caplog.records)
+    assert not any("enriched_works.csv is missing" in r.message for r in caplog.records)
 
 
 def test_authors_no_enrichment_warning_without_cache_dir(
@@ -425,7 +425,7 @@ def test_authors_no_enrichment_warning_without_cache_dir(
     pipeline = Pipeline(pdf_dir=None, out_dir=out, client=_FakeClient())
     with caplog.at_level("WARNING", logger="citegraph.pipeline"):
         pipeline.normalize_authors()
-    assert not any("enriched_references.csv is missing" in r.message for r in caplog.records)
+    assert not any("enriched_works.csv is missing" in r.message for r in caplog.records)
 
 
 def test_stage_not_ready_when_upstream_missing(tmp_path: Path) -> None:

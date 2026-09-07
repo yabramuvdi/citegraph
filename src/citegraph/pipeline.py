@@ -483,8 +483,8 @@ class Pipeline:
             graph = pd.read_csv(self.layout.graph_csv)
 
         enriched: pd.DataFrame | None = None
-        if self.layout.enriched_references_csv.exists():
-            enriched = pd.read_csv(self.layout.enriched_references_csv, index_col="id")
+        if self.layout.enriched_works_csv.exists():
+            enriched = pd.read_csv(self.layout.enriched_works_csv, index_col="id")
             # ``OpenAlex_Authors`` round-trips as a string in CSV; turn it
             # back into a list of dicts so the normalizer sees structured
             # data. Bad rows are silently dropped to keep the stage resilient.
@@ -497,7 +497,7 @@ class Pipeline:
             if n_cached:
                 logger.warning(
                     "%d cached enrichment result(s) exist in %s but "
-                    "enriched_references.csv is missing — the enrich stage was "
+                    "enriched_works.csv is missing — the enrich stage was "
                     "interrupted before its final write. Run `citegraph enrich` "
                     "before `citegraph authors` so OpenAlex/ORCID ids anchor "
                     "author clustering.",
@@ -537,16 +537,16 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Stage 5: optional enrichment
     # ------------------------------------------------------------------
-    def maybe_enrich(self, references: pd.DataFrame | None = None) -> pd.DataFrame:
-        if references is None:
-            references = self._load_works()
+    def maybe_enrich(self, works: pd.DataFrame | None = None) -> pd.DataFrame:
+        if works is None:
+            works = self._load_works()
         if not self.enrich:
-            return references
-        from citegraph.enrich import enrich_references
+            return works
+        from citegraph.enrich import enrich_works
 
-        enriched = enrich_references(references, cfg=self.enrich_config, layout=self.layout)
-        enriched.to_csv(self.layout.enriched_references_csv)
-        logger.info("Wrote enriched %s", self.layout.enriched_references_csv)
+        enriched = enrich_works(works, cfg=self.enrich_config, layout=self.layout)
+        enriched.to_csv(self.layout.enriched_works_csv)
+        logger.info("Wrote enriched %s", self.layout.enriched_works_csv)
         return enriched
 
     # ------------------------------------------------------------------

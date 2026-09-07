@@ -5,7 +5,7 @@ stays light. Both APIs are used over plain HTTPS via :mod:`httpx`; CrossRef
 is queried first because it is the canonical DOI registry, with OpenAlex
 as a fallback.
 
-The function :func:`enrich_references` is **opt-in** and is only called by
+The function :func:`enrich_works` is **opt-in** and is only called by
 the :class:`citegraph.Pipeline` when ``enrich=True``.
 """
 
@@ -445,6 +445,12 @@ def _enrich_one(
 
     if enrichment_dir is not None:
         cache_path = enrichment_dir / f"{ref_id}.json"
+        if not cache_path.exists() and ref_id.startswith("w-"):
+            # Pre-works-model corpora cached under the legacy r- prefix;
+            # the slug body is identical, so serve those without re-crawling.
+            legacy = enrichment_dir / f"r-{ref_id[2:]}.json"
+            if legacy.exists():
+                cache_path = legacy
         if cache_path.exists():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             row_dict.update(_with_cache_diagnostics(cached))
@@ -557,22 +563,33 @@ def _write_enrichment_sidecars(
         "sources": {str(k): int(v) for k, v in source_counts.items()},
         "config": asdict(cfg),
     }
+    if "ring" in enriched.columns:
+        summary["by_ring"] = {
+            str(ring): {
+                "n": int(len(group)),
+                "n_matched": int((group.get("enrichment_status") == "matched").sum()),
+            }
+            for ring, group in enriched.groupby("ring")
+        }
     layout.enrichment_summary_json.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def enrich_references(
+def enrich_works(
     df: pd.DataFrame,
     cfg: EnrichConfig | None = None,
     layout: OutLayout | None = None,
 ) -> pd.DataFrame:
     """Add ``doi`` / canonical metadata columns to ``df`` where possible.
 
-    Rows that don't get a confident match are returned with ``doi = None``
-    and the original metadata untouched. Previously resolved rows are loaded
-    from the per-reference cache in ``layout.enrichment_dir`` when provided.
+    ``df`` is any works-shaped frame (``Title``/``Authors``/``Year``
+    columns, indexed by ``id``) — all rings are treated identically. Rows
+    that don't get a confident match are returned with ``doi = None`` and
+    the original metadata untouched. Previously resolved rows are loaded
+    from the per-work cache in ``layout.enrichment_dir`` when provided
+    (legacy ``r-``-prefixed cache files are honored for ``w-`` ids).
     """
     cfg = cfg or EnrichConfig()
     httpx = _try_import_httpx()
@@ -604,7 +621,7 @@ def enrich_references(
     _write_enrichment_sidecars(enriched, cfg, layout)
 
     logger.info(
-        "Enrichment complete: %d/%d references resolved",
+        "Enrichment complete: %d/%d works resolved",
         enriched["doi"].notna().sum() if "doi" in enriched.columns else 0,
         len(enriched),
     )

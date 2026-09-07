@@ -535,7 +535,7 @@ def enrich(
     def _go() -> None:
         df = pipeline.maybe_enrich()
         typer.echo(
-            f"Enriched {len(df)} references → {pipeline.layout.enriched_references_csv}."
+            f"Enriched {len(df)} works → {pipeline.layout.enriched_works_csv}."
         )
 
     _run_stage(_go, next_hint=None)
@@ -559,10 +559,9 @@ def authors(
 ) -> None:
     """Stage 4b: cluster authors across the corpus into canonical records.
 
-    Reads ``references.csv`` and ``papers.csv`` from ``--out`` and writes
-    ``authors.csv`` + ``author_citations.csv``. When
-    ``enriched_references.csv`` is present, OpenAlex / ORCID ids are used
-    as ground truth for identity.
+    Reads ``works.csv`` from ``--out`` and writes ``authors.csv`` +
+    ``author_citations.csv``. When ``enriched_works.csv`` is present,
+    OpenAlex / ORCID ids are used as ground truth for identity.
     """
     _configure_logging(verbose)
     if merge_mode not in {"strict", "loose"}:
@@ -593,12 +592,12 @@ def authors(
 
     def _go() -> None:
         layout = pipeline.layout
-        if not layout.enriched_references_csv.exists():
+        if not layout.enriched_works_csv.exists():
             n_cached = layout.enrichment_cache_count()
             if n_cached:
                 typer.secho(
                     f"{n_cached} cached enrichment result(s) found in "
-                    f"{layout.enrichment_dir} but enriched_references.csv is "
+                    f"{layout.enrichment_dir} but enriched_works.csv is "
                     "missing. Run `citegraph enrich` first so OpenAlex/ORCID "
                     "ids anchor author clustering.",
                     fg=typer.colors.YELLOW,
