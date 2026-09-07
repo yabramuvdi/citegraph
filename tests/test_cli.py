@@ -30,11 +30,20 @@ def test_status_on_empty_out_dir(tmp_path: Path) -> None:
     assert "missing" in result.output
 
 
+def test_status_lists_works_artifacts(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["status", "--out", str(tmp_path / "out")])
+    assert result.exit_code == 0, result.output
+    assert "works.csv" in result.output
+    assert "sources.csv" in result.output
+    assert "citations_raw.csv" in result.output
+    assert "papers.csv" not in result.output
+
+
 def test_status_after_partial_artifacts(tmp_path: Path) -> None:
     out = tmp_path / "out"
     (out / "markdown").mkdir(parents=True)
     (out / "markdown" / "a.md").write_text("# a")
-    (out / "papers.csv").write_text("id,Title\np-x-2020-foo,Foo\n")
+    (out / "sources.csv").write_text("id,Title\nw-x-2020-foo,Foo\n")
 
     result = runner.invoke(app, ["status", "--out", str(out)])
     assert result.exit_code == 0, result.output
@@ -180,33 +189,43 @@ def test_dedup_missing_input_exits_nonzero(tmp_path: Path) -> None:
     assert "Missing" in result.output
 
 
+def _write_sources_csv(out: Path) -> None:
+    (out / "sources.csv").write_text(
+        "id,source_file,Title,Authors_List,Authors,Journal,Year\n"
+        "w-doe-2020-paper,doe.pdf,Doe Paper,\"['Doe, J.']\",\"Doe, J.\",J,2020\n"
+    )
+
+
 def test_dedup_reports_missing_required_columns(tmp_path: Path) -> None:
     out = tmp_path / "out"
     out.mkdir()
+    _write_sources_csv(out)
     raw = out / "citations_raw.csv"
     raw.write_text("Title,Year\nA Paper,2020\n")
 
     result = runner.invoke(app, ["dedup", "--out", str(out)])
 
     assert result.exit_code == 1
-    assert "dedup input is missing required column: citing_id" in result.output
+    assert "citations_raw is missing required column: citing_id" in result.output
 
 
 def test_dedup_happy_path_writes_outputs(tmp_path: Path) -> None:
     out = tmp_path / "out"
     out.mkdir()
+    _write_sources_csv(out)
     raw = out / "citations_raw.csv"
     raw.write_text(
         "Title,Authors_List,Authors,Journal,Year,citing_id\n"
-        "Governing the Commons,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,p-a\n"
-        "Governing the commons.,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,p-b\n"
-        "Tragedy of the Commons,\"['Garrett Hardin']\",\"Hardin, G.\",Science,1968,p-a\n"
+        "Governing the Commons,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,w-doe-2020-paper\n"
+        "Governing the commons.,\"['Elinor Ostrom']\",\"Ostrom, E.\",CUP,1990,w-doe-2020-paper\n"
+        "Tragedy of the Commons,\"['Garrett Hardin']\",\"Hardin, G.\",Science,1968,w-doe-2020-paper\n"
     )
 
     result = runner.invoke(app, ["dedup", "--out", str(out)])
     assert result.exit_code == 0, result.output
-    assert "Deduplicated 3 -> 2 references" in result.output
-    assert (out / "references.csv").exists()
+    # 1 source + 3 citations -> 1 core work + 2 canonical cited works.
+    assert "Canonicalized into 3 works (1 core, 2 edges)" in result.output
+    assert (out / "works.csv").exists()
     assert (out / "citation_graph.csv").exists()
 
 

@@ -22,9 +22,9 @@ import typer
 from rich.logging import RichHandler
 
 from citegraph.authors import AuthorClusterConfig
-from citegraph.dedup import DedupConfig, dedup_references
+from citegraph.dedup import DedupConfig
 from citegraph.enrich import EnrichConfig
-from citegraph.io import OutLayout, require_columns
+from citegraph.io import OutLayout
 from citegraph.pdf_to_markdown import OCRMode
 from citegraph.pipeline import Pipeline, StageNotReadyError
 
@@ -450,46 +450,33 @@ def dedup(
     year_window: int = typer.Option(1, "--year-window"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Stage 4: deduplicate references and build the citation graph."""
+    """Stage 4: canonicalize sources + citations into works and the citation graph."""
     _configure_logging(verbose)
     layout = OutLayout(out)
     layout.ensure()
     cfg = _dedup_config(threshold, title_weight, authors_weight, journal_weight, year_window)
 
-    csv_path = citations_raw_csv or layout.citations_raw_csv
-    if not csv_path.exists():
-        typer.secho(
-            f"Missing {csv_path}. Run `citegraph references --out {out}` first.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    citations_raw: pd.DataFrame | None = None
+    if citations_raw_csv is not None:
+        citations_raw = pd.read_csv(citations_raw_csv)
 
-    raw_refs = pd.read_csv(csv_path)
+    pipeline = Pipeline(pdf_dir=None, out_dir=out, dedup_config=cfg)
     try:
-        require_columns(raw_refs, ["Title", "Year", "citing_id"], artifact="dedup input")
+        works, graph = pipeline.deduplicate(citations_raw=citations_raw)
+    except StageNotReadyError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from e
     except ValueError as e:
         typer.secho(str(e), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from e
-    canonical, mapping = dedup_references(raw_refs, cfg)
-    graph = (
-        pd.DataFrame(
-            {
-                "citing_id": raw_refs["citing_id"].values,
-                "cited_id": mapping.values,
-            }
-        )
-        .drop_duplicates()
-        .reset_index(drop=True)
-    )
-    canonical.to_csv(layout.references_csv)
-    graph.to_csv(layout.graph_csv, index=False)
+
+    n_core = int((works["ring"] == 0).sum())
     typer.echo(
-        f"Deduplicated {len(raw_refs)} -> {len(canonical)} references "
-        f"({len(graph)} edges). Wrote {layout.references_csv} and {layout.graph_csv}."
+        f"Canonicalized into {len(works)} works ({n_core} core, "
+        f"{len(graph)} edges). Wrote {layout.works_csv} and {layout.graph_csv}."
     )
     _next_step_hint(
-        f"Inspect references.csv. Optionally `citegraph enrich --out {out}` for DOI lookup."
+        f"Inspect works.csv. Optionally `citegraph enrich --out {out}` for DOI lookup."
     )
 
 
@@ -735,10 +722,10 @@ def status(
     typer.echo(f"  markdown/              {md_count} files")
     typer.echo(f"  metadata/              {meta_count} cached")
     typer.echo(f"  references/            {ref_count} cached")
-    typer.echo(f"  papers.csv             {_rows(layout.papers_csv)}")
-    typer.echo(f"  references_raw.csv     {_rows(layout.references_raw_csv)}")
-    typer.echo(f"  references.csv         {_rows(layout.references_csv)}")
-    typer.echo(f"  enriched_references.csv {_rows(layout.enriched_references_csv)}")
+    typer.echo(f"  sources.csv            {_rows(layout.sources_csv)}")
+    typer.echo(f"  citations_raw.csv      {_rows(layout.citations_raw_csv)}")
+    typer.echo(f"  works.csv              {_rows(layout.works_csv)}")
+    typer.echo(f"  enriched_works.csv     {_rows(layout.enriched_works_csv)}")
     typer.echo(f"  citation_graph.csv     {_rows(layout.graph_csv)}")
     typer.echo(f"  authors.csv            {_rows(layout.authors_csv)}")
     typer.echo(f"  author_citations.csv   {_rows(layout.author_citations_csv)}")
