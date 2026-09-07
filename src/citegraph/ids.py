@@ -72,3 +72,16 @@ def make_reference_id(
 ) -> str:
     """Like :func:`make_paper_id` but with an ``r-`` prefix for references."""
     return make_paper_id(authors, year, title, prefix="r")
+
+
+def make_work_id(
+    authors: str | list[str],
+    year: int | str | None,
+    title: str,
+) -> str:
+    """Role-free work id (``w-`` prefix).
+
+    A work's role (core source vs cited stub) changes over its life;
+    its identity must not, so the prefix carries no role information.
+    """
+    return make_paper_id(authors, year, title, prefix="w")
