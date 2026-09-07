@@ -1230,10 +1230,18 @@ def _build_surname_lexicon(
     for items in enrich_map.values():
         for item in items:
             family = item.get("family")
-            if isinstance(family, str):
-                family_norm = _norm_surname(family)
-                if " " in family_norm:
-                    lexicon.add(family_norm)
+            if not isinstance(family, str):
+                continue
+            family_norm = _norm_surname(family)
+            if " " not in family_norm:
+                continue
+            # CrossRef sometimes stuffs the entire name into `family`
+            # (with an empty `given`); a family that swallows the whole
+            # display name attests nothing about the surname boundary.
+            display = item.get("display_name")
+            if isinstance(display, str) and _norm_surname(display) == family_norm:
+                continue
+            lexicon.add(family_norm)
     return frozenset(lexicon)
 
 

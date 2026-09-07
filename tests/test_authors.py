@@ -756,6 +756,33 @@ def test_enrichment_family_feeds_surname_lexicon():
     assert authors_df.iloc[0]["surname_norm"] == "guerra forero"
 
 
+def test_full_name_stuffed_family_does_not_poison_lexicon():
+    """CrossRef sometimes stuffs the entire name into 'family' (given empty).
+
+    A family equal to the whole display name attests nothing about where
+    the surname boundary sits, so it must not teach the lexicon a fake
+    compound surname (real-corpus case: 'Juan Camilo Cárdenas').
+    """
+    refs = _refs([
+        {"id": "r-1", "Title": "T1",
+         "Authors_List": ["Juan Camilo Cárdenas"], "Year": 2010},
+    ])
+    enriched = pd.DataFrame(
+        [
+            {"id": "r-1",
+             "OpenAlex_Authors": [{"display_name": "Juan Camilo Cárdenas",
+                                   "family": "Juan Camilo Cárdenas",
+                                   "given": None,
+                                   "openalex_id": None, "orcid": None}]},
+        ]
+    ).set_index("id")
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
+    assert len(authors_df) == 1
+    row = authors_df.iloc[0]
+    assert row["surname_norm"] == "cardenas"
+    assert row["display_name"] == "Juan Camilo Cárdenas"
+
+
 def test_typo_variant_full_names_merge():
     """A one-letter typo ('Camillo') must not fork an anchor and strand initials."""
     refs = _refs([
