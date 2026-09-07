@@ -474,19 +474,17 @@ def _tokenize_given(given_str: str) -> list[str]:
 
 @dataclass
 class AuthorOccurrence:
-    """One concrete appearance of an author in the corpus.
+    """One concrete appearance of an author on a canonical work.
 
     The clustering output is grouped by canonical author id; each
-    occurrence retains enough back-pointers to reconstruct the
-    citation edge ("author X cited in reference R by paper P").
+    occurrence keeps the work id so callers can join back onto
+    ``works.csv`` (for rings) and ``citation_graph.csv`` (for citers).
     """
 
     parsed: ParsedAuthor
-    record_id: str            # 'r-…' for a reference, 'p-…' for a source paper
-    record_kind: str          # 'reference' or 'paper'
+    record_id: str            # 'w-…' canonical work id
     position: int             # 0-based index in the author list
     co_author_keys: tuple[str, ...] = ()  # surname_norm of the other authors on the same record
-    citing_paper_id: str | None = None    # only meaningful when record_kind=='reference'
     openalex_id: str | None = None
     orcid: str | None = None
 
@@ -972,9 +970,8 @@ def _bridge_compound_surnames(
 
 def normalize_authors(
     *,
-    references: pd.DataFrame,
-    papers: pd.DataFrame | None = None,
-    enriched_references: pd.DataFrame | None = None,
+    works: pd.DataFrame,
+    enriched_works: pd.DataFrame | None = None,
     citation_edges: pd.DataFrame | None = None,
     cfg: AuthorClusterConfig | None = None,
     aliases: dict[str, str] | None = None,
@@ -983,24 +980,22 @@ def normalize_authors(
 
     Parameters
     ----------
-    references:
-        Deduplicated references DataFrame (the output of
-        :func:`citegraph.dedup.dedup_references`). Must be indexed by ``id``
-        and contain an ``Authors_List`` column (or ``Authors``).
-    papers:
-        Optional source-papers DataFrame. When provided, the source-paper
-        authors are clustered alongside the reference authors so the
-        result names every person in the corpus.
-    enriched_references:
-        Optional output of :func:`citegraph.enrich.enrich_references`.
+    works:
+        Canonical works DataFrame (the output of
+        :func:`citegraph.dedup.canonicalize_works`). Must be indexed by
+        ``id`` and contain an ``Authors_List`` column (or ``Authors``).
+        A ``ring`` column, when present, feeds the ``n_core_works``
+        metric; frames without it are accepted (the metric reads 0).
+    enriched_works:
+        Optional output of :func:`citegraph.enrich.enrich_works`.
         If present and contains the ``OpenAlex_Authors`` column (a list
         of ``{display_name, openalex_id, orcid}`` dicts per row), those
-        identifiers are attached to the matching reference authors so
-        OpenAlex acts as ground truth.
+        identifiers are attached to the matching work authors so
+        OpenAlex acts as ground truth — for core works too.
     citation_edges:
         Optional citation graph with ``citing_id`` and ``cited_id`` columns.
-        When provided, ``authors.csv`` counts distinct source papers that cite
-        references by each canonical author.
+        When provided, ``authors.csv`` counts citations received by each
+        canonical author's works and the distinct works citing them.
     cfg:
         Tunable :class:`AuthorClusterConfig`.
     aliases:
@@ -1014,9 +1009,9 @@ def normalize_authors(
     authors_df:
         One row per canonical author, indexed by ``id``.
     citations_df:
-        Edge table linking each canonical author to every record (paper
-        or reference) they appear on, with the citing-paper id when the
-        record is a reference.
+        Edge table linking each canonical author to every work they
+        appear on (``author_id``, ``record_id``, ``position``,
+        ``raw_author``).
     review:
         List of dicts describing low-confidence clusters that the user
         may want to inspect.
@@ -1025,9 +1020,8 @@ def normalize_authors(
     aliases = aliases or {}
 
     occurrences = _collect_occurrences(
-        references=references,
-        papers=papers,
-        enriched_references=enriched_references,
+        works=works,
+        enriched_works=enriched_works,
     )
 
     # Block by surname_norm and cluster within each block.
@@ -1118,7 +1112,9 @@ def normalize_authors(
     if aliases:
         clusters = _apply_aliases(clusters, aliases)
 
-    authors_df = _clusters_to_authors_df(clusters, citation_edges=citation_edges)
+    authors_df = _clusters_to_authors_df(
+        clusters, works=works, citation_edges=citation_edges
+    )
     citations_df = _clusters_to_citations_df(clusters)
     review = [
         {
@@ -1144,11 +1140,10 @@ def normalize_authors(
 
 def _collect_occurrences(
     *,
-    references: pd.DataFrame,
-    papers: pd.DataFrame | None,
-    enriched_references: pd.DataFrame | None,
+    works: pd.DataFrame,
+    enriched_works: pd.DataFrame | None,
 ) -> list[AuthorOccurrence]:
-    """Walk references + papers and emit one AuthorOccurrence per author.
+    """Walk the works table and emit one AuthorOccurrence per author.
 
     Runs in two passes: the first parse of every author string builds a
     corpus surname lexicon from trusted forms (comma forms, hyphenated
@@ -1159,37 +1154,29 @@ def _collect_occurrences(
     """
     occurrences: list[AuthorOccurrence] = []
 
-    # Build a per-reference enrichment map: ref_id -> [(display, oa_id, orcid), ...]
+    # Build a per-work enrichment map: work_id -> [(display, oa_id, orcid), ...]
     enrich_map: dict[str, list[dict]] = {}
-    if enriched_references is not None and not enriched_references.empty:
-        if "OpenAlex_Authors" in enriched_references.columns:
-            for ref_id, row in enriched_references.iterrows():
+    if enriched_works is not None and not enriched_works.empty:
+        if "OpenAlex_Authors" in enriched_works.columns:
+            for work_id, row in enriched_works.iterrows():
                 authors = row.get("OpenAlex_Authors")
                 if isinstance(authors, list):
-                    enrich_map[str(ref_id)] = authors
+                    enrich_map[str(work_id)] = authors
 
-    ref_rows: list[tuple[str, list[str]]] = []
-    if not references.empty:
-        for ref_id, row in references.iterrows():
-            ref_rows.append((str(ref_id), _row_authors(row)))
-
-    paper_rows: list[tuple[str, list[str]]] = []
-    if papers is not None and not papers.empty:
-        for _idx, row in papers.iterrows():
-            paper_id = row.get("id") if "id" in papers.columns else None
-            if not paper_id:
-                continue
-            paper_rows.append((str(paper_id), _row_authors(row)))
+    work_rows: list[tuple[str, list[str]]] = []
+    if not works.empty:
+        for work_id, row in works.iterrows():
+            work_rows.append((str(work_id), _row_authors(row)))
 
     lexicon = _build_surname_lexicon(
-        (a for _rid, authors_list in [*ref_rows, *paper_rows] for a in authors_list),
+        (a for _wid, authors_list in work_rows for a in authors_list),
         enrich_map,
     )
 
-    for ref_id, authors_list in ref_rows:
+    for work_id, authors_list in work_rows:
         parsed = [parse_author(a, known_surnames=lexicon) for a in authors_list]
         co_keys = tuple(p.surname_norm for p in parsed if p is not None)
-        enrich_authors = enrich_map.get(ref_id, [])
+        enrich_authors = enrich_map.get(work_id, [])
         for pos, p in enumerate(parsed):
             if p is None:
                 continue
@@ -1200,32 +1187,11 @@ def _collect_occurrences(
             occurrences.append(
                 AuthorOccurrence(
                     parsed=p,
-                    record_id=ref_id,
-                    record_kind="reference",
+                    record_id=work_id,
                     position=pos,
                     co_author_keys=tuple(k for i, k in enumerate(co_keys) if i != pos and k),
-                    citing_paper_id=None,
                     openalex_id=oa_id,
                     orcid=orcid,
-                )
-            )
-
-    for paper_id, authors_list in paper_rows:
-        parsed = [parse_author(a, known_surnames=lexicon) for a in authors_list]
-        co_keys = tuple(p.surname_norm for p in parsed if p is not None)
-        for pos, p in enumerate(parsed):
-            if p is None:
-                continue
-            occurrences.append(
-                AuthorOccurrence(
-                    parsed=p,
-                    record_id=paper_id,
-                    record_kind="paper",
-                    position=pos,
-                    co_author_keys=tuple(k for i, k in enumerate(co_keys) if i != pos and k),
-                    citing_paper_id=paper_id,
-                    openalex_id=None,
-                    orcid=None,
                 )
             )
 
@@ -1452,37 +1418,43 @@ def _apply_aliases(
     return list(merged.values())
 
 
-def _reference_citers(citation_edges: pd.DataFrame | None) -> dict[str, set[str]]:
-    if citation_edges is None or citation_edges.empty:
-        return {}
-    require_columns(
-        citation_edges,
-        ["citing_id", "cited_id"],
-        artifact="citation graph",
-    )
-    out: dict[str, set[str]] = defaultdict(set)
-    for _, row in citation_edges.iterrows():
-        cited_id = row.get("cited_id")
-        citing_id = row.get("citing_id")
-        if cited_id and citing_id:
-            out[str(cited_id)].add(str(citing_id))
-    return out
-
-
 def _clusters_to_authors_df(
     clusters: list[AuthorCluster],
     *,
+    works: pd.DataFrame,
     citation_edges: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Render clusters as the on-disk ``authors.csv`` shape."""
-    ref_citers = _reference_citers(citation_edges)
+    """Render clusters as the on-disk ``authors.csv`` shape.
+
+    Metrics per canonical author:
+
+    - ``n_works`` — distinct canonical works the author appears on,
+    - ``n_core_works`` — of those, how many are ring 0 (the user's corpus),
+    - ``n_citations_received`` — citation edges into any of their works,
+    - ``n_distinct_citing_works`` — distinct works doing that citing.
+    """
+    ring_by_work = works["ring"].to_dict() if "ring" in works.columns else {}
+    in_edges: dict[str, set[str]] = defaultdict(set)
+    n_in_edges: dict[str, int] = defaultdict(int)
+    if citation_edges is not None and not citation_edges.empty:
+        require_columns(
+            citation_edges,
+            ["citing_id", "cited_id"],
+            artifact="citation graph",
+        )
+        for _, row in citation_edges.iterrows():
+            cited_id = row.get("cited_id")
+            citing_id = row.get("citing_id")
+            if cited_id and citing_id:
+                in_edges[str(cited_id)].add(str(citing_id))
+                n_in_edges[str(cited_id)] += 1
+
     rows = []
     for c in clusters:
-        citing_papers: set[str] = set()
-        for o in c.occurrences:
-            if o.record_kind == "reference":
-                citing_papers.update(ref_citers.get(o.record_id, set()))
-        n_refs = sum(1 for o in c.occurrences if o.record_kind == "reference")
+        work_ids = {o.record_id for o in c.occurrences}
+        citing: set[str] = set()
+        for w in work_ids:
+            citing |= in_edges.get(w, set())
         rows.append(
             {
                 "id": c.id,
@@ -1493,15 +1465,22 @@ def _clusters_to_authors_df(
                 "initials": c.initials,
                 "openalex_id": c.openalex_id,
                 "orcid": c.orcid,
-                "n_occurrences": c.n_occurrences,
-                "n_reference_citations": n_refs,
-                "n_distinct_papers_citing": len(citing_papers),
+                "n_works": len(work_ids),
+                "n_core_works": sum(1 for w in work_ids if ring_by_work.get(w) == 0),
+                "n_citations_received": sum(n_in_edges.get(w, 0) for w in work_ids),
+                "n_distinct_citing_works": len(citing),
             }
         )
     df = pd.DataFrame(rows)
     if df.empty:
         return df.set_index(pd.Index([], name="id"))
-    return df.set_index("id").sort_values("n_reference_citations", ascending=False)
+    # Stable two-key sort: without edges, authorship volume still yields a
+    # deterministic, meaningful order.
+    return df.set_index("id").sort_values(
+        ["n_citations_received", "n_works"],
+        ascending=[False, False],
+        kind="mergesort",
+    )
 
 
 def _clusters_to_citations_df(clusters: list[AuthorCluster]) -> pd.DataFrame:
@@ -1512,10 +1491,8 @@ def _clusters_to_citations_df(clusters: list[AuthorCluster]) -> pd.DataFrame:
             rows.append(
                 {
                     "author_id": c.id,
-                    "record_kind": o.record_kind,
                     "record_id": o.record_id,
                     "position": o.position,
-                    "citing_paper_id": o.citing_paper_id or "",
                     "raw_author": o.parsed.raw,
                 }
             )

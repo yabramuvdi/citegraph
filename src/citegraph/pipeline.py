@@ -456,29 +456,23 @@ class Pipeline:
     # ------------------------------------------------------------------
     def normalize_authors(
         self,
-        references: pd.DataFrame | None = None,
-        papers: pd.DataFrame | None = None,
+        works: pd.DataFrame | None = None,
         graph: pd.DataFrame | None = None,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Cluster every author across the corpus into canonical records.
 
-        Runs after :meth:`deduplicate`. Reads ``references.csv`` and
-        ``papers.csv`` if no arguments are passed. When
-        ``enriched_references.csv`` exists, its OpenAlex / ORCID ids are
-        attached to the reference authors so that enrichment acts as
-        ground truth for identity.
+        Runs after :meth:`deduplicate`. Reads ``works.csv`` if no
+        arguments are passed. When ``enriched_works.csv`` exists, its
+        OpenAlex / ORCID ids are attached to the work authors — core
+        works included — so that enrichment acts as ground truth for
+        identity.
 
         Hand-curated overrides are loaded from ``author_aliases.csv`` if
         present (two-column ``cluster_id,canonical_id``) and applied
         after the algorithmic clustering.
         """
-        if references is None:
-            references = self._load_works()
-        if papers is None:
-            try:
-                papers = self._load_sources()
-            except StageNotReadyError:
-                papers = None  # reference-only mode is fine
+        if works is None:
+            works = self._load_works()
         if graph is None and self.layout.graph_csv.exists():
             graph = pd.read_csv(self.layout.graph_csv)
 
@@ -508,9 +502,8 @@ class Pipeline:
         aliases = load_aliases(self.layout.author_aliases_csv)
 
         authors_df, citations_df, review = normalize_authors(
-            references=references,
-            papers=papers,
-            enriched_references=enriched,
+            works=works,
+            enriched_works=enriched,
             citation_edges=graph,
             cfg=self.author_config,
             aliases=aliases,
@@ -577,7 +570,7 @@ class Pipeline:
         references, graph = self.deduplicate(papers, raw_refs)
         references = self.maybe_enrich(references)
         authors_df, citations_df = self.normalize_authors(
-            references=references, papers=papers, graph=graph
+            works=references, graph=graph
         )
 
         run_summary = {

@@ -137,12 +137,12 @@ def test_normalize_merges_initial_into_full_name_when_unambiguous():
         {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, A."],    "Year": 2012},
         {"id": "r-3", "Title": "T3", "Authors_List": ["A. Diamond"],     "Year": 2014},
     ])
-    authors_df, citations_df, _ = normalize_authors(references=refs)
+    authors_df, citations_df, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1, "all three records describe the same person"
     only = authors_df.iloc[0]
     assert only["surname"].lower() == "diamond"
     assert "adele" in only["display_name"].lower()
-    assert int(only["n_reference_citations"]) == 3
+    assert int(only["n_works"]) == 3
 
 
 def test_normalize_keeps_distinct_full_first_names_apart():
@@ -151,7 +151,7 @@ def test_normalize_keeps_distinct_full_first_names_apart():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Diamond, Adele"],  "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, Andrew"], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 2
 
 
@@ -162,7 +162,7 @@ def test_normalize_initial_only_with_ambiguous_full_names_is_held_aside():
         {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, Andrew"], "Year": 2012},
         {"id": "r-3", "Title": "T3", "Authors_List": ["Diamond, A."],     "Year": 2014},
     ])
-    authors_df, _, review = normalize_authors(references=refs)
+    authors_df, _, review = normalize_authors(works=refs)
     # Adele, Andrew, and the unresolved A. → 3 clusters in strict mode.
     assert len(authors_df) == 3
 
@@ -180,7 +180,7 @@ def test_normalize_coauthor_signal_resolves_ambiguity():
         {"id": "r-3", "Title": "T3",
          "Authors_List": ["Diamond, A.", "Posner, M."], "Year": 2014},
     ])
-    authors_df, citations_df, _ = normalize_authors(references=refs)
+    authors_df, citations_df, _ = normalize_authors(works=refs)
     # The Adele cluster should have absorbed the ambiguous 'A.' record.
     adele = authors_df[authors_df["display_name"].str.contains("Adele", case=False)]
     assert len(adele) == 1
@@ -195,7 +195,7 @@ def test_normalize_keeps_conflicting_middle_initials_apart():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Smith, J. E."], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Smith, J. F."], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 2
 
 
@@ -204,7 +204,7 @@ def test_normalize_diacritic_insensitive():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Cárdenas, Juan-Camilo"], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Cardenas, J. C."],       "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
 
 
@@ -215,7 +215,7 @@ def test_normalize_loose_mode_collapses_aggressively():
         {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, Andrew"], "Year": 2012},
     ])
     authors_df, _, _ = normalize_authors(
-        references=refs, cfg=AuthorClusterConfig(merge_mode="loose"),
+        works=refs, cfg=AuthorClusterConfig(merge_mode="loose"),
     )
     assert len(authors_df) == 1
 
@@ -243,7 +243,7 @@ def test_openalex_id_merges_records_that_look_different():
                                    "orcid": None}]},
         ]
     ).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
     assert len(authors_df) == 1
     assert authors_df.iloc[0]["openalex_id"] == "A5012345678"
 
@@ -285,14 +285,14 @@ def test_openalex_full_name_anchor_absorbs_unidentified_initials():
     ).set_index("id")
 
     authors_df, citations_df, _ = normalize_authors(
-        references=refs,
-        enriched_references=enriched,
+        works=refs,
+        enriched_works=enriched,
     )
 
     assert len(authors_df) == 1
     assert authors_df.iloc[0]["openalex_id"] == "A5042502300"
     assert authors_df.iloc[0]["orcid"] == "0000-0003-0005-7595"
-    assert int(authors_df.iloc[0]["n_reference_citations"]) == 3
+    assert int(authors_df.iloc[0]["n_works"]) == 3
     assert set(citations_df["record_id"]) == {"r-1", "r-2", "r-3"}
 
 
@@ -312,7 +312,7 @@ def test_different_openalex_ids_split_identical_names():
                                    "openalex_id": "A2", "orcid": None}]},
         ]
     ).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
     assert len(authors_df) == 2
     assert set(authors_df["openalex_id"]) == {"A1", "A2"}
 
@@ -328,12 +328,12 @@ def test_aliases_force_merge_two_clusters():
         {"id": "r-2", "Title": "T2", "Authors_List": ["Smith, Jane"], "Year": 2012},
     ])
     # First run: two separate clusters.
-    pre, _, _ = normalize_authors(references=refs)
+    pre, _, _ = normalize_authors(works=refs)
     assert len(pre) == 2
     ids = list(pre.index)
     # Force merge with an alias: collapse the second cluster into the first.
     aliases = {ids[1]: ids[0]}
-    post, _, _ = normalize_authors(references=refs, aliases=aliases)
+    post, _, _ = normalize_authors(works=refs, aliases=aliases)
     assert len(post) == 1
 
 
@@ -354,20 +354,19 @@ def test_load_aliases_missing_path_returns_empty(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_includes_source_paper_authors():
-    """When ``papers`` is passed, source-paper authors are clustered alongside refs."""
-    refs = _refs([
-        {"id": "r-1", "Title": "T1", "Authors_List": ["Diamond, Adele"], "Year": 2010},
-    ])
-    papers = pd.DataFrame([
-        {"id": "p-1", "Title": "P1", "Authors_List": ["Diamond, A."],
-         "Year": 2020, "Journal": "J", "Authors": "Diamond, A.", "source_file": "p1.md"},
-    ])
-    authors_df, citations_df, _ = normalize_authors(references=refs, papers=papers)
-    # Same person — should merge across papers and references.
+def test_normalize_spans_core_and_cited_works():
+    """Core (ring-0) and cited (ring-1) appearances cluster into one person."""
+    works = pd.DataFrame([
+        {"id": "w-1", "ring": 1, "source_file": "", "Title": "T1",
+         "Authors_List": ["Diamond, Adele"], "Year": 2010},
+        {"id": "w-2", "ring": 0, "source_file": "p1.pdf", "Title": "P1",
+         "Authors_List": ["Diamond, A."], "Year": 2020, "Journal": "J"},
+    ]).set_index("id")
+    authors_df, citations_df, _ = normalize_authors(works=works)
+    # Same person — should merge across the corpus and its citations.
     assert len(authors_df) == 1
-    kinds = set(citations_df["record_kind"])
-    assert kinds == {"reference", "paper"}
+    assert set(citations_df["record_id"]) == {"w-1", "w-2"}
+    assert int(authors_df.iloc[0]["n_core_works"]) == 1
 
 
 def test_normalize_counts_distinct_citing_papers_from_edges():
@@ -383,11 +382,11 @@ def test_normalize_counts_distinct_citing_papers_from_edges():
         ]
     )
 
-    authors_df, _, _ = normalize_authors(references=refs, citation_edges=edges)
+    authors_df, _, _ = normalize_authors(works=refs, citation_edges=edges)
 
     ostrom = authors_df.iloc[0]
-    assert int(ostrom["n_reference_citations"]) == 2
-    assert int(ostrom["n_distinct_papers_citing"]) == 2
+    assert int(ostrom["n_works"]) == 2
+    assert int(ostrom["n_distinct_citing_works"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +399,8 @@ def test_cluster_ids_are_stable_across_runs():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Diamond, Adele"], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, A."],    "Year": 2012},
     ])
-    a1, _, _ = normalize_authors(references=refs)
-    a2, _, _ = normalize_authors(references=refs)
+    a1, _, _ = normalize_authors(works=refs)
+    a2, _, _ = normalize_authors(works=refs)
     assert list(a1.index) == list(a2.index)
     assert all(cid.startswith("a-") for cid in a1.index)
 
@@ -433,7 +432,7 @@ def test_normalize_authors_no_authors_list_no_single_letter_clusters():
         {"id": "r-2", "Title": "T2", "Year": 2011,
          "Authors": "Smith, John, García, Ana"},
     ]).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert not authors_df.empty
     assert (authors_df["surname_norm"].str.len() > 1).all(), authors_df
     assert set(authors_df["surname_norm"]) == {"smith", "garcia"}
@@ -445,7 +444,7 @@ def test_normalize_authors_handles_semicolon_joined_authors():
         {"id": "r-1", "Title": "T1", "Year": 2010,
          "Authors": "Smith, J.; García, A."},
     ]).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert set(authors_df["surname_norm"]) == {"smith", "garcia"}
 
 
@@ -455,7 +454,7 @@ def test_normalize_authors_handles_comma_joined_full_given_names():
         {"id": "r-1", "Title": "T1", "Year": 2010,
          "Authors": "Smith, John, García, Ana"},
     ]).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert set(authors_df["surname_norm"]) == {"smith", "garcia"}
 
 
@@ -465,7 +464,7 @@ def test_normalize_authors_does_not_pair_first_last_chunks():
         {"id": "r-1", "Title": "T1", "Year": 2010,
          "Authors": "Bochet, Oliver, Talbot Page, Louis Putterman"},
     ]).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert set(authors_df["surname_norm"]) == {"bochet", "page", "putterman"}
 
 
@@ -552,7 +551,7 @@ def test_normalize_merges_hyphenated_and_spaced_surnames():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Casas-Casas, Andrés"], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Casas Casas, Andrés"], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
 
 
@@ -574,9 +573,9 @@ def test_hyphenated_and_spaced_given_names_share_one_cluster():
         {"id": "r-3", "Title": "T3", "Authors_List": ["Juan-Camilo Cardenas"], "Year": 2014},
         {"id": "r-4", "Title": "T4", "Authors_List": ["Cardenas, J.C."], "Year": 2016},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
-    assert int(authors_df.iloc[0]["n_reference_citations"]) == 4
+    assert int(authors_df.iloc[0]["n_works"]) == 4
 
 
 def test_known_surname_resplits_no_comma_name():
@@ -592,7 +591,7 @@ def test_comma_form_corroborates_compound_surname_end_to_end():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Guerra Forero, J.A."], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Jose Alberto Guerra Forero"], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
     only = authors_df.iloc[0]
     assert only["surname_norm"] == "guerra forero"
@@ -605,7 +604,7 @@ def test_hyphenated_surname_attests_spaced_compound():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Sandra Polania-Reyes"], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Sandra Polanía Reyes"], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
     assert authors_df.iloc[0]["surname_norm"] == "polania reyes"
 
@@ -615,7 +614,7 @@ def test_unattested_compound_stays_conservative_but_flagged():
     refs = _refs([
         {"id": "r-1", "Title": "T1", "Authors_List": ["Jose Alberto Guerra Forero"], "Year": 2010},
     ])
-    authors_df, _, review = normalize_authors(references=refs)
+    authors_df, _, review = normalize_authors(works=refs)
     assert len(authors_df) == 1
     only = authors_df.iloc[0]
     assert only["surname_norm"] == "forero"  # conservative: no evidence invented
@@ -629,7 +628,7 @@ def test_bare_lexicon_word_does_not_resplit_middle_names():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Knowles, B."], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Caitlin Knowles Myers"], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert set(authors_df["surname_norm"]) == {"knowles", "myers"}
 
 
@@ -639,7 +638,7 @@ def test_maynard_smith_comma_form_corroborates():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Maynard Smith, J."], "Year": 1982},
         {"id": "r-2", "Title": "T2", "Authors_List": ["John Maynard Smith"], "Year": 1974},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
     assert authors_df.iloc[0]["surname_norm"] == "maynard smith"
 
@@ -652,7 +651,7 @@ def test_incompatible_second_initial_not_absorbed():
         {"id": "r-2", "Title": "T2",
          "Authors_List": ["Cardenas, J.P.", "Ostrom, E."], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     cardenas = authors_df[authors_df["surname_norm"] == "cardenas"]
     assert len(cardenas) == 2
 
@@ -669,7 +668,7 @@ def test_identical_raw_strings_cluster_together():
         {"id": "r-4", "Title": "T4",
          "Authors_List": ["Diamond, A."], "Year": 2013},
     ])
-    authors_df, citations_df, _ = normalize_authors(references=refs)
+    authors_df, citations_df, _ = normalize_authors(works=refs)
     adele = authors_df[authors_df["display_name"].str.contains("Adele", case=False)]
     aid = adele.index[0]
     adele_records = set(citations_df[citations_df["author_id"] == aid]["record_id"])
@@ -680,7 +679,7 @@ def test_display_keeps_full_given_sequence():
     refs = _refs([
         {"id": "r-1", "Title": "T1", "Authors_List": ["Ceballos, Jorge Luis"], "Year": 2010},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert authors_df.iloc[0]["display_name"] == "Jorge Luis Ceballos"
 
 
@@ -689,7 +688,7 @@ def test_corporate_cluster_flagged_in_review():
         {"id": "r-1", "Title": "T1", "Authors_List": ["The World Bank"], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["The World Bank"], "Year": 2012},
     ])
-    authors_df, _, review = normalize_authors(references=refs)
+    authors_df, _, review = normalize_authors(works=refs)
     assert len(authors_df) == 1
     assert authors_df.iloc[0]["display_name"] == "The World Bank"
     assert any("corporate" in (r["reason"] or "") for r in review)
@@ -701,7 +700,7 @@ def test_bridge_single_surname_into_compound_with_exact_given():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Polanía Reyes, Sandra"], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Reyes, Sandra"], "Year": 2012},
     ])
-    authors_df, citations_df, _ = normalize_authors(references=refs)
+    authors_df, citations_df, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
     only = authors_df.iloc[0]
     assert only["surname_norm"] == "polania reyes"
@@ -714,7 +713,7 @@ def test_initials_only_never_bridge_into_compound():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Polanía Reyes, Sandra"], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Reyes, S."], "Year": 2014},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 2
 
 
@@ -734,7 +733,7 @@ def test_same_external_id_merges_across_surname_blocks():
                                    "openalex_id": "A77", "orcid": None}]},
         ]
     ).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
     assert len(authors_df) == 1
 
 
@@ -752,7 +751,7 @@ def test_enrichment_family_feeds_surname_lexicon():
                                    "openalex_id": None, "orcid": None}]},
         ]
     ).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
     assert len(authors_df) == 1
     assert authors_df.iloc[0]["surname_norm"] == "guerra forero"
 
@@ -765,7 +764,7 @@ def test_typo_variant_full_names_merge():
         {"id": "r-3", "Title": "T3", "Authors_List": ["Cardenas, Juan Camillo"], "Year": 2012},
         {"id": "r-4", "Title": "T4", "Authors_List": ["Cardenas, J.C."], "Year": 2014},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 1
     # The most frequent spelling wins the display, never the typo.
     assert authors_df.iloc[0]["display_name"] == "Juan Camilo Cardenas"
@@ -779,7 +778,7 @@ def test_gendered_name_pairs_stay_apart():
         {"id": "r-3", "Title": "T3", "Authors_List": ["Rodríguez, Daniel"], "Year": 2010},
         {"id": "r-4", "Title": "T4", "Authors_List": ["Rodríguez, Daniela"], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 4
 
 
@@ -794,7 +793,7 @@ def test_initials_prefix_alone_does_not_merge():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Smith, J."], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Smith, J.C."], "Year": 2012},
     ])
-    authors_df, _, _ = normalize_authors(references=refs)
+    authors_df, _, _ = normalize_authors(works=refs)
     assert len(authors_df) == 2
 
 
@@ -818,7 +817,7 @@ def test_external_id_union_is_transitive():
                                    "openalex_id": "A1", "orcid": "0000-1"}]},
         ]
     ).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
     assert len(authors_df) == 1
 
 
@@ -839,7 +838,7 @@ def test_external_cluster_variant_anchors_no_id_records():
                                    "openalex_id": "A9", "orcid": None}]},
         ]
     ).set_index("id")
-    authors_df, _, _ = normalize_authors(references=refs, enriched_references=enriched)
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
     assert len(authors_df) == 1
 
 
@@ -858,12 +857,12 @@ def test_cross_block_merge_id_independent_of_row_order():
                                "openalex_id": "A77", "orcid": None}]},
     ]
     fwd, _, _ = normalize_authors(
-        references=_refs(rows),
-        enriched_references=pd.DataFrame(enriched_rows).set_index("id"),
+        works=_refs(rows),
+        enriched_works=pd.DataFrame(enriched_rows).set_index("id"),
     )
     rev, _, _ = normalize_authors(
-        references=_refs(rows[::-1]),
-        enriched_references=pd.DataFrame(enriched_rows[::-1]).set_index("id"),
+        works=_refs(rows[::-1]),
+        enriched_works=pd.DataFrame(enriched_rows[::-1]).set_index("id"),
     )
     assert len(fwd) == len(rev) == 1
     assert list(fwd.index) == list(rev.index)
@@ -916,7 +915,7 @@ def test_ambiguous_full_name_cluster_flagged_for_review():
         {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, Adele B."], "Year": 2012},
         {"id": "r-3", "Title": "T3", "Authors_List": ["Diamond, Adele C."], "Year": 2014},
     ])
-    authors_df, _, review = normalize_authors(references=refs)
+    authors_df, _, review = normalize_authors(works=refs)
     assert len(authors_df) == 3  # B. and C. conflict; bare Adele is ambiguous
     assert any("ambiguous" in (r["reason"] or "") for r in review)
 
@@ -926,8 +925,8 @@ def test_ids_stable_with_lexicon_reparse():
         {"id": "r-1", "Title": "T1", "Authors_List": ["Guerra Forero, J.A."], "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Jose Alberto Guerra Forero"], "Year": 2012},
     ])
-    a1, _, _ = normalize_authors(references=refs)
-    a2, _, _ = normalize_authors(references=refs)
+    a1, _, _ = normalize_authors(works=refs)
+    a2, _, _ = normalize_authors(works=refs)
     assert list(a1.index) == list(a2.index)
 
 
@@ -955,6 +954,60 @@ def test_dedup_to_authors_round_trip_via_csv(tmp_path: Path):
     canonical.to_csv(csv_path)
     reloaded = pd.read_csv(csv_path, index_col="id")
 
-    authors_df, _, _ = normalize_authors(references=reloaded)
+    authors_df, _, _ = normalize_authors(works=reloaded)
     assert (authors_df["surname_norm"].str.len() > 1).all()
     assert {"smith", "garcia"} <= set(authors_df["surname_norm"])
+
+
+# ---------------------------------------------------------------------------
+# works-model metrics
+# ---------------------------------------------------------------------------
+
+
+def _works_fixture():
+    works = pd.DataFrame(
+        {
+            "ring": [0, 0, 1],
+            "source_file": ["a.pdf", "b.pdf", ""],
+            "Title": ["Core paper A", "Core paper B", "External classic"],
+            "Authors": [
+                "Cardenas, Juan Camilo",
+                "Cardenas, Juan Camilo, Ostrom, Elinor",
+                "Ostrom, Elinor",
+            ],
+            "Authors_List": [
+                ["Cardenas, Juan Camilo"],
+                ["Cardenas, Juan Camilo", "Ostrom, Elinor"],
+                ["Ostrom, Elinor"],
+            ],
+            "Journal": ["JDE", "WD", "CUP"],
+            "Year": [2000, 2004, 1990],
+        },
+        index=pd.Index(["w-a", "w-b", "w-c"], name="id"),
+    )
+    edges = pd.DataFrame(
+        [
+            {"citing_id": "w-a", "cited_id": "w-c"},
+            {"citing_id": "w-b", "cited_id": "w-c"},
+            {"citing_id": "w-a", "cited_id": "w-b"},  # core cites core
+        ]
+    )
+    return works, edges
+
+
+def test_author_metrics_span_core_and_cited_roles():
+    works, edges = _works_fixture()
+    authors_df, citations_df, _review = normalize_authors(works=works, citation_edges=edges)
+
+    cardenas = authors_df[authors_df["surname_norm"] == "cardenas"].iloc[0]
+    assert int(cardenas["n_works"]) == 2  # authored w-a and w-b
+    assert int(cardenas["n_core_works"]) == 2
+    assert int(cardenas["n_citations_received"]) == 1  # w-b is cited once (by w-a)
+    assert int(cardenas["n_distinct_citing_works"]) == 1
+
+    ostrom = authors_df[authors_df["surname_norm"] == "ostrom"].iloc[0]
+    assert int(ostrom["n_works"]) == 2  # w-b (co-author) and w-c
+    assert int(ostrom["n_core_works"]) == 1  # only w-b is ring 0
+    assert int(ostrom["n_citations_received"]) == 3  # 2 into w-c + 1 into w-b
+
+    assert set(citations_df.columns) == {"author_id", "record_id", "position", "raw_author"}

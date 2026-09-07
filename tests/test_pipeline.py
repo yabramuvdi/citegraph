@@ -367,11 +367,12 @@ def test_normalize_authors_writes_csvs_and_review(tmp_path: Path) -> None:
     pipeline.deduplicate(papers, raw_refs)
 
     authors_df, citations_df = pipeline.normalize_authors()
-    # The fake client returns 1 paper (2 authors) + 2 references (1 author each).
+    # The fake client returns 1 source work (2 authors) + 2 cited stubs (1 author each).
     assert (tmp_path / "out" / "authors.csv").exists()
     assert (tmp_path / "out" / "author_citations.csv").exists()
-    assert len(authors_df) >= 1
-    assert {"reference", "paper"}.issubset(set(citations_df["record_kind"]))
+    assert len(authors_df) == 4
+    assert set(citations_df.columns) == {"author_id", "record_id", "position", "raw_author"}
+    assert citations_df["record_id"].str.startswith("w-").all()
 
 
 def _out_with_references(tmp_path: Path) -> Path:
