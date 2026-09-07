@@ -1,7 +1,9 @@
-"""Stable identifier generation for papers and references.
+"""Stable identifier generation for works.
 
 We don't want IDs to change between runs, so they are derived from the
 content (first author + year + a title prefix) rather than from row index.
+The single ``w-`` prefix is role-free on purpose: a work's role (core
+source vs cited stub) can change over its life; its identity must not.
 """
 
 from __future__ import annotations
@@ -44,44 +46,20 @@ def _first_author_token(authors: str | list[str]) -> str:
     return surname.lower() or "unknown"
 
 
-def make_paper_id(
-    authors: str | list[str],
-    year: int | str | None,
-    title: str,
-    *,
-    prefix: str = "p",
-) -> str:
-    """Build a stable, slug-style id from bibliographic fields.
-
-    Examples
-    --------
-    >>> make_paper_id("Ostrom, E.", 1990, "Governing the Commons")
-    'p-ostrom-1990-governing-the-commons'
-    """
-    author = _first_author_token(authors)
-    year_token = str(year) if year not in (None, "") else "nd"
-    title_str = title if isinstance(title, str) else ""
-    title_slug = slugify(title_str or "untitled", max_length=40, word_boundary=True) or "untitled"
-    return f"{prefix}-{author}-{year_token}-{title_slug}"
-
-
-def make_reference_id(
-    authors: str | list[str],
-    year: int | str | None,
-    title: str,
-) -> str:
-    """Like :func:`make_paper_id` but with an ``r-`` prefix for references."""
-    return make_paper_id(authors, year, title, prefix="r")
-
-
 def make_work_id(
     authors: str | list[str],
     year: int | str | None,
     title: str,
 ) -> str:
-    """Role-free work id (``w-`` prefix).
+    """Build a stable, slug-style work id from bibliographic fields.
 
-    A work's role (core source vs cited stub) changes over its life;
-    its identity must not, so the prefix carries no role information.
+    Examples
+    --------
+    >>> make_work_id("Ostrom, E.", 1990, "Governing the Commons")
+    'w-ostrom-1990-governing-the-commons'
     """
-    return make_paper_id(authors, year, title, prefix="w")
+    author = _first_author_token(authors)
+    year_token = str(year) if year not in (None, "") else "nd"
+    title_str = title if isinstance(title, str) else ""
+    title_slug = slugify(title_str or "untitled", max_length=40, word_boundary=True) or "untitled"
+    return f"w-{author}-{year_token}-{title_slug}"

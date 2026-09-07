@@ -8,13 +8,17 @@ the paper's own bibliographic metadata and its full reference list, runs a
 fuzzy deduplication pass on the references (rapidfuzz on title + authors +
 year), optionally enriches references with canonical metadata from
 CrossRef / OpenAlex, and clusters author names across the corpus into
-canonical author records. The result is five CSVs you can analyse directly:
+canonical author records. Every bibliographic record is a **work**: your own
+PDFs are *core* works (`ring` 0) and everything discovered in their
+bibliographies sits at `ring` 1 — a citation of one of your own papers
+resolves to that same work, so the graph includes core-cites-core edges.
+The result is CSVs you can analyse directly:
 
-- `papers.csv` &mdash; one row per source paper.
-- `references.csv` &mdash; one row per cited reference (deduplicated).
-- `citation_graph.csv` &mdash; `(citing_id, cited_id)` edges.
+- `works.csv` &mdash; one row per canonical work (`ring`, `source_file`, metadata).
+- `citation_graph.csv` &mdash; `(citing_id, cited_id)` work-to-work edges.
 - `authors.csv` &mdash; one row per canonical author (deduplicated across the corpus).
-- `author_citations.csv` &mdash; one row per author occurrence, with back-pointers.
+- `author_citations.csv` &mdash; one row per author-work occurrence.
+- plus the stage checkpoints `sources.csv` and `citations_raw.csv`.
 
 ## Install
 
@@ -46,8 +50,7 @@ from citegraph import Pipeline
 pipe = Pipeline(pdf_dir="./pdfs", out_dir="./out", enrich=True)
 result = pipe.run()
 
-result.papers       # DataFrame of source papers (with stable IDs)
-result.references   # DataFrame of all extracted references
+result.works        # DataFrame of canonical works (ring 0 = your PDFs)
 result.graph        # DataFrame of (citing_id, cited_id) edges
 ```
 
@@ -55,7 +58,7 @@ Or via the CLI:
 
 ```bash
 citegraph run ./pdfs --out ./out --enrich
-citegraph dedup ./out/references_raw.csv --out ./out
+citegraph dedup --out ./out
 ```
 
 ## Documentation
@@ -202,7 +205,7 @@ Two details matter in practice:
   before paying for LLM extraction.
 - Use a real `--enrich-contact` and a modest `--enrich-max-workers` value when
   querying CrossRef/OpenAlex. This is slower, but friendlier to provider rate
-  limits; re-runs reuse the per-reference cache in `OUT_DIR/enrichment/`.
+  limits; re-runs reuse the per-work cache in `OUT_DIR/enrichment/`.
 
 After the smoke test, load the graph directly from disk:
 
@@ -214,7 +217,8 @@ print(g)
 print(g.top_cited(10)[["Title", "Year", "citation_count"]])
 
 if g.has_authors:
-    print(g.top_cited_authors(10)[["display_name", "n_reference_citations"]])
+    print(g.top_cited_authors(10)[["display_name", "n_citations_received"]])
+    print(g.top_authors(10, ring=0))  # most prominent authors of YOUR papers
 ```
 
 ## Pipeline
@@ -223,7 +227,7 @@ if g.has_authors:
 PDFs ──docling──▶ markdown ──Gemini──▶ metadata + references
                                           │
                                           ▼
-                              fuzzy dedup (rapidfuzz)
+                     canonicalization into works (rapidfuzz)
                                           │
                                   optional CrossRef/OpenAlex
                                           │
@@ -239,16 +243,16 @@ PDFs ──docling──▶ markdown ──Gemini──▶ metadata + references
 
 After a run, `out_dir/` contains the six CSVs below plus a few sidecar
 files described at the end of this section. The per-stage caches live
-under `markdown/`, `metadata/<paper-id>.json`,
-`references/<paper-id>.json`, and (when enrichment runs)
+under `markdown/`, `metadata/<stem>.json`,
+`references/<stem>.json`, and (when enrichment runs)
 `enrichment/` &mdash; safe to inspect, safe to delete to
 force a re-extraction.
 
-### `papers.csv` &mdash; one row per source paper
+### `sources.csv` &mdash; one row per processed PDF (stage-2 checkpoint)
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
-| `id` | string | `p-<surname>-<year>-<title-slug>`, deterministic across runs |
+| `id` | string | `w-<surname>-<year>-<title-slug>`, deterministic across runs |
 | `Title` | string | as extracted by the LLM |
 | `Authors_List` | string | a Python list serialized via `repr`, e.g. `"['Jane Doe', 'John Smith']"` &mdash; round-trip with `ast.literal_eval` |
 | `Authors` | string | derived `", ".join(Authors_List)`, ready for display |
@@ -256,22 +260,28 @@ force a re-extraction.
 | `Year` | int | publication year (`0` is the missing-value sentinel) |
 | `source_file` | string | original PDF filename |
 
-### `references_raw.csv` &mdash; one row per *citation event* (before dedup)
+### `citations_raw.csv` &mdash; one row per *citation event* (before canonicalization)
 
-Same columns as `papers.csv` minus `source_file` and `id`, plus:
-
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `citing_id` | string | the `p-…` id of the paper that contained this citation |
-
-A reference cited by N papers appears N times here, with N different `citing_id`s.
-
-### `references.csv` &mdash; deduplicated references, indexed by `id`
+Same columns as `sources.csv` minus `source_file` and `id`, plus:
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
-| `id` (index) | string | `r-<surname>-<year>-<title-slug>` |
-| `Title`, `Authors`, `Journal`, `Year` | | from the first member of the cluster |
+| `citing_id` | string | the `w-…` id of the source work whose bibliography contained this citation |
+
+A work cited by N papers appears N times here, with N different `citing_id`s.
+
+### `works.csv` &mdash; canonical works, indexed by `id`
+
+One row per canonical work: your own papers (ring 0) *and* everything they
+cite, in one table. A citation that matches one of your own papers merges
+into it rather than creating a separate row.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` (index) | string | `w-<surname>-<year>-<title-slug>` |
+| `ring` | int | discovery depth: `0` = your PDFs (the core), `1` = found in a ring-0 bibliography |
+| `source_file` | string | original PDF filename; empty for works without full text |
+| `Title`, `Authors`, `Journal`, `Year` | | from the first member of the cluster (full-text side wins) |
 | `doi` | string | only after `--enrich`; `None` for unmatched rows |
 | `enrichment_source` | string | only after `--enrich`; `"crossref"` or `"openalex"` |
 | `enrichment_status` | string | only after `--enrich`; `"matched"` or `"miss"` |
@@ -282,19 +292,19 @@ A reference cited by N papers appears N times here, with N different `citing_id`
 | `enrichment_year_match` | bool | only after `--enrich`; whether the input and candidate years agreed when both were known |
 | `enrichment_year_delta` | int | only after `--enrich`; absolute year difference when both years were known |
 
-`Authors_List` is preserved through the dedup stage so author normalization can use structured author strings instead of comma-splitting display text.
+`Authors_List` is preserved through canonicalization so author normalization can use structured author strings instead of comma-splitting display text. Enrichment (`--enrich`) writes the enriched copy to `enriched_works.csv` covering every ring &mdash; your core papers get DOIs and OpenAlex author ids too.
 
 ### `citation_graph.csv` &mdash; the actual graph
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
-| `citing_id` | string | `p-…` |
-| `cited_id` | string | `r-…` |
+| `citing_id` | string | `w-…` (a work with full text) |
+| `cited_id` | string | `w-…` (any work &mdash; including your own papers when cited within the corpus) |
 
 ### `authors.csv` &mdash; canonical authors, indexed by `id`
 
 Produced by the author-normalization stage (`citegraph authors`, also part of
-`citegraph run`). Sorted by `n_reference_citations`, descending.
+`citegraph run`). Sorted by `n_citations_received` (then `n_works`), descending.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -306,19 +316,18 @@ Produced by the author-normalization stage (`citegraph authors`, also part of
 | `initials` | string | canonical initials |
 | `openalex_id` | string | OpenAlex author id when enrichment provided one |
 | `orcid` | string | ORCID when enrichment provided one |
-| `n_occurrences` | int | total name occurrences merged into this cluster |
-| `n_reference_citations` | int | cited works in which this author's name appears |
-| `n_distinct_papers_citing` | int | distinct source papers citing this author |
+| `n_works` | int | distinct canonical works this author appears on |
+| `n_core_works` | int | of those, how many are ring 0 (your own papers) |
+| `n_citations_received` | int | citation edges into any of their works |
+| `n_distinct_citing_works` | int | distinct works citing this author |
 
 ### `author_citations.csv` &mdash; one row per author occurrence
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
 | `author_id` | string | the `a-…` cluster this occurrence was assigned to |
-| `record_kind` | string | `"reference"` or `"paper"` |
-| `record_id` | string | the `r-…` / `p-…` record the name appeared on |
-| `position` | int | author position on that record (0-based) |
-| `citing_paper_id` | string | for reference occurrences, the citing `p-…` id |
+| `record_id` | string | the `w-…` work the name appeared on (join `works.ring` for the role) |
+| `position` | int | author position on that work (0-based) |
 | `raw_author` | string | the original author string before parsing |
 
 Hand-curated overrides go in `out_dir/author_aliases.csv`
@@ -338,12 +347,14 @@ from citegraph import CitationGraph
 g = CitationGraph.from_out_dir("./out")
 # or: g = CitationGraph.from_pipeline_result(pipe.run())
 
-g                                  # <CitationGraph: 25 papers, 432 references, 678 edges>
-g.n_papers, g.n_references, g.n_edges
+g                                  # <CitationGraph: 25 core works, 457 works, 678 edges>
+g.n_core_works, g.n_works, g.n_edges
 
-g.top_cited(n=10)                  # most-cited references in this corpus
-g.cited_by("p-doe-2020-some-paper")
-g.citers_of("r-hardin-1968-tragedy-of-the-commons")
+g.core                             # your own papers (ring 0)
+g.core_citations()                 # who among your papers cites whom
+g.top_cited(n=10)                  # most-cited works (your own papers rank too)
+g.cited_by("w-doe-2020-some-paper")
+g.citers_of("w-hardin-1968-tragedy-of-the-commons")
 ```
 
 When `authors.csv` and `author_citations.csv` exist, author-level queries
@@ -353,7 +364,8 @@ journal counts answer "which journals are doing the citing?":
 ```python
 cardenas_id = g.find_author("cardenas").index[0]
 
-g.citation_context_for_author(cardenas_id)   # one source-paper -> cited-reference edge per row
+g.top_authors(10, ring=0)                    # most prominent authors of YOUR papers
+g.citation_context_for_author(cardenas_id)   # one citing-work -> cited-work edge per row
 g.citing_papers_by_author(cardenas_id)       # distinct source papers citing that author
 g.source_journals_citing_author(cardenas_id) # source-paper journal rollup
 ```
@@ -372,7 +384,7 @@ They are created only when the condition they describe actually occurred, so
 `path.exists()` is a sufficient check. Enrichment review files are different:
 they are written when stage 5 runs so you can inspect match quality.
 
-- `run_summary.json` &mdash; counts for the whole run: `n_papers`, `n_references_raw`, `n_references_dedup`, `n_edges`, `n_authors`, `n_author_citations`, `n_author_review_flags`, `n_metadata_failures`, `n_references_failures`, `n_source_duplicates`, `n_papers_no_references`, `n_conversion_warnings`, plus the model id and the dedup / author configuration.
+- `run_summary.json` &mdash; counts for the whole run: `n_works`, `n_core_works`, `n_citations_raw`, `n_edges`, `n_core_to_core_edges`, `n_self_loops_dropped`, `n_authors`, `n_author_citations`, `n_author_review_flags`, `n_metadata_failures`, `n_references_failures`, `n_source_duplicates`, `n_papers_no_references`, `n_conversion_warnings`, plus the model id and the dedup / author configuration.
 - `artifact_manifest.json` &mdash; written by `citegraph run`: package version, stage, artifact paths, and the configuration used. Archive it with the CSVs for provenance.
 - `metadata_failures.jsonl` and `references_failures.jsonl` &mdash; one JSON line per failed paper: `{source_file, stage, error_class, error_message}`. The pipeline keeps going past per-paper failures; re-running will retry them (their caches were not written).
 - `source_duplicates.json` &mdash; written when two differently-named PDFs contain the same paper (detected by the same fuzzy-match logic used for reference deduplication). Each entry names the canonical source file, the duplicate file(s), and the paper title. The duplicate PDFs are silently skipped in the references stage; remove them from `pdf_dir` and re-run to clean up.
@@ -475,7 +487,7 @@ to `<out>/author_aliases.csv` when it exists).
 The CLI exposes the same knobs as flags &mdash; see `citegraph run --help`.
 
 When enrichment runs, every row gets explicit diagnostics in
-`enriched_references.csv`: `enrichment_status`, `enrichment_miss_reason`,
+`enriched_works.csv`: `enrichment_status`, `enrichment_miss_reason`,
 `enrichment_title_score`, `enrichment_adjusted_score`,
 `enrichment_candidate_title`, `enrichment_year_match`, and
 `enrichment_year_delta`. The same run writes `enrichment_summary.json` and

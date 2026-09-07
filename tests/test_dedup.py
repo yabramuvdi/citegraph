@@ -9,9 +9,22 @@ from citegraph.dedup import (
     _compute_rings,
     canonicalize_works,
     compare_papers,
-    dedup_references,
     normalize_text,
 )
+
+
+def _empty_sources() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=["id", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
+    )
+
+
+def _canonicalize_citations(df: pd.DataFrame, cfg: DedupConfig | None = None):
+    """Cluster citation rows with no sources; returns (works, per-row cluster ids)."""
+    works, _edges, stats = canonicalize_works(
+        _empty_sources(), df, cfg or DedupConfig(), show_progress=False
+    )
+    return works, stats["citation_cluster_ids"]
 
 
 def test_normalize_text_strips_punctuation_and_case():
@@ -64,19 +77,22 @@ def test_compare_papers_year_window():
     assert compare_papers(a, b, cfg) is True
 
 
-def test_dedup_references_clusters_duplicates(sample_references):
-    canonical, mapping = dedup_references(sample_references, DedupConfig())
-    assert len(canonical) == 3, "expected 3 unique papers from 5 refs"
-    assert mapping.iloc[0] == mapping.iloc[1], "Ostrom rows should cluster"
-    assert mapping.iloc[2] == mapping.iloc[3], "Hardin rows should cluster"
-    assert mapping.iloc[4] != mapping.iloc[0], "Putnam should be its own cluster"
+def test_canonicalize_clusters_duplicate_citations(sample_references):
+    canonical, mapping = _canonicalize_citations(sample_references)
+    assert len(canonical) == 3, "expected 3 unique works from 5 citations"
+    assert mapping[0] == mapping[1], "Ostrom rows should cluster"
+    assert mapping[2] == mapping[3], "Hardin rows should cluster"
+    assert mapping[4] != mapping[0], "Putnam should be its own cluster"
 
 
-def test_dedup_references_handles_empty():
+def test_canonicalize_handles_empty_citations():
     empty = pd.DataFrame(columns=["Title", "Authors", "Journal", "Year", "citing_id"])
-    canonical, mapping = dedup_references(empty, DedupConfig())
-    assert canonical.empty
-    assert mapping.empty
+    works, edges, stats = canonicalize_works(
+        _empty_sources(), empty, DedupConfig(), show_progress=False
+    )
+    assert works.empty
+    assert edges.empty
+    assert stats["citation_cluster_ids"] == []
 
 
 def test_compare_papers_missing_year_one_side_still_matches():
@@ -153,9 +169,9 @@ def test_dedup_collapses_missing_year_duplicates():
             },
         ]
     )
-    canonical, mapping = dedup_references(df, DedupConfig())
+    canonical, mapping = _canonicalize_citations(df)
     assert len(canonical) == 1, "expected the missing-year duplicate to merge"
-    assert mapping.iloc[0] == mapping.iloc[1]
+    assert mapping[0] == mapping[1]
 
 
 def test_compare_papers_merges_first_author_vs_full_author_list():
@@ -233,11 +249,11 @@ def test_compare_papers_rejects_different_papers_by_same_author_same_year():
     assert compare_papers(a, b, cfg) is False
 
 
-def test_dedup_references_returns_stable_ids(sample_references):
-    canonical, mapping = dedup_references(sample_references, DedupConfig())
-    for cluster_id in mapping.unique():
+def test_canonicalize_returns_stable_work_ids(sample_references):
+    _canonical, mapping = _canonicalize_citations(sample_references)
+    for cluster_id in set(mapping):
         assert isinstance(cluster_id, str)
-        assert cluster_id.startswith("r-")
+        assert cluster_id.startswith("w-")
 
 
 def test_dedup_uses_candidate_blocking_for_unrelated_rows(monkeypatch):
@@ -264,7 +280,7 @@ def test_dedup_uses_candidate_blocking_for_unrelated_rows(monkeypatch):
 
     monkeypatch.setattr("citegraph.dedup.compare_papers", counted_compare)
 
-    canonical, mapping = dedup_references(df, DedupConfig(year_window=0), show_progress=False)
+    canonical, mapping = _canonicalize_citations(df, DedupConfig(year_window=0))
 
     assert len(canonical) == len(df)
     assert len(mapping) == len(df)

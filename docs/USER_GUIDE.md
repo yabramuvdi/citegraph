@@ -87,7 +87,7 @@ approval and comparison, not billing reconciliation.
 citegraph metadata --out "$OUT_DIR" --llm-concurrency 4
 ```
 
-Review `papers.csv`. At minimum, spot-check titles, author order, journal, year,
+Review `sources.csv`. At minimum, spot-check titles, author order, journal, year,
 and `source_file`. If present, also inspect:
 
 - `metadata_failures.jsonl`: papers that raised an error and will be retried on
@@ -105,7 +105,7 @@ The command prints a fresh estimate and asks for confirmation before making
 Gemini calls. Pass `--yes` only in automation where cost approval has already
 happened.
 
-Review `references_raw.csv` and these optional sidecars:
+Review `citations_raw.csv` and these optional sidecars:
 
 - `references_failures.jsonl`: papers that failed extraction;
 - `papers_no_references.json`: successfully processed papers for which Gemini
@@ -113,22 +113,26 @@ Review `references_raw.csv` and these optional sidecars:
 
 An absent warning sidecar means that check was clean.
 
-### Deduplicate references and build edges
+### Canonicalize works and build edges
 
 ```bash
 citegraph dedup --out "$OUT_DIR"
 ```
 
-This produces:
+This clusters your source papers and every extracted citation into one
+canonical **works** table and produces:
 
-- `references.csv`: canonical cited works;
-- `citation_graph.csv`: source-paper-to-reference edges.
+- `works.csv`: canonical works — your own papers at `ring` 0 (the *core*),
+  works discovered in their bibliographies at `ring` 1; `source_file` is
+  non-empty for processed PDFs;
+- `citation_graph.csv`: work-to-work edges. A citation of one of your own
+  papers resolves to that same work, so core-cites-core edges appear here.
 
-Deduplication is precision-oriented but still heuristic. Review works with very
-similar titles, inconsistent years, or large citation counts before relying on
-them for publication-quality statistics.
+Canonicalization is precision-oriented but still heuristic. Review works with
+very similar titles, inconsistent years, or large citation counts before
+relying on them for publication-quality statistics.
 
-### Optionally enrich references
+### Optionally enrich works
 
 ```bash
 citegraph enrich --out "$OUT_DIR" \
@@ -136,8 +140,10 @@ citegraph enrich --out "$OUT_DIR" \
   --enrich-max-workers 2
 ```
 
-Enrichment tries CrossRef first and OpenAlex second. It writes
-`enriched_references.csv`, `enrichment_summary.json`, and—when misses occur—
+Enrichment runs over every work — your core papers included, which is how
+they gain DOIs and external author identifiers. It tries CrossRef first and
+OpenAlex second, and writes
+`enriched_works.csv`, `enrichment_summary.json`, and—when misses occur—
 `enrichment_misses.csv`. A match is evidence to review, not a guarantee: inspect
 the candidate title, raw title score, adjusted score, and year diagnostics.
 
@@ -211,13 +217,14 @@ in this corpus.
 
 Important distinctions:
 
-- `papers.csv` contains the PDFs being analyzed.
-- `references_raw.csv` contains citation occurrences before deduplication.
-- `references.csv` contains canonical cited works after deduplication.
-- `citation_graph.csv` connects source paper IDs (`p-…`) to reference IDs
-  (`r-…`).
-- `author_citations.csv` records author occurrences and back-pointers; it is not
-  a coauthorship graph.
+- `works.csv` contains every canonical work; filter `ring == 0` for the PDFs
+  being analyzed (your core corpus) — e.g. in R:
+  `works %>% filter(ring == 0)`.
+- `citations_raw.csv` contains citation occurrences before canonicalization.
+- `citation_graph.csv` connects work IDs (`w-…`) to work IDs — including your
+  own papers citing each other.
+- `author_citations.csv` records author-work occurrences; it is not a
+  coauthorship graph.
 
 Automated extraction, fuzzy deduplication, external matching, and author
 clustering can all introduce error. Report manual review rules alongside

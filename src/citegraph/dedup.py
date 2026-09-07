@@ -1,4 +1,4 @@
-"""Fuzzy deduplication of bibliographic references.
+"""Fuzzy canonicalization of bibliographic works.
 
 Cleaned-up port of the algorithm originally in ``label_papers_old.py``.
 We compute a weighted similarity over title / authors / journal and then
@@ -10,12 +10,13 @@ row starts a new cluster.
 Usage
 -----
 
->>> from citegraph.dedup import dedup_references, DedupConfig
->>> df_dedup, mapping = dedup_references(df_raw, DedupConfig())
+>>> from citegraph.dedup import canonicalize_works, DedupConfig
+>>> works, edges, stats = canonicalize_works(sources, citations_raw, DedupConfig())
 
-``df_dedup`` is a deduplicated DataFrame indexed by stable reference IDs;
-``mapping`` is a Series aligned with the input that gives the cluster ID
-for each row.
+``works`` is a canonical DataFrame indexed by stable ``w-`` work ids with
+``ring``/``source_file`` provenance columns; ``edges`` is the deduplicated
+``citing_id``/``cited_id`` table; ``stats`` reports merges, dropped
+self-loops, and the per-citation-row cluster mapping.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ import pandas as pd
 from rapidfuzz.fuzz import token_set_ratio
 
 from citegraph._progress import iter_with_progress
-from citegraph.ids import _first_author_token, make_reference_id, make_work_id
+from citegraph.ids import _first_author_token, make_work_id
 from citegraph.io import require_columns
 
 logger = logging.getLogger(__name__)
@@ -247,74 +248,6 @@ def _cluster_rows(
     return cluster_ids, representatives  # type: ignore[return-value]
 
 
-def dedup_references(
-    df: pd.DataFrame,
-    cfg: DedupConfig | None = None,
-    *,
-    show_progress: bool = True,
-) -> tuple[pd.DataFrame, pd.Series]:
-    """Cluster duplicate references and return canonical rows + mapping.
-
-    Parameters
-    ----------
-    df:
-        DataFrame with at least ``Title``, ``Authors``, ``Journal`` and
-        ``Year`` columns (the output of :mod:`citegraph.extract_references`).
-    cfg:
-        :class:`DedupConfig` of weights/thresholds. Defaults match the
-        original ``label_papers_old.py`` settings.
-
-    Returns
-    -------
-    canonical_df:
-        One row per cluster, indexed by a stable cluster id (``r-...``).
-        The representative is the *first* member of each cluster.
-    mapping:
-        ``pd.Series`` with the same index as ``df`` mapping each input row
-        to its cluster id.
-    """
-    cfg = cfg or DedupConfig()
-    require_columns(df, ["Title", "Year"], artifact="dedup input")
-    if "Authors" not in df.columns and "Authors_List" not in df.columns:
-        raise ValueError("dedup input is missing required column: Authors or Authors_List")
-    if df.empty:
-        empty = df.copy()
-        empty["id"] = pd.Series(dtype=str)
-        return empty.set_index("id"), pd.Series([], dtype=str, index=df.index)
-
-    df = df.reset_index(drop=True)
-
-    def _ref_cluster_id(_i: int, row: pd.Series) -> str:
-        return make_reference_id(
-            row.get("Authors_List") or row.get("Authors", ""),
-            row.get("Year"),
-            row.get("Title", ""),
-        )
-
-    cluster_id_list, representatives = _cluster_rows(
-        df,
-        cfg,
-        _ref_cluster_id,
-        show_progress=show_progress,
-        description="Deduplicating references",
-    )
-    mapping = pd.Series(cluster_id_list, index=df.index, name="cited_id", dtype=object)
-
-    canonical_records = []
-    for cluster_id, rep in representatives:
-        record = dict(rep)
-        record["id"] = cluster_id
-        canonical_records.append(record)
-    canonical_df = pd.DataFrame(canonical_records).set_index("id")
-
-    logger.info(
-        "Deduplicated %d references into %d canonical entries",
-        len(df),
-        len(canonical_df),
-    )
-    return canonical_df, mapping
-
-
 def _compute_rings(ring0_ids: set[str], edges: pd.DataFrame) -> dict[str, int]:
     """BFS discovery depth from the ring-0 seed set over citation edges."""
     rings = {wid: 0 for wid in ring0_ids}
@@ -365,6 +298,17 @@ def canonicalize_works(
     src = sources.reset_index(drop=True)
     cit = citations_raw.reset_index(drop=True)
     n_src = len(src)
+
+    if not n_src and cit.empty:
+        empty_works = pd.DataFrame(columns=_WORK_COLUMNS)
+        empty_works.index.name = "id"
+        empty_edges = pd.DataFrame(columns=["citing_id", "cited_id"])
+        return empty_works, empty_edges, {
+            "n_self_loops_dropped": 0,
+            "n_source_duplicates_merged": 0,
+            "citation_cluster_ids": [],
+        }
+
     combined = pd.concat([src, cit], ignore_index=True, sort=False)
 
     def _cluster_id(i: int, row: pd.Series) -> str:

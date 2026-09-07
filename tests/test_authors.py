@@ -936,21 +936,24 @@ def test_dedup_to_authors_round_trip_via_csv(tmp_path: Path):
     Guards against any future stage that drops ``Authors_List`` between
     dedup and author normalization.
     """
-    from citegraph.dedup import dedup_references
+    from citegraph.dedup import canonicalize_works
 
+    sources = pd.DataFrame(
+        columns=["id", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
+    )
     raw = pd.DataFrame([
         {"Title": "Paper One",   "Authors": "Smith, J., García, A.",
          "Authors_List": ["Smith, J.", "García, A."],
-         "Journal": "J1", "Year": 2010, "citing_id": "p-1"},
+         "Journal": "J1", "Year": 2010, "citing_id": "w-1"},
         {"Title": "Paper Two",   "Authors": "Smith, John, García, Ana",
          "Authors_List": ["Smith, John", "García, Ana"],
-         "Journal": "J2", "Year": 2011, "citing_id": "p-1"},
+         "Journal": "J2", "Year": 2011, "citing_id": "w-1"},
     ])
-    canonical, _ = dedup_references(raw, show_progress=False)
-    # Authors_List must survive dedup.
+    canonical, _edges, _stats = canonicalize_works(sources, raw, show_progress=False)
+    # Authors_List must survive canonicalization.
     assert "Authors_List" in canonical.columns
 
-    csv_path = tmp_path / "references.csv"
+    csv_path = tmp_path / "works.csv"
     canonical.to_csv(csv_path)
     reloaded = pd.read_csv(csv_path, index_col="id")
 

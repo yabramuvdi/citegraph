@@ -11,9 +11,9 @@ easy as::
 
     p = Pipeline(pdf_dir, out_dir)
     p.convert_pdfs()           # inspect out_dir/markdown/
-    p.extract_paper_metadata() # inspect papers.csv
-    p.extract_paper_references()
-    p.deduplicate()
+    p.extract_paper_metadata() # inspect sources.csv
+    p.extract_paper_references()  # inspect citations_raw.csv
+    p.deduplicate()            # inspect works.csv + citation_graph.csv
     p.maybe_enrich()
 """
 
@@ -98,7 +98,7 @@ class Pipeline:
         Gemini model identifier. Defaults to the value in settings.
     enrich:
         If ``True`` and the ``[crossref]`` extra is installed, run a
-        CrossRef/OpenAlex enrichment pass on the deduplicated references.
+        CrossRef/OpenAlex enrichment pass over all canonical works.
     dedup_config:
         Optional :class:`DedupConfig`. If unset, sensible defaults are
         used.

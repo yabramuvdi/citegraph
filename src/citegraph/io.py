@@ -52,7 +52,7 @@ class OutLayout:
     def enrichment_cache_count(self) -> int:
         """Number of per-reference enrichment cache files on disk.
 
-        Non-zero while ``enriched_references.csv`` is absent means the
+        Non-zero while ``enriched_works.csv`` is absent means the
         enrich stage was interrupted before its final CSV write — the
         authors stage warns about that state instead of silently
         clustering without external ids.
@@ -60,22 +60,6 @@ class OutLayout:
         if not self.enrichment_dir.is_dir():
             return 0
         return sum(1 for _ in self.enrichment_dir.glob("*.json"))
-
-    @property
-    def papers_csv(self) -> Path:
-        return self.out_dir / "papers.csv"
-
-    @property
-    def references_raw_csv(self) -> Path:
-        return self.out_dir / "references_raw.csv"
-
-    @property
-    def references_csv(self) -> Path:
-        return self.out_dir / "references.csv"
-
-    @property
-    def enriched_references_csv(self) -> Path:
-        return self.out_dir / "enriched_references.csv"
 
     @property
     def enrichment_misses_csv(self) -> Path:
