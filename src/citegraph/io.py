@@ -7,12 +7,12 @@ so that re-runs can resume:
 
     out_dir/
       markdown/                 # docling output, one .md per PDF
-      metadata/<paper-id>.json  # per-paper Gemini metadata response
-      references/<paper-id>.json  # per-paper Gemini references response
-      papers.csv                # combined paper metadata
-      references_raw.csv        # all extracted references, before dedup
-      references.csv            # deduplicated references
-      citation_graph.csv        # (citing_id, cited_id) edges
+      metadata/<stem>.json      # per-source Gemini metadata response
+      references/<stem>.json    # per-source Gemini references response
+      sources.csv               # per-PDF source-work metadata (stage 2)
+      citations_raw.csv         # all extracted citations, before canonicalization
+      works.csv                 # canonical works (ring, source_file, metadata)
+      citation_graph.csv        # (citing_id, cited_id) work->work edges
 """
 
 from __future__ import annotations
@@ -88,6 +88,22 @@ class OutLayout:
     @property
     def graph_csv(self) -> Path:
         return self.out_dir / "citation_graph.csv"
+
+    @property
+    def sources_csv(self) -> Path:
+        return self.out_dir / "sources.csv"
+
+    @property
+    def citations_raw_csv(self) -> Path:
+        return self.out_dir / "citations_raw.csv"
+
+    @property
+    def works_csv(self) -> Path:
+        return self.out_dir / "works.csv"
+
+    @property
+    def enriched_works_csv(self) -> Path:
+        return self.out_dir / "enriched_works.csv"
 
     @property
     def authors_csv(self) -> Path:

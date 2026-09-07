@@ -55,3 +55,12 @@ def test_out_layout_exposes_artifact_manifest_path(tmp_path: Path) -> None:
     layout = OutLayout(tmp_path / "out")
 
     assert layout.artifact_manifest_json == tmp_path / "out" / "artifact_manifest.json"
+
+
+def test_outlayout_works_model_paths(tmp_path: Path) -> None:
+    layout = OutLayout(tmp_path)
+
+    assert layout.sources_csv == tmp_path / "sources.csv"
+    assert layout.citations_raw_csv == tmp_path / "citations_raw.csv"
+    assert layout.works_csv == tmp_path / "works.csv"
+    assert layout.enriched_works_csv == tmp_path / "enriched_works.csv"
