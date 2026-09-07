@@ -1186,7 +1186,21 @@ Tasks 1–13: **DONE** — all committed on branch `works-model` (14 commits,
 335 tests passing, ruff clean). The user's pre-existing uncommitted 0.1.x
 work is preserved in checkpoint commit `e875228` at the branch base.
 
-Task 14 (real-corpus verification): **NEARLY DONE — enrichment redo in flight**
+Task 14 (real-corpus verification): **DONE — branch merged to main 2026-09-07**
+
+Final state: all acceptance criteria passed (ring-0 = 92, unique ids,
+3,462 works, 163 core→core edges, enrichment 66.9% overall / 86 of 92
+core works, author rankings verified). Six defects surfaced and fixed
+with TDD: work-id collisions, CLI dedup default drift, cached http_error
+misses, missing OpenAlex mailto param, literal-"nan" queries, and
+lexicon poisoning by full-name-stuffed CrossRef family values. One data
+fix: `author_aliases.csv` in the paper4 out_dir merges the Cardenas
+cluster split caused by a duplicate OpenAlex profile (A5103350726). The
+1,145 remaining enrichment misses are all rate-limit residue that a
+plain `citegraph enrich` re-run retries once OpenAlex's limit window
+resets.
+
+Historical status below (as of the enrichment redo):
 - Corpus: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/data` (92 PDFs) →
   `/Users/yabra/Dropbox/Consultoria/Maria/paper4/citegraph_out`
 - Done (2026-09-07): convert 92/92 (`--ocr-auto` fixed the one scanned PDF);
