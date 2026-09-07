@@ -285,8 +285,8 @@ def test_authors_cli_warns_on_unmaterialized_enrichment(tmp_path: Path) -> None:
     """Enrichment caches without enriched_references.csv get a yellow hint."""
     out = tmp_path / "out"
     out.mkdir()
-    (out / "references.csv").write_text(
-        'id,Title,Authors_List,Year\nr-1,T1,"[\'Ostrom, Elinor\']",1990\n',
+    (out / "works.csv").write_text(
+        'id,Title,Authors_List,Year\nw-1,T1,"[\'Ostrom, Elinor\']",1990\n',
         encoding="utf-8",
     )
     (out / "enrichment").mkdir()

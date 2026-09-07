@@ -33,7 +33,7 @@ import pandas as pd
 from citegraph._progress import iter_with_progress
 from citegraph.authors import AuthorClusterConfig, load_aliases, normalize_authors
 from citegraph.config import get_settings
-from citegraph.dedup import DedupConfig, dedup_references
+from citegraph.dedup import DedupConfig, canonicalize_works
 from citegraph.enrich import EnrichConfig
 from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_to_record
 from citegraph.extract_references import extract_references_from_markdown
@@ -41,7 +41,6 @@ from citegraph.io import (
     OutLayout,
     parse_openalex_authors,
     read_json,
-    require_columns,
     write_json,
     write_pydantic,
     write_pydantic_list,
@@ -149,6 +148,8 @@ class Pipeline:
         self.show_progress = show_progress
         self._client_kwargs = {"model": model} if model else {}
         self._client = client
+        # Filled by deduplicate(); read by run() for the run summary.
+        self._canonicalize_stats: dict = {}
 
     @property
     def client(self) -> GeminiClient:
@@ -185,8 +186,8 @@ class Pipeline:
             )
         return pd.read_csv(path)
 
-    def _load_references(self) -> pd.DataFrame:
-        path = self.layout.references_csv
+    def _load_works(self) -> pd.DataFrame:
+        path = self.layout.works_csv
         if not path.exists():
             raise StageNotReadyError(
                 f"Missing {path}. Run `citegraph dedup` first."
@@ -412,52 +413,43 @@ class Pipeline:
         return df
 
     # ------------------------------------------------------------------
-    # Stage 4: dedup references and build citation graph
+    # Stage 4: canonicalize sources + citations into works + citation graph
     # ------------------------------------------------------------------
     def deduplicate(
         self,
-        raw_refs: pd.DataFrame | None = None,
+        sources: pd.DataFrame | None = None,
+        citations_raw: pd.DataFrame | None = None,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        if raw_refs is None:
-            raw_refs = self._load_citations_raw()
-        require_columns(
-            raw_refs,
-            ["Title", "Year", "citing_id"],
-            artifact="dedup input",
-        )
-        if "Authors" not in raw_refs.columns and "Authors_List" not in raw_refs.columns:
-            raise ValueError(
-                "dedup input is missing required column: Authors or Authors_List"
+        if sources is None:
+            sources = self._load_sources()
+        if citations_raw is None:
+            citations_raw = self._load_citations_raw()
+
+        if citations_raw.empty:
+            citations_raw = pd.DataFrame(
+                columns=["Title", "Authors", "Authors_List", "Journal", "Year", "citing_id"]
             )
 
-        if raw_refs.empty:
-            empty_refs = pd.DataFrame(columns=["Title", "Authors", "Year", "Journal"])
-            empty_refs.index.name = "id"
-            empty_graph = pd.DataFrame(columns=["citing_id", "cited_id"])
-            empty_refs.to_csv(self.layout.references_csv)
-            empty_graph.to_csv(self.layout.graph_csv, index=False)
-            return empty_refs, empty_graph
-
-        canonical_df, mapping = dedup_references(
-            raw_refs, self.dedup_config, show_progress=self.show_progress
+        works, graph, stats = canonicalize_works(
+            sources,
+            citations_raw,
+            self.dedup_config,
+            show_progress=self.show_progress,
         )
-        graph = pd.DataFrame(
-            {
-                "citing_id": raw_refs["citing_id"].values,
-                "cited_id": mapping.values,
-            }
-        ).drop_duplicates().reset_index(drop=True)
-
-        canonical_df.to_csv(self.layout.references_csv)
+        self._canonicalize_stats = stats
+        works.to_csv(self.layout.works_csv)
         graph.to_csv(self.layout.graph_csv, index=False)
         logger.info(
-            "Wrote %s (%d rows) and %s (%d edges)",
-            self.layout.references_csv,
-            len(canonical_df),
+            "Wrote %s (%d works) and %s (%d edges); %d self-loop(s) dropped, "
+            "%d duplicate source(s) merged",
+            self.layout.works_csv,
+            len(works),
             self.layout.graph_csv,
             len(graph),
+            stats["n_self_loops_dropped"],
+            stats["n_source_duplicates_merged"],
         )
-        return canonical_df, graph
+        return works, graph
 
     # ------------------------------------------------------------------
     # Stage 4b: corpus-wide author normalization (after dedup)
@@ -481,7 +473,7 @@ class Pipeline:
         after the algorithmic clustering.
         """
         if references is None:
-            references = self._load_references()
+            references = self._load_works()
         if papers is None:
             try:
                 papers = self._load_sources()
@@ -547,7 +539,7 @@ class Pipeline:
     # ------------------------------------------------------------------
     def maybe_enrich(self, references: pd.DataFrame | None = None) -> pd.DataFrame:
         if references is None:
-            references = self._load_references()
+            references = self._load_works()
         if not self.enrich:
             return references
         from citegraph.enrich import enrich_references
@@ -582,7 +574,7 @@ class Pipeline:
         markdown_paths = self.convert_pdfs()
         papers = self.extract_paper_metadata(markdown_paths)
         raw_refs = self.extract_paper_references(markdown_paths, papers)
-        references, graph = self.deduplicate(raw_refs)
+        references, graph = self.deduplicate(papers, raw_refs)
         references = self.maybe_enrich(references)
         authors_df, citations_df = self.normalize_authors(
             references=references, papers=papers, graph=graph

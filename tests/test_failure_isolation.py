@@ -196,7 +196,7 @@ def test_run_summary_includes_failure_counts(tmp_path: Path) -> None:
     # Skip stage 1 by pre-populating markdown (already done by _two_paper_setup).
     papers = pipeline.extract_paper_metadata()
     raw_refs = pipeline.extract_paper_references(sources_df=papers)
-    pipeline.deduplicate(raw_refs)
+    pipeline.deduplicate(papers, raw_refs)
 
     # run() also writes the summary; we mimic the same call here.
     # We don't call run() directly because it would re-attempt convert_pdfs.

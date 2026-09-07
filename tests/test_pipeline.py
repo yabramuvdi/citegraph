@@ -88,17 +88,17 @@ def test_pipeline_end_to_end_no_network(tmp_path: Path) -> None:
     markdown_paths = list(md_dir.glob("*.md"))
     papers = pipeline.extract_paper_metadata(markdown_paths)
     raw_refs = pipeline.extract_paper_references(markdown_paths, papers)
-    references, graph = pipeline.deduplicate(raw_refs)
+    works, graph = pipeline.deduplicate(papers, raw_refs)
 
     assert len(papers) == 1
     assert len(raw_refs) == 2
-    assert len(references) == 2
+    assert len(works) == 3  # 1 source work + 2 cited stubs
     assert len(graph) == 2
     assert set(graph.columns) == {"citing_id", "cited_id"}
 
     assert (tmp_path / "out" / "sources.csv").exists()
     assert (tmp_path / "out" / "citations_raw.csv").exists()
-    assert (tmp_path / "out" / "references.csv").exists()
+    assert (tmp_path / "out" / "works.csv").exists()
     assert (tmp_path / "out" / "citation_graph.csv").exists()
 
 
@@ -169,6 +169,25 @@ def test_references_stage_writes_citations_raw_csv(tmp_path: Path) -> None:
     assert (tmp_path / "out" / "citations_raw.csv").exists()
     assert not (tmp_path / "out" / "references_raw.csv").exists()
     assert raw["citing_id"].str.startswith("w-").all()
+
+
+def test_deduplicate_produces_works_with_rings(tmp_path: Path) -> None:
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+    shutil.copy(FIXTURES / "sample_paper.md", md_dir / "sample_paper.md")
+
+    pipeline = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
+    markdown_paths = list(md_dir.glob("*.md"))
+    sources = pipeline.extract_paper_metadata(markdown_paths)
+    raw = pipeline.extract_paper_references(markdown_paths, sources)
+    works, graph = pipeline.deduplicate(sources, raw)
+
+    assert (tmp_path / "out" / "works.csv").exists()
+    assert works.index.str.startswith("w-").all()
+    assert set(works.columns) >= {"ring", "source_file", "Title", "Authors", "Journal", "Year"}
+    assert (works["ring"] == 0).sum() == len(sources)
+    assert graph["citing_id"].isin(works.index).all()
+    assert graph["cited_id"].isin(works.index).all()
 
 
 def test_pipeline_caches_metadata(tmp_path: Path) -> None:
@@ -324,9 +343,9 @@ def test_progressive_stages_resume_from_disk(tmp_path: Path) -> None:
 
     # Second Pipeline instance to prove dedup picks up citations_raw.csv from disk.
     p2 = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
-    refs, graph = p2.deduplicate()
+    works, graph = p2.deduplicate()
 
-    assert len(refs) == 2
+    assert len(works) == 3  # 1 source work + 2 cited stubs
     assert len(graph) == 2
     assert (tmp_path / "out" / "sources.csv").exists()
     assert (tmp_path / "out" / "citations_raw.csv").exists()
@@ -345,7 +364,7 @@ def test_normalize_authors_writes_csvs_and_review(tmp_path: Path) -> None:
     markdown_paths = list(md_dir.glob("*.md"))
     papers = pipeline.extract_paper_metadata(markdown_paths)
     raw_refs = pipeline.extract_paper_references(markdown_paths, papers)
-    pipeline.deduplicate(raw_refs)
+    pipeline.deduplicate(papers, raw_refs)
 
     authors_df, citations_df = pipeline.normalize_authors()
     # The fake client returns 1 paper (2 authors) + 2 references (1 author each).
@@ -356,11 +375,11 @@ def test_normalize_authors_writes_csvs_and_review(tmp_path: Path) -> None:
 
 
 def _out_with_references(tmp_path: Path) -> Path:
-    """Minimal out dir holding just a references.csv for the authors stage."""
+    """Minimal out dir holding just a works.csv for the authors stage."""
     out = tmp_path / "out"
     out.mkdir()
-    (out / "references.csv").write_text(
-        'id,Title,Authors_List,Year\nr-1,T1,"[\'Ostrom, Elinor\']",1990\n',
+    (out / "works.csv").write_text(
+        'id,Title,Authors_List,Year\nw-1,T1,"[\'Ostrom, Elinor\']",1990\n',
         encoding="utf-8",
     )
     return out
@@ -412,8 +431,8 @@ def test_authors_no_enrichment_warning_without_cache_dir(
 def test_stage_not_ready_when_upstream_missing(tmp_path: Path) -> None:
     p = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
 
-    # Nothing on disk: dedup needs references_raw.csv, metadata needs markdown.
-    with pytest.raises(StageNotReadyError, match="references"):
+    # Nothing on disk: dedup needs sources.csv first, metadata needs markdown.
+    with pytest.raises(StageNotReadyError, match="metadata"):
         p.deduplicate()
     with pytest.raises(StageNotReadyError, match="markdown"):
         p.extract_paper_metadata()
@@ -428,7 +447,18 @@ def test_stage_not_ready_when_upstream_missing(tmp_path: Path) -> None:
 
 def test_deduplicate_validates_required_columns(tmp_path: Path) -> None:
     p = Pipeline(pdf_dir=None, out_dir=tmp_path / "out", client=_FakeClient())
-    raw_refs = pd.DataFrame([{"Title": "Only a title"}])
+    sources = pd.DataFrame(
+        [
+            {
+                "id": "w-x-2020-a",
+                "source_file": "a.pdf",
+                "Title": "A",
+                "Authors": "X",
+                "Year": 2020,
+            }
+        ]
+    )
+    citations = pd.DataFrame([{"Title": "Only a title", "Authors": "Y", "Year": 2001}])
 
-    with pytest.raises(ValueError, match="dedup input.*missing required column.*citing_id"):
-        p.deduplicate(raw_refs)
+    with pytest.raises(ValueError, match="citations_raw.*missing required column.*citing_id"):
+        p.deduplicate(sources, citations)
