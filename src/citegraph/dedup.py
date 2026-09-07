@@ -23,13 +23,14 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pandas as pd
 from rapidfuzz.fuzz import token_set_ratio
 
 from citegraph._progress import iter_with_progress
-from citegraph.ids import _first_author_token, make_reference_id
+from citegraph.ids import _first_author_token, make_reference_id, make_work_id
 from citegraph.io import require_columns
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,54 @@ def _candidate_indices(
     return candidates
 
 
+def _cluster_rows(
+    df: pd.DataFrame,
+    cfg: DedupConfig,
+    make_cluster_id: Callable[[int, pd.Series], str],
+    *,
+    show_progress: bool,
+    description: str,
+) -> tuple[list[str], list[tuple[str, dict]]]:
+    """Single-pass blocked clustering shared by dedup and canonicalization.
+
+    Returns the per-row cluster id list and ``(cluster_id, representative
+    dict)`` pairs in first-seen order. The representative is always the
+    *first* member of its cluster.
+    """
+    cluster_ids: list[str | None] = [None] * len(df)
+    representatives: list[tuple[str, dict]] = []
+    author_blocks, title_blocks, unknown_author = _candidate_index_lookup(df)
+
+    for i in iter_with_progress(
+        list(range(len(df))),
+        show_progress=show_progress,
+        description=description,
+        item_label=lambda idx: f"row {idx + 1}/{len(df)}",
+    ):
+        if cluster_ids[i] is not None:
+            continue
+        paper_i = _row_to_dict(df.iloc[i])
+        cluster_id = make_cluster_id(i, df.iloc[i])
+        cluster_ids[i] = cluster_id
+        representatives.append((cluster_id, paper_i))
+
+        candidate_js = _candidate_indices(
+            df.iloc[i],
+            author_blocks=author_blocks,
+            title_blocks=title_blocks,
+            unknown_author=unknown_author,
+        )
+        for j in sorted(idx for idx in candidate_js if idx > i):
+            if cluster_ids[j] is not None:
+                continue
+            if not _years_can_match(df.iloc[i].get("Year"), df.iloc[j].get("Year"), cfg):
+                continue
+            if compare_papers(paper_i, _row_to_dict(df.iloc[j]), cfg):
+                cluster_ids[j] = cluster_id
+    # Every entry is filled: each row either joined a cluster or started one.
+    return cluster_ids, representatives  # type: ignore[return-value]
+
+
 def dedup_references(
     df: pd.DataFrame,
     cfg: DedupConfig | None = None,
@@ -234,42 +283,22 @@ def dedup_references(
         return empty.set_index("id"), pd.Series([], dtype=str, index=df.index)
 
     df = df.reset_index(drop=True)
-    cluster_ids: list[str | None] = [None] * len(df)
-    representatives: list[tuple[str, dict]] = []
-    author_blocks, title_blocks, unknown_author = _candidate_index_lookup(df)
 
-    for i in iter_with_progress(
-        list(range(len(df))),
+    def _ref_cluster_id(_i: int, row: pd.Series) -> str:
+        return make_reference_id(
+            row.get("Authors_List") or row.get("Authors", ""),
+            row.get("Year"),
+            row.get("Title", ""),
+        )
+
+    cluster_id_list, representatives = _cluster_rows(
+        df,
+        cfg,
+        _ref_cluster_id,
         show_progress=show_progress,
         description="Deduplicating references",
-        item_label=lambda idx: f"row {idx + 1}/{len(df)}",
-    ):
-        if cluster_ids[i] is not None:
-            continue
-        paper_i = _row_to_dict(df.iloc[i])
-        cluster_id = make_reference_id(
-            df.iloc[i].get("Authors_List") or df.iloc[i].get("Authors", ""),
-            df.iloc[i].get("Year"),
-            df.iloc[i].get("Title", ""),
-        )
-        cluster_ids[i] = cluster_id
-        representatives.append((cluster_id, paper_i))
-
-        candidate_js = _candidate_indices(
-            df.iloc[i],
-            author_blocks=author_blocks,
-            title_blocks=title_blocks,
-            unknown_author=unknown_author,
-        )
-        for j in sorted(idx for idx in candidate_js if idx > i):
-            if cluster_ids[j] is not None:
-                continue
-            if not _years_can_match(df.iloc[i].get("Year"), df.iloc[j].get("Year"), cfg):
-                continue
-            if compare_papers(paper_i, _row_to_dict(df.iloc[j]), cfg):
-                cluster_ids[j] = cluster_id
-
-    mapping = pd.Series(cluster_ids, index=df.index, name="cited_id", dtype=object)
+    )
+    mapping = pd.Series(cluster_id_list, index=df.index, name="cited_id", dtype=object)
 
     canonical_records = []
     for cluster_id, rep in representatives:
@@ -284,3 +313,119 @@ def dedup_references(
         len(canonical_df),
     )
     return canonical_df, mapping
+
+
+def _compute_rings(ring0_ids: set[str], edges: pd.DataFrame) -> dict[str, int]:
+    """BFS discovery depth from the ring-0 seed set over citation edges."""
+    rings = {wid: 0 for wid in ring0_ids}
+    out_edges: dict[str, set[str]] = defaultdict(set)
+    for citing, cited in zip(edges["citing_id"], edges["cited_id"], strict=False):
+        out_edges[str(citing)].add(str(cited))
+    frontier = set(ring0_ids)
+    depth = 0
+    while frontier:
+        depth += 1
+        nxt = {c for w in frontier for c in out_edges.get(w, ()) if c not in rings}
+        for c in nxt:
+            rings[c] = depth
+        frontier = nxt
+    return rings
+
+
+_WORK_COLUMNS = ["ring", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
+
+
+def canonicalize_works(
+    sources: pd.DataFrame,
+    citations_raw: pd.DataFrame,
+    cfg: DedupConfig | None = None,
+    *,
+    show_progress: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """Cluster sources + raw citations into canonical works.
+
+    Sources occupy the head of the combined frame, so the single-pass
+    first-match-wins loop guarantees: (a) two matching sources merge
+    (duplicate PDFs), (b) a citation matching a source becomes that
+    work, and (c) every cluster representative — hence its metadata —
+    is the full-text side whenever one exists.
+
+    Returns ``(works, edges, stats)``: ``works`` is indexed by ``id``
+    with ``ring``/``source_file`` ahead of the bibliographic columns;
+    ``edges`` is the deduplicated ``citing_id``/``cited_id`` table with
+    self-loops removed; ``stats`` counts what was dropped or merged.
+    """
+    cfg = cfg or DedupConfig()
+    require_columns(sources, ["id", "source_file", "Title", "Year"], artifact="sources")
+    require_columns(citations_raw, ["Title", "Year", "citing_id"], artifact="citations_raw")
+    for frame, name in ((sources, "sources"), (citations_raw, "citations_raw")):
+        if "Authors" not in frame.columns and "Authors_List" not in frame.columns:
+            raise ValueError(f"{name} is missing required column: Authors or Authors_List")
+
+    src = sources.reset_index(drop=True)
+    cit = citations_raw.reset_index(drop=True)
+    n_src = len(src)
+    combined = pd.concat([src, cit], ignore_index=True, sort=False)
+
+    def _cluster_id(i: int, row: pd.Series) -> str:
+        if i < n_src:
+            return str(row["id"])
+        return make_work_id(
+            row.get("Authors_List") or row.get("Authors", ""),
+            row.get("Year"),
+            row.get("Title", ""),
+        )
+
+    cluster_ids, representatives = _cluster_rows(
+        combined,
+        cfg,
+        _cluster_id,
+        show_progress=show_progress,
+        description="Canonicalizing works",
+    )
+
+    source_canonical = {str(src.iloc[i]["id"]): cluster_ids[i] for i in range(n_src)}
+    ring0_ids = set(cluster_ids[:n_src])
+
+    edges = pd.DataFrame(
+        {
+            "citing_id": [
+                source_canonical.get(str(c), str(c)) for c in cit["citing_id"]
+            ],
+            "cited_id": cluster_ids[n_src:],
+        }
+    )
+    n_before = len(edges)
+    edges = edges[edges["citing_id"] != edges["cited_id"]]
+    n_self_loops = n_before - len(edges)
+    edges = edges.drop_duplicates().reset_index(drop=True)
+
+    source_file_by_cluster: dict[str, str] = {}
+    for i in range(n_src):
+        source_file_by_cluster.setdefault(cluster_ids[i], str(src.iloc[i]["source_file"]))
+
+    rings = _compute_rings(ring0_ids, edges)
+    records = []
+    for cluster_id, rep in representatives:
+        record = dict(rep)
+        record["id"] = cluster_id
+        # A work absent from `rings` can only be an orphan whose sole
+        # inbound edge was a dropped self-loop variant; ring 1 is the
+        # defensively correct depth for it.
+        record["ring"] = rings.get(cluster_id, 1)
+        record["source_file"] = source_file_by_cluster.get(cluster_id, "")
+        records.append(record)
+    works = pd.DataFrame(records).set_index("id")[_WORK_COLUMNS]
+
+    stats = {
+        "n_self_loops_dropped": int(n_self_loops),
+        "n_source_duplicates_merged": int(n_src - len(ring0_ids)),
+    }
+    logger.info(
+        "Canonicalized %d sources + %d citations into %d works (%d edges)",
+        n_src,
+        len(cit),
+        len(works),
+        len(edges),
+    )
+    return works, edges, stats

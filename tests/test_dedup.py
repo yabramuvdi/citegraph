@@ -6,6 +6,8 @@ import pandas as pd
 
 from citegraph.dedup import (
     DedupConfig,
+    _compute_rings,
+    canonicalize_works,
     compare_papers,
     dedup_references,
     normalize_text,
@@ -267,3 +269,150 @@ def test_dedup_uses_candidate_blocking_for_unrelated_rows(monkeypatch):
     assert len(canonical) == len(df)
     assert len(mapping) == len(df)
     assert calls < 40
+
+
+# ---------------------------------------------------------------------------
+# canonicalize_works
+# ---------------------------------------------------------------------------
+
+
+def _sources_df():
+    return pd.DataFrame(
+        [
+            {
+                "id": "w-cardenas-2000-real-wealth",
+                "source_file": "real wealth.pdf",
+                "Title": "Real wealth and experimental cooperation",
+                "Authors": "Cardenas, Juan Camilo",
+                "Authors_List": ["Cardenas, Juan Camilo"],
+                "Journal": "Journal of Development Economics",
+                "Year": 2000,
+            },
+            {
+                "id": "w-ostrom-1990-governing-the-commons",
+                "source_file": "governing.pdf",
+                "Title": "Governing the Commons",
+                "Authors": "Ostrom, Elinor",
+                "Authors_List": ["Ostrom, Elinor"],
+                "Journal": "CUP",
+                "Year": 1990,
+            },
+        ]
+    )
+
+
+def test_citation_of_a_source_resolves_to_the_source_work():
+    citations = pd.DataFrame(
+        [
+            {
+                "Title": "Real wealth and experimental cooperation",
+                "Authors": "Cardenas, J.C.",
+                "Authors_List": ["Cardenas, J.C."],
+                "Journal": "J Dev Econ",
+                "Year": 2000,
+                "citing_id": "w-ostrom-1990-governing-the-commons",
+            }
+        ]
+    )
+    works, edges, stats = canonicalize_works(
+        _sources_df(), citations, DedupConfig(), show_progress=False
+    )
+    # No new work was minted for the citation — it merged into the source.
+    assert len(works) == 2
+    assert list(edges.itertuples(index=False)) == [
+        ("w-ostrom-1990-governing-the-commons", "w-cardenas-2000-real-wealth")
+    ]
+    # Cluster metadata kept the full-text side, not the citation string.
+    assert works.loc["w-cardenas-2000-real-wealth", "Title"] == (
+        "Real wealth and experimental cooperation"
+    )
+    assert works.loc["w-cardenas-2000-real-wealth", "Authors"] == "Cardenas, Juan Camilo"
+    assert works.loc["w-cardenas-2000-real-wealth", "ring"] == 0
+    assert stats["n_self_loops_dropped"] == 0
+
+
+def test_unmatched_citation_becomes_ring1_stub():
+    citations = pd.DataFrame(
+        [
+            {
+                "Title": "A completely different treatise on fisheries",
+                "Authors": "Schlager, E.",
+                "Authors_List": ["Schlager, E."],
+                "Journal": "Land Economics",
+                "Year": 1994,
+                "citing_id": "w-cardenas-2000-real-wealth",
+            }
+        ]
+    )
+    works, edges, _stats = canonicalize_works(
+        _sources_df(), citations, DedupConfig(), show_progress=False
+    )
+    stub = works[works["ring"] == 1]
+    assert len(stub) == 1
+    assert stub.index[0].startswith("w-schlager-1994-")
+    assert stub.iloc[0]["source_file"] == ""
+    assert len(edges) == 1
+
+
+def test_duplicate_source_pdfs_merge_and_edges_remap():
+    sources = _sources_df()
+    dup = sources.iloc[[0]].copy()
+    dup["id"] = "w-cardenas-2000-real-wealth-and-exp"  # different slug, same paper
+    dup["source_file"] = "real wealth (copy).pdf"
+    dup["Title"] = "Real wealth and experimental cooperation "
+    sources = pd.concat([sources, dup], ignore_index=True)
+    citations = pd.DataFrame(
+        [
+            {
+                "Title": "Governing the Commons",
+                "Authors": "Ostrom, E.",
+                "Authors_List": ["Ostrom, E."],
+                "Journal": "CUP",
+                "Year": 1990,
+                "citing_id": "w-cardenas-2000-real-wealth-and-exp",  # cites via the dup id
+            }
+        ]
+    )
+    works, edges, stats = canonicalize_works(
+        sources, citations, DedupConfig(), show_progress=False
+    )
+    assert stats["n_source_duplicates_merged"] == 1
+    assert "w-cardenas-2000-real-wealth-and-exp" not in works.index
+    # The edge's citing side remapped onto the canonical source id.
+    assert list(edges.itertuples(index=False)) == [
+        ("w-cardenas-2000-real-wealth", "w-ostrom-1990-governing-the-commons")
+    ]
+    # First member keeps the cluster's source_file.
+    assert works.loc["w-cardenas-2000-real-wealth", "source_file"] == "real wealth.pdf"
+
+
+def test_self_citation_is_dropped_and_counted():
+    citations = pd.DataFrame(
+        [
+            {
+                "Title": "Real wealth and experimental cooperation",
+                "Authors": "Cardenas, Juan Camilo",
+                "Authors_List": ["Cardenas, Juan Camilo"],
+                "Journal": "working paper",  # preprint variant of itself
+                "Year": 2000,
+                "citing_id": "w-cardenas-2000-real-wealth",
+            }
+        ]
+    )
+    _works, edges, stats = canonicalize_works(
+        _sources_df(), citations, DedupConfig(), show_progress=False
+    )
+    assert edges.empty
+    assert stats["n_self_loops_dropped"] == 1
+
+
+def test_compute_rings_general_bfs():
+    edges = pd.DataFrame(
+        [
+            {"citing_id": "w-a", "cited_id": "w-b"},
+            {"citing_id": "w-b", "cited_id": "w-c"},  # ring-1 work citing (snowball case)
+            {"citing_id": "w-a", "cited_id": "w-d"},
+        ]
+    )
+    rings = _compute_rings({"w-a"}, edges)
+    assert rings == {"w-a": 0, "w-b": 1, "w-d": 1, "w-c": 2}
