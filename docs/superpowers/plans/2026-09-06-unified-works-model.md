@@ -1186,25 +1186,24 @@ Tasks 1–13: **DONE** — all committed on branch `works-model` (14 commits,
 335 tests passing, ruff clean). The user's pre-existing uncommitted 0.1.x
 work is preserved in checkpoint commit `e875228` at the branch base.
 
-Task 14 (real-corpus verification): **IN PROGRESS**
-- Corpus: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/data` (~100 PDFs, nested author dirs)
+Task 14 (real-corpus verification): **IN PROGRESS — awaiting user go-ahead on Gemini spend**
+- Corpus: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/data` (92 PDFs, nested author dirs)
 - Out dir: `/Users/yabra/Dropbox/Consultoria/Maria/paper4/citegraph_out`
-- Stage 1 (convert) is running as a detached nohup process, log at
-  `<out_dir>/convert.log`; conversion is per-PDF checkpointed, so if it
-  died just re-run the same command — it resumes:
-  `citegraph convert "<pdf_dir>" --out "<out_dir>" --recursive`
-- Next steps once markdown/ stops growing:
-  1. check `<out_dir>/conversion_warnings.json` (image-only scans → consider `--ocr-auto`)
-  2. `citegraph estimate --out "<out_dir>"` (no API calls)
-  3. **report the estimated Gemini cost to the user and STOP — do not run
-     `citegraph metadata` / `citegraph references` without their explicit
-     go-ahead** (real API spend)
-  4. after approval: `citegraph metadata`, `citegraph references`,
-     `citegraph dedup`, `citegraph authors`, `citegraph report --open`
+- Done (2026-09-07):
+  - Stage 1 convert complete: 92/92 markdowns. One scanned PDF
+    (`Cardenas__métodos experimentales`) was image-only; re-ran with
+    `--ocr-auto` → now 93 KB of text, `conversion_warnings.json` cleared.
+  - Clean-state re-verify: `pytest` green (exit 0), `ruff check .` clean.
+  - `citegraph estimate`: 92 metadata + 92 references calls on
+    gemini-3.1-flash-lite, ~880k input + ~996k output tokens,
+    **~$1.71 estimated** (pricing table is mid-2025 rates; treat as rough).
+- Next steps (blocked on explicit user approval — real API spend):
+  1. `citegraph metadata`, `citegraph references`, `citegraph dedup`,
+     `citegraph authors`, `citegraph report --open`
      (skip `enrich` unless the user asks — it is slow but free)
-  5. verify: `works.csv` exists, ring-0 count ≈ number of PDFs, and
+  2. verify: `works.csv` exists, ring-0 count ≈ 92, and
      `citation_graph.csv` has edges whose `cited_id` is a ring-0 work
      (core-cites-core fires on real data); `g.top_authors(15, ring=0)`
      gives a sane core-author ranking
-  6. then superpowers:finishing-a-development-branch for merging
+  3. then superpowers:finishing-a-development-branch for merging
      `works-model` into `main`
