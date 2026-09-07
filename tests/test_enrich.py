@@ -249,6 +249,35 @@ def _make_df() -> pd.DataFrame:
     ).set_index("id")
 
 
+def test_enrich_works_nan_title_short_circuits_as_empty():
+    """A NaN title must not stringify to 'nan' and get sent as a search query."""
+    df = pd.DataFrame(
+        [
+            {
+                "id": "w-fehr-2003-untitled",
+                "Title": float("nan"),
+                "Authors": float("nan"),
+                "Authors_List": None,
+                "Journal": "Nature",
+                "Year": 2003,
+            }
+        ]
+    ).set_index("id")
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        result = enrich_works(df, cfg=_CFG)
+
+    mock_client.get.assert_not_called()
+    row = result.iloc[0]
+    assert row["enrichment_status"] == "miss"
+    assert row["enrichment_miss_reason"] == "empty_title"
+
+
 def test_enrich_works_crossref_match():
     df = _make_df()
     mock_client = MagicMock()

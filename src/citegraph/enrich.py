@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -405,6 +406,12 @@ def _normalize_record(item: dict, source: str) -> dict:
     }
 
 
+def _scalar_str(value: Any) -> str:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    return str(value)
+
+
 def _write_cache(cache_path: Path, data: dict) -> None:
     tmp = cache_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -464,8 +471,9 @@ def _enrich_one(
                 row_dict.update(_with_cache_diagnostics(cached))
                 return row_dict
 
-    title = str(row.get("Title") or "")
-    authors = str(row.get("Authors") or "")
+    # NaN is truthy and str()s to "nan", which would be sent as a real query.
+    title = _scalar_str(row.get("Title"))
+    authors = _scalar_str(row.get("Authors"))
     try:
         year = int(row.get("Year")) if row.get("Year") else None
     except (TypeError, ValueError):
