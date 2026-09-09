@@ -224,6 +224,53 @@ def test_convert_directory_ocr_auto_retries_only_image_only(
     assert "# Body" in (md_dir / "scan.md").read_text()
 
 
+def test_convert_directory_ocr_auto_retries_glyph_corrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """auto mode also retries output whose characters failed to map.
+
+    A font with no ToUnicode map yields long-but-unreadable markdown, which
+    the image-only heuristic cannot see. OCR is exactly the remedy, so auto
+    mode should reach for it here too.
+    """
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "text.pdf").write_text("")
+    (pdf_dir / "badfont.pdf").write_text("")
+
+    md_dir = tmp_path / "out" / "markdown"
+    md_dir.mkdir(parents=True)
+
+    calls: list[tuple[str, bool]] = []
+
+    def fake_convert(pdf_path, markdown_dir, *, overwrite=False, cache_stem=None, ocr=False):
+        from pathlib import Path as _P
+
+        pdf_path = _P(pdf_path)
+        markdown_dir = _P(markdown_dir)
+        stem = cache_stem or pdf_path.stem
+        calls.append((pdf_path.stem, bool(ocr)))
+        out = markdown_dir / f"{stem}.md"
+        if out.exists() and not overwrite:
+            return out
+        if pdf_path.stem == "badfont" and not ocr:
+            # long, but the characters never mapped
+            out.write_text("## " + "glyph<UNKNOWN>" * 400 + "\nsome words here. " * 20)
+        else:
+            out.write_text("# Body\n" + ("x" * 500))
+        return out
+
+    from citegraph import pdf_to_markdown as mod
+
+    monkeypatch.setattr(mod, "convert_pdf_to_markdown", fake_convert)
+
+    convert_directory(pdf_dir, md_dir, ocr="auto", show_progress=False)
+
+    assert ("badfont", True) in calls  # retried with OCR
+    assert ("text", True) not in calls  # clean file left alone
+    assert "# Body" in (md_dir / "badfont.md").read_text()
+
+
 def test_convert_directory_ocr_auto_no_retry_when_clean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

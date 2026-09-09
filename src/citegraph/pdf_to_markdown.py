@@ -232,9 +232,12 @@ def convert_directory(
     * ``False`` — never OCR.
     * ``True`` — force full-page OCR via EasyOCR for every PDF.
     * ``"auto"`` — two-pass: convert everything without OCR first, run the
-      :func:`_is_image_only` heuristic on each output, then re-run only
-      the flagged PDFs with OCR (their stub markdown is deleted first so
-      the cache check doesn't short-circuit the retry).
+      :func:`_is_image_only` and :func:`_has_unmappable_glyphs` heuristics
+      on each output, then re-run only the flagged PDFs with OCR (their
+      stub markdown is deleted first so the cache check doesn't
+      short-circuit the retry). OCR is the remedy for both failure modes:
+      a scanned page with no text layer, and a page whose font carries no
+      ToUnicode map.
 
     Returns the list of written markdown files in stable (sorted) order.
     """
@@ -259,10 +262,15 @@ def convert_directory(
             show_progress=show_progress,
             ocr=False,
         )
-        retry_pairs = [(pdf, md) for pdf, md in zip(pdfs, out_paths, strict=True) if _is_image_only(md)]
+        retry_pairs = [
+            (pdf, md)
+            for pdf, md in zip(pdfs, out_paths, strict=True)
+            if _is_image_only(md) or _has_unmappable_glyphs(md)
+        ]
         if retry_pairs:
             logger.info(
-                "Re-running %d image-only PDF(s) with OCR (auto fallback)", len(retry_pairs)
+                "Re-running %d poorly-converted PDF(s) with OCR (auto fallback)",
+                len(retry_pairs),
             )
             for _pdf, md in retry_pairs:
                 md.unlink()
