@@ -8,6 +8,8 @@ import pytest
 
 from citegraph.pdf_to_markdown import (
     _detect_stem_collisions,
+    _has_unmappable_glyphs,
+    _is_image_only,
     cache_stem_for,
     convert_directory,
     convert_pdf_to_markdown,
@@ -269,3 +271,57 @@ def test_convert_pdf_to_markdown_respects_cache_stem(tmp_path: Path) -> None:
 
     out = convert_pdf_to_markdown(pdf, md_dir, cache_stem="custom__name")
     assert out == md_dir / "custom__name.md"
+
+
+# ---------------------------------------------------------------------------
+# unmappable-glyph detection
+# ---------------------------------------------------------------------------
+def test_has_unmappable_glyphs_flags_corrupted_conversion(tmp_path: Path) -> None:
+    """A PDF whose font lacks a ToUnicode map converts to glyph placeholders.
+
+    docling emits one ``glyph<UNKNOWN>`` per character it cannot map. The file
+    is long, so the image-only heuristic (which looks for *too few* chars)
+    sails right past it, and the paper silently yields empty metadata.
+    """
+    md = tmp_path / "broken.md"
+    md.write_text("## " + "glyph<UNKNOWN>" * 400 + "\n" + "real words here. " * 40)
+
+    assert _has_unmappable_glyphs(md) is True
+    # the existing heuristic cannot see this — that's why we need a new one
+    assert _is_image_only(md) is False
+
+
+def test_has_unmappable_glyphs_ignores_clean_markdown(tmp_path: Path) -> None:
+    md = tmp_path / "clean.md"
+    md.write_text("# A Real Paper\n\n" + "Ordinary prose about cooperation. " * 60)
+    assert _has_unmappable_glyphs(md) is False
+
+
+def test_has_unmappable_glyphs_tolerates_a_few_stray_symbols(tmp_path: Path) -> None:
+    """A handful of unmappable math symbols is normal — don't cry wolf."""
+    md = tmp_path / "mostly_fine.md"
+    md.write_text("# Paper\n\n" + "Readable text with equations. " * 200
+                  + "glyph<UNKNOWN>" * 3)
+    assert _has_unmappable_glyphs(md) is False
+
+
+def test_check_conversion_quality_reports_glyph_corruption(tmp_path: Path) -> None:
+    """The corrupted file lands in conversion_warnings.json with its own reason."""
+    import json
+
+    from citegraph.io import OutLayout
+    from citegraph.reports import check_conversion_quality
+
+    layout = OutLayout(tmp_path)
+    md_dir = tmp_path / "markdown"
+    md_dir.mkdir(parents=True)
+    good = md_dir / "good.md"
+    good.write_text("# Fine\n\n" + "Plenty of real prose here. " * 50)
+    bad = md_dir / "bad.md"
+    bad.write_text("## " + "glyph<UNKNOWN>" * 400 + "\n" + "real words here. " * 40)
+
+    check_conversion_quality([good, bad], layout)
+
+    warns = json.loads(layout.conversion_warnings_json.read_text(encoding="utf-8"))
+    assert [w["source_file"] for w in warns] == ["bad.md"]
+    assert "glyph" in warns[0]["reason"].lower()

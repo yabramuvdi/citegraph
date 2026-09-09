@@ -95,6 +95,31 @@ def _is_image_only(path: Path, min_text_chars: int = 200) -> bool:
     return len("".join(lines).strip()) < min_text_chars
 
 
+_GLYPH_PLACEHOLDER = "glyph<UNKNOWN>"
+
+
+def _has_unmappable_glyphs(
+    path: Path, min_glyphs: int = 20, min_rate: float = 0.01
+) -> bool:
+    """Return True if the conversion lost a meaningful share of its characters.
+
+    A PDF whose embedded font carries no ToUnicode map converts to one
+    ``glyph<UNKNOWN>`` per unmappable character. The output is *long*, so
+    :func:`_is_image_only` — which looks for too few characters — never fires,
+    and the paper goes on to yield empty metadata with no warning anywhere.
+
+    Corruption is often concentrated (a title page in a different font can be
+    fully unmappable while the body reads fine), so the rate is deliberately
+    low. ``min_glyphs`` keeps a handful of stray math symbols from crying wolf.
+    """
+    text = path.read_text(encoding="utf-8")
+    n_glyphs = text.count(_GLYPH_PLACEHOLDER)
+    if n_glyphs < min_glyphs:
+        return False
+    mapped = sum(ch.isalnum() for ch in text.replace(_GLYPH_PLACEHOLDER, ""))
+    return n_glyphs / (n_glyphs + mapped) >= min_rate
+
+
 def convert_pdf_to_markdown(
     pdf_path: Path | str,
     markdown_dir: Path | str,

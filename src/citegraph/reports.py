@@ -12,7 +12,7 @@ from typing import Any
 
 from citegraph.dedup import DedupConfig
 from citegraph.io import OutLayout, read_json, write_json
-from citegraph.pdf_to_markdown import _is_image_only
+from citegraph.pdf_to_markdown import _has_unmappable_glyphs, _is_image_only
 
 logger = logging.getLogger(__name__)
 
@@ -146,17 +146,23 @@ def count_no_references(path: Path) -> int:
 def check_conversion_quality(
     paths: list[Path], layout: OutLayout, *, ocr_attempted: bool = False
 ) -> None:
-    """After conversion, flag markdown files that appear to be image-only."""
+    """After conversion, flag markdown that is image-only or glyph-corrupted."""
     reason = (
         "image-only markdown even after OCR (manual review needed)"
         if ocr_attempted
         else "image-only markdown (possibly a scanned PDF)"
     )
-    warnings = [
-        {"source_file": p.name, "reason": reason}
-        for p in paths
-        if _is_image_only(p)
-    ]
+    glyph_reason = (
+        "unmappable glyphs even after OCR (manual review needed)"
+        if ocr_attempted
+        else "unmappable glyphs (font has no ToUnicode map); re-run this PDF with OCR"
+    )
+    warnings = []
+    for p in paths:
+        if _is_image_only(p):
+            warnings.append({"source_file": p.name, "reason": reason})
+        elif _has_unmappable_glyphs(p):
+            warnings.append({"source_file": p.name, "reason": glyph_reason})
     write_conversion_warnings(layout.conversion_warnings_json, warnings)
     if warnings:
         hint = (
@@ -165,7 +171,7 @@ def check_conversion_quality(
             else "re-run with ocr=True / --ocr (or ocr='auto' / --ocr-auto) for better results."
         )
         logger.warning(
-            "%d markdown file(s) appear image-only; %s See %s",
+            "%d markdown file(s) converted poorly; %s See %s",
             len(warnings),
             hint,
             layout.conversion_warnings_json,
