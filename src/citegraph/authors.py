@@ -771,7 +771,15 @@ def _cluster_block(
         else:
             no_external.append(o)
 
-    external_clusters: list[list[AuthorOccurrence]] = list(by_external.values())
+    # Bucketing on one key per occurrence splits a person whose records carry
+    # different id *types* — an OpenAlex id where the work matched OpenAlex,
+    # only an ORCID where it matched CrossRef. Union the buckets over every id
+    # they hold so one person is one external cluster; otherwise their no-id
+    # name variants are compatible with both halves, which reads as ambiguous
+    # and leaves them stranded in a cluster of their own.
+    external_clusters: list[list[AuthorOccurrence]] = _merge_clusters_by_external_id(
+        list(by_external.values())
+    )
 
     if cfg.merge_mode == "loose":
         # Bucket purely by (surname_norm, first_initial) — ignore everything

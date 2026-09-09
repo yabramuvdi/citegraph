@@ -296,6 +296,68 @@ def test_openalex_full_name_anchor_absorbs_unidentified_initials():
     assert set(citations_df["record_id"]) == {"r-1", "r-2", "r-3"}
 
 
+def test_openalex_id_and_orcid_only_records_form_one_cluster():
+    """One person is one cluster even when records carry different id *types*.
+
+    Enrichment attaches an OpenAlex id to some records and only an ORCID to
+    others (CrossRef-matched works supply no OpenAlex id). Filing each
+    occurrence under a single preferred key splits the person in two, which
+    in turn makes their no-id name variants ambiguous so they never anchor.
+    """
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Barr, Abigail"], "Year": 2009},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Barr, A."], "Year": 2010},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Abigail Barr"], "Year": 2012},
+    ])
+    enriched = pd.DataFrame(
+        [
+            # OpenAlex-matched: carries both ids.
+            {"id": "r-1",
+             "OpenAlex_Authors": [{"display_name": "Abigail Barr",
+                                   "openalex_id": "A5067051983",
+                                   "orcid": "0000-0002-1241-9162"}]},
+            # CrossRef-matched: ORCID only, no OpenAlex id.
+            {"id": "r-2",
+             "OpenAlex_Authors": [{"display_name": "Abigail Margaret Barr",
+                                   "openalex_id": None,
+                                   "orcid": "0000-0002-1241-9162"}]},
+            # r-3 has no enrichment at all — a bare name variant.
+        ]
+    ).set_index("id")
+
+    authors_df, citations_df, _ = normalize_authors(works=refs, enriched_works=enriched)
+
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["openalex_id"] == "A5067051983"
+    assert authors_df.iloc[0]["orcid"] == "0000-0002-1241-9162"
+    assert int(authors_df.iloc[0]["n_works"]) == 3
+    assert set(citations_df["record_id"]) == {"r-1", "r-2", "r-3"}
+
+
+def test_shared_orcid_does_not_merge_distinct_openalex_ids_of_others():
+    """Unioning on shared ids must not drag in an unrelated same-surname person."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Smith, John"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Smith, John"], "Year": 2012},
+    ])
+    enriched = pd.DataFrame(
+        [
+            {"id": "r-1",
+             "OpenAlex_Authors": [{"display_name": "John Smith",
+                                   "openalex_id": "A1",
+                                   "orcid": "0000-0000-0000-0001"}]},
+            {"id": "r-2",
+             "OpenAlex_Authors": [{"display_name": "John Smith",
+                                   "openalex_id": "A2",
+                                   "orcid": "0000-0000-0000-0002"}]},
+        ]
+    ).set_index("id")
+
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
+
+    assert len(authors_df) == 2
+
+
 def test_different_openalex_ids_split_identical_names():
     """Two 'J. Smith' records with different OpenAlex ids stay separate."""
     refs = _refs([
