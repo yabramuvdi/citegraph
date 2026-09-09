@@ -151,16 +151,32 @@ def _openalex_lookup(
     return _openalex_lookup_report(title, year, cfg, client).match
 
 
+def _strip_openalex_wildcards(title: str) -> str:
+    """Remove ``?`` and ``*`` from an OpenAlex ``search`` value.
+
+    OpenAlex reads both as wildcard operators and rejects the entire query
+    with a 400 unless ``search.exact=`` is used. Question marks are common
+    in academic titles ("Is There a Role for Rural Communities?"), so
+    leaving them in silently kills the fallback for those works. Dropping
+    them is safe: the search is stemmed anyway and final acceptance is
+    decided by rapidfuzz scoring against the returned candidates.
+    """
+    if not title:
+        return ""
+    return " ".join(title.replace("?", " ").replace("*", " ").split())
+
+
 def _openalex_lookup_report(
     title: str,
     year: int | None,
     cfg: EnrichConfig,
     client: Any,
 ) -> _LookupReport:
-    if not title:
+    search = _strip_openalex_wildcards(title)
+    if not search:
         return _LookupReport(miss_reason="empty_title")
     params = {
-        "search": title,
+        "search": search,
         "per-page": cfg.rows,
     }
     # OpenAlex's polite pool keys on a mailto query param (the User-Agent

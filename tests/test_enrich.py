@@ -13,6 +13,7 @@ from citegraph.enrich import (
     _crossref_lookup,
     _normalize_record,
     _openalex_lookup,
+    _openalex_lookup_report,
     enrich_works,
 )
 
@@ -246,6 +247,44 @@ def test_openalex_omits_api_key_when_unset():
     _openalex_lookup("Attention Is All You Need", 2017, _CFG, client)
     params = client.get.call_args.kwargs["params"]
     assert "api_key" not in params
+
+
+def test_openalex_strips_wildcard_chars_from_search():
+    """OpenAlex reads ? and * as wildcards and 400s the whole query.
+
+    Academic titles are full of question marks ("Is There a Role for Rural
+    Communities?"), so leaving them in silently kills the OpenAlex fallback
+    for those works.
+    """
+    client = MagicMock()
+    client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
+    _openalex_lookup(
+        "Halting Degradation: Is There a Role for Rural Communities?",
+        1993,
+        _CFG,
+        client,
+    )
+    search = client.get.call_args.kwargs["params"]["search"]
+    assert "?" not in search
+    assert "*" not in search
+    assert "Role for Rural Communities" in search
+
+
+def test_openalex_wildcard_only_title_is_not_sent_as_empty_search():
+    """A title that is nothing but wildcards must miss, not query for ''."""
+    client = MagicMock()
+    report = _openalex_lookup_report("???", None, _CFG, client)
+    assert report.match is None
+    assert report.miss_reason == "empty_title"
+    client.get.assert_not_called()
+
+
+def test_crossref_keeps_question_marks_in_title_query():
+    """Only OpenAlex needs the stripping; CrossRef handles ? fine."""
+    client = MagicMock()
+    client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
+    _crossref_lookup("Is There a Role?", "Ostrom", 1993, _CFG, client)
+    assert client.get.call_args.kwargs["params"]["query.title"] == "Is There a Role?"
 
 
 def test_crossref_never_sends_openalex_api_key():
