@@ -46,6 +46,10 @@ class EnrichConfig:
     # Set via Pipeline(enrich_config=EnrichConfig(contact_email="you@example.com"))
     # or the --enrich-contact CLI flag.
     contact_email: str = ""
+    # OpenAlex API key (raises the free daily credit budget 10x; prepaid
+    # credits go further). Sent only to OpenAlex, never CrossRef, and
+    # redacted from enrichment_summary.json.
+    openalex_api_key: str = ""
     title_match_threshold: float = 90.0
     timeout_s: float = 15.0
     rows: int = 3
@@ -163,6 +167,8 @@ def _openalex_lookup_report(
     # form only covers CrossRef) — anonymous callers get throttled hard.
     if cfg.contact_email:
         params["mailto"] = cfg.contact_email
+    if cfg.openalex_api_key:
+        params["api_key"] = cfg.openalex_api_key
     try:
         payload = _request_json(
             client,
@@ -571,13 +577,16 @@ def _write_enrichment_sidecars(
     )
     n_matched = int((enriched.get("enrichment_status") == "matched").sum()) if "enrichment_status" in enriched else 0
     n_missed = int((enriched.get("enrichment_status") == "miss").sum()) if "enrichment_status" in enriched else 0
+    cfg_out = asdict(cfg)
+    if cfg_out.get("openalex_api_key"):
+        cfg_out["openalex_api_key"] = "***"
     summary = {
         "n_references": int(len(enriched)),
         "n_matched": n_matched,
         "n_missed": n_missed,
         "match_rate": (n_matched / len(enriched)) if len(enriched) else 0.0,
         "sources": {str(k): int(v) for k, v in source_counts.items()},
-        "config": asdict(cfg),
+        "config": cfg_out,
     }
     if "ring" in enriched.columns:
         summary["by_ring"] = {

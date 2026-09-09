@@ -22,6 +22,7 @@ import typer
 from rich.logging import RichHandler
 
 from citegraph.authors import AuthorClusterConfig
+from citegraph.config import get_settings
 from citegraph.dedup import DedupConfig
 from citegraph.enrich import EnrichConfig
 from citegraph.io import OutLayout
@@ -74,9 +75,13 @@ def _enrich_config(
     retry_attempts: int,
     retry_wait: float,
     max_workers: int,
+    openalex_api_key: str = "",
 ) -> EnrichConfig:
+    if not openalex_api_key:
+        openalex_api_key = get_settings().openalex_api_key or ""
     return EnrichConfig(
         contact_email=contact,
+        openalex_api_key=openalex_api_key,
         title_match_threshold=threshold,
         timeout_s=timeout,
         year_mismatch_penalty=year_penalty,
@@ -170,6 +175,11 @@ def run(
         min=1,
         help="Maximum concurrent CrossRef/OpenAlex enrichment lookups.",
     ),
+    openalex_api_key: str = typer.Option(
+        "",
+        "--openalex-api-key",
+        help="OpenAlex API key (default: OPENALEX_API_KEY env var / .env).",
+    ),
     model: str | None = typer.Option(None, "--model", help="Gemini model id."),
     threshold: float = typer.Option(
         _DEDUP_DEFAULTS.threshold, "--threshold", help="Dedup similarity threshold."
@@ -218,6 +228,7 @@ def run(
         enrich_retry_attempts,
         enrich_retry_wait,
         enrich_max_workers,
+        openalex_api_key,
     )
     ocr_mode = _resolve_ocr_mode(ocr, ocr_auto)
     pipeline = Pipeline(
@@ -516,6 +527,11 @@ def enrich(
         min=1,
         help="Maximum concurrent CrossRef/OpenAlex enrichment lookups.",
     ),
+    openalex_api_key: str = typer.Option(
+        "",
+        "--openalex-api-key",
+        help="OpenAlex API key (default: OPENALEX_API_KEY env var / .env).",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Stage 5: optional CrossRef/OpenAlex enrichment of references.csv."""
@@ -528,6 +544,7 @@ def enrich(
         enrich_retry_attempts,
         enrich_retry_wait,
         enrich_max_workers,
+        openalex_api_key,
     )
     pipeline = Pipeline(pdf_dir=None, out_dir=out, enrich=True, enrich_config=ecfg)
 

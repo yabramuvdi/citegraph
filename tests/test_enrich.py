@@ -230,6 +230,34 @@ def test_openalex_omits_mailto_when_no_contact_email():
     assert "mailto" not in params
 
 
+def test_openalex_sends_api_key_param():
+    """A configured OpenAlex API key rides along as the api_key query param."""
+    client = MagicMock()
+    client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
+    cfg = EnrichConfig(title_match_threshold=90.0, openalex_api_key="sk-test-123")
+    _openalex_lookup("Attention Is All You Need", 2017, cfg, client)
+    params = client.get.call_args.kwargs["params"]
+    assert params["api_key"] == "sk-test-123"
+
+
+def test_openalex_omits_api_key_when_unset():
+    client = MagicMock()
+    client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
+    _openalex_lookup("Attention Is All You Need", 2017, _CFG, client)
+    params = client.get.call_args.kwargs["params"]
+    assert "api_key" not in params
+
+
+def test_crossref_never_sends_openalex_api_key():
+    """The OpenAlex key must not leak into CrossRef requests."""
+    client = MagicMock()
+    client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
+    cfg = EnrichConfig(title_match_threshold=90.0, openalex_api_key="sk-test-123")
+    _crossref_lookup("Attention Is All You Need", "Ashish Vaswani", 2017, cfg, client)
+    params = client.get.call_args.kwargs["params"]
+    assert "api_key" not in params
+
+
 # ---------------------------------------------------------------------------
 # enrich_works — integration over a DataFrame
 # ---------------------------------------------------------------------------
@@ -470,6 +498,77 @@ def test_enrich_works_backfills_diagnostics_for_legacy_cache(tmp_path):
     assert result.iloc[0]["enrichment_miss_reason"] is None
     summary = json.loads(layout.enrichment_summary_json.read_text())
     assert summary["n_matched"] == 1
+
+
+def test_summary_redacts_openalex_api_key(tmp_path):
+    """The API key must never be written to enrichment_summary.json."""
+    df = _make_df()
+    enrichment_dir = tmp_path / "enrichment"
+    enrichment_dir.mkdir()
+
+    cached = {
+        "doi": "cached-doi",
+        "Title": "Attention Is All You Need",
+        "Authors_List": ["Ashish Vaswani"],
+        "Authors": "Ashish Vaswani",
+        "Journal": "NeurIPS",
+        "Year": 2017,
+        "enrichment_source": "crossref",
+    }
+    (enrichment_dir / "r-vaswani-2017-attention.json").write_text(
+        json.dumps(cached), encoding="utf-8"
+    )
+
+    from citegraph.io import OutLayout
+    layout = OutLayout(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    cfg = EnrichConfig(title_match_threshold=90.0, openalex_api_key="sk-secret-456")
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        enrich_works(df, cfg=cfg, layout=layout)
+
+    raw = layout.enrichment_summary_json.read_text()
+    assert "sk-secret-456" not in raw
+    summary = json.loads(raw)
+    assert summary["config"]["openalex_api_key"] == "***"
+
+
+def test_summary_shows_empty_api_key_when_unset(tmp_path):
+    """No key configured -> the summary records an empty string, not a mask."""
+    df = _make_df()
+    enrichment_dir = tmp_path / "enrichment"
+    enrichment_dir.mkdir()
+
+    cached = {
+        "doi": "cached-doi",
+        "Title": "Attention Is All You Need",
+        "Authors_List": ["Ashish Vaswani"],
+        "Authors": "Ashish Vaswani",
+        "Journal": "NeurIPS",
+        "Year": 2017,
+        "enrichment_source": "crossref",
+    }
+    (enrichment_dir / "r-vaswani-2017-attention.json").write_text(
+        json.dumps(cached), encoding="utf-8"
+    )
+
+    from citegraph.io import OutLayout
+    layout = OutLayout(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        enrich_works(df, cfg=_CFG, layout=layout)
+
+    summary = json.loads(layout.enrichment_summary_json.read_text())
+    assert summary["config"]["openalex_api_key"] == ""
 
 
 def test_enrich_works_writes_cache(tmp_path):

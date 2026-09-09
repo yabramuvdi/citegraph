@@ -28,6 +28,11 @@ class Settings(BaseSettings):
         validation_alias="GOOGLE_API_KEY",
         description="API key for the Google Gemini API.",
     )
+    openalex_api_key: str | None = Field(
+        default=None,
+        validation_alias="OPENALEX_API_KEY",
+        description="API key for the OpenAlex API (raises the daily credit budget).",
+    )
     citegraph_model: str = Field(
         default="gemini-3.1-flash-lite",
         validation_alias="CITEGRAPH_MODEL",

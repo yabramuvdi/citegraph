@@ -162,6 +162,37 @@ def test_enrich_config_receives_quality_options() -> None:
     assert cfg.max_workers == 2
 
 
+def test_enrich_config_api_key_falls_back_to_env(monkeypatch) -> None:
+    """An empty --openalex-api-key flag picks up OPENALEX_API_KEY from the env/.env."""
+    monkeypatch.setenv("OPENALEX_API_KEY", "env-key-789")
+    cfg = _enrich_config(
+        contact="me@example.com",
+        threshold=90.0,
+        timeout=15.0,
+        year_penalty=8.0,
+        retry_attempts=3,
+        retry_wait=0.25,
+        max_workers=8,
+        openalex_api_key="",
+    )
+    assert cfg.openalex_api_key == "env-key-789"
+
+
+def test_enrich_config_api_key_flag_overrides_env(monkeypatch) -> None:
+    monkeypatch.setenv("OPENALEX_API_KEY", "env-key-789")
+    cfg = _enrich_config(
+        contact="me@example.com",
+        threshold=90.0,
+        timeout=15.0,
+        year_penalty=8.0,
+        retry_attempts=3,
+        retry_wait=0.25,
+        max_workers=8,
+        openalex_api_key="flag-key",
+    )
+    assert cfg.openalex_api_key == "flag-key"
+
+
 def test_enrich_max_workers_option_rejects_zero(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
