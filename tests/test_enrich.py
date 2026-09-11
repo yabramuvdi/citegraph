@@ -629,7 +629,7 @@ def test_enrich_works_writes_cache(tmp_path):
 
     cache_file = layout.enrichment_dir / "r-vaswani-2017-attention.json"
     assert cache_file.exists()
-    cached = json.loads(cache_file.read_text())
+    cached = json.loads(cache_file.read_text())["result"]
     assert cached["doi"] == "10.48550/arxiv.1706.03762"
     assert cached["enrichment_status"] == "matched"
     assert cached["enrichment_title_score"] == 100.0
@@ -654,7 +654,7 @@ def test_enrich_works_caches_misses(tmp_path):
 
     cache_file = layout.enrichment_dir / "r-vaswani-2017-attention.json"
     assert cache_file.exists()
-    cached = json.loads(cache_file.read_text())
+    cached = json.loads(cache_file.read_text())["result"]
     assert cached["enrichment_status"] == "miss"
     assert cached["enrichment_miss_reason"] == "no_openalex_candidates"
     assert first.iloc[0]["enrichment_status"] == "miss"
@@ -705,7 +705,7 @@ def test_enrich_works_retries_cached_http_error_miss(tmp_path):
     row = result.iloc[0]
     assert row["enrichment_status"] == "matched"
     assert row["doi"] == "10.48550/arxiv.1706.03762"
-    cached = json.loads(cache_file.read_text())
+    cached = json.loads(cache_file.read_text())["result"]
     assert cached["enrichment_status"] == "matched"
 
 

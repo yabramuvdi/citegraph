@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -32,12 +33,13 @@ from rapidfuzz.fuzz import token_set_ratio
 
 from citegraph._progress import iter_with_progress
 from citegraph.ids import _first_author_token, make_work_id
-from citegraph.io import require_columns
+from citegraph.io import parse_authors_list, require_columns
 
 logger = logging.getLogger(__name__)
 
 
-_NON_ALNUM = re.compile(r"[^a-zA-Z0-9\s]")
+_NON_ALNUM = re.compile(r"[^\w\s]", re.UNICODE)
+_WS = re.compile(r"\s+")
 
 
 def normalize_text(text: object) -> str:
@@ -49,7 +51,10 @@ def normalize_text(text: object) -> str:
         text = ", ".join(str(t) for t in text)
     if not isinstance(text, str):
         return ""
-    return _NON_ALNUM.sub("", text.lower().strip())
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = _NON_ALNUM.sub(" ", text.casefold())
+    return _WS.sub(" ", text).strip()
 
 
 @dataclass
@@ -107,8 +112,19 @@ def compare_papers(paper1: dict, paper2: dict, cfg: DedupConfig) -> bool:
     # bare title. Both patterns scored 77-85 with the previous scorer mix and
     # slipped under the 85 threshold; token_set_ratio scores them ~100 while
     # still rejecting genuinely different papers that share only a few tokens.
+    title1 = normalize_text(paper1.get("Title"))
+    title2 = normalize_text(paper2.get("Title"))
+    raw_title1 = paper1.get("Title") if isinstance(paper1.get("Title"), str) else ""
+    raw_title2 = paper2.get("Title") if isinstance(paper2.get("Title"), str) else ""
+    subtitle_shortening = False
+    for raw_left, raw_right in ((raw_title1, raw_title2), (raw_title2, raw_title1)):
+        if ":" in raw_left or "—" in raw_left:
+            prefix = raw_left.replace("—", ":").split(":", 1)[0]
+            subtitle_shortening |= normalize_text(prefix) == normalize_text(raw_right)
+    if _unsafe_title_difference(title1, title2) and not subtitle_shortening:
+        return False
     title_score = token_set_ratio(
-        normalize_text(paper1.get("Title")), normalize_text(paper2.get("Title"))
+        _title_without_leading_article(title1), _title_without_leading_article(title2)
     )
     authors_score = token_set_ratio(
         normalize_text(paper1.get("Authors")), normalize_text(paper2.get("Authors"))
@@ -135,14 +151,47 @@ def compare_papers(paper1: dict, paper2: dict, cfg: DedupConfig) -> bool:
     return weighted >= cfg.threshold and year_ok
 
 
+_LEADING_ARTICLES = {"a", "an", "the"}
+_NEGATION_WORDS = {"no", "not", "without", "non"}
+_PART_MARKER = re.compile(r"^(part|volume|vol|book)$")
+
+
+def _title_without_leading_article(title: str) -> str:
+    words = title.split()
+    return " ".join(words[1:] if words and words[0] in _LEADING_ARTICLES else words)
+
+
+def _unsafe_title_difference(left: str, right: str) -> bool:
+    """Guard high-scoring containment matches that change work identity."""
+    lw, rw = left.split(), right.split()
+    if bool(set(lw) & _NEGATION_WORDS) != bool(set(rw) & _NEGATION_WORDS):
+        return True
+    def marker(words: list[str]) -> tuple[str, str] | None:
+        for i, word in enumerate(words[:-1]):
+            if _PART_MARKER.match(word) and re.fullmatch(r"[ivxlcdm]+|\d+", words[i + 1]):
+                return word, words[i + 1]
+        return None
+    lm, rm = marker(lw), marker(rw)
+    if lm != rm and (lm or rm):
+        return True
+    shorter, longer = (lw, rw) if len(lw) < len(rw) else (rw, lw)
+    if shorter != longer and len(longer) - len(shorter) >= 2:
+        return True
+    return False
+
+
 def _row_to_dict(row: pd.Series) -> dict:
     # Authors_List is preserved alongside the comma-joined Authors so that
     # downstream stages (author normalization in particular) can recover
     # individual author strings without having to split the joined form —
     # comma-splitting "Smith, J., García, A." would mistake each initial
     # for its own author.
+    authors_list = parse_authors_list(row.get("Authors_List"))
+    authors = row.get("Authors")
+    if (not isinstance(authors, str) or not authors.strip()) and isinstance(authors_list, list):
+        authors = "; ".join(str(a) for a in authors_list)
     return {
-        "Authors": row.get("Authors"),
+        "Authors": authors,
         "Authors_List": row.get("Authors_List"),
         "Journal": row.get("Journal"),
         "Title": row.get("Title"),
@@ -151,12 +200,13 @@ def _row_to_dict(row: pd.Series) -> dict:
 
 
 def _title_block_key(title: object) -> str:
-    words = normalize_text(title).split()
+    words = _title_without_leading_article(normalize_text(title)).split()
     return " ".join(words[:6])
 
 
 def _author_block_key(row: pd.Series) -> str:
-    return _first_author_token(row.get("Authors_List") or row.get("Authors", ""))
+    authors_list = parse_authors_list(row.get("Authors_List"))
+    return _first_author_token(authors_list or row.get("Authors", ""))
 
 
 def _years_can_match(a: object, b: object, cfg: DedupConfig) -> bool:
@@ -182,6 +232,7 @@ def _candidate_index_lookup(df: pd.DataFrame) -> tuple[dict[str, set[int]], dict
             unknown_author.add(idx)
         if title_key:
             title_blocks[title_key].add(idx)
+            title_blocks[" ".join(sorted(set(title_key.split())))].add(idx)
     return author_blocks, title_blocks, unknown_author
 
 
@@ -197,6 +248,9 @@ def _candidate_indices(
     candidates = set(author_blocks.get(author_key, set())) | unknown_author
     if title_key:
         candidates.update(title_blocks.get(title_key, set()))
+    # A second route based on the complete substantive token set catches
+    # harmless leading-article and accent differences without scanning all rows.
+    candidates.update(title_blocks.get(" ".join(sorted(set(title_key.split()))), set()))
     return candidates
 
 
@@ -316,6 +370,7 @@ def canonicalize_works(
         return empty_works, empty_edges, {
             "n_self_loops_dropped": 0,
             "n_source_duplicates_merged": 0,
+            "source_cluster_ids": [],
             "citation_cluster_ids": [],
         }
 
@@ -378,6 +433,7 @@ def canonicalize_works(
         # Lets callers (e.g. the report's merge audit) reconstruct which
         # raw citation events merged into which work.
         "citation_cluster_ids": [str(c) for c in cluster_ids[n_src:]],
+        "source_cluster_ids": [str(c) for c in cluster_ids[:n_src]],
     }
     logger.info(
         "Canonicalized %d sources + %d citations into %d works (%d edges)",

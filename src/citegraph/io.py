@@ -18,12 +18,16 @@ so that re-runs can resume:
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
+import os
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from pydantic import BaseModel
 
 
@@ -32,6 +36,14 @@ class OutLayout:
     """Standard subdirectory / filename layout under ``out_dir``."""
 
     out_dir: Path
+
+    @property
+    def enrichment_provenance_json(self) -> Path:
+        return self.out_dir / "enrichment_provenance.json"
+
+    @property
+    def source_ids_json(self) -> Path:
+        return self.out_dir / "source_ids.json"
 
     @property
     def markdown_dir(self) -> Path:
@@ -102,6 +114,14 @@ class OutLayout:
         return self.out_dir / "author_review.json"
 
     @property
+    def author_resolution_audit_json(self) -> Path:
+        return self.out_dir / "author_resolution_audit.json"
+
+    @property
+    def canonicalization_audit_json(self) -> Path:
+        return self.out_dir / "canonicalization_audit.json"
+
+    @property
     def author_aliases_csv(self) -> Path:
         return self.out_dir / "author_aliases.csv"
 
@@ -145,11 +165,16 @@ class OutLayout:
 
 
 def write_json(path: Path, data: dict | list) -> None:
+    """Atomically replace JSON checkpoints, never leaving a partial document."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def read_json(path: Path) -> dict | list:
@@ -224,3 +249,63 @@ def require_columns(df: Any, columns: Iterable[str], *, artifact: str) -> None:
         raise ValueError(
             f"{artifact} is missing required column{suffix}: {', '.join(missing)}"
         )
+
+
+SOURCE_COLUMNS = ["id", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
+CITATION_COLUMNS = ["Title", "Authors", "Authors_List", "Journal", "Year", "citing_id"]
+WORK_COLUMNS = ["id", "ring", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
+AUTHOR_COLUMNS = ["id", "display_name", "surname", "surname_norm", "canonical_given", "initials",
+                  "openalex_id", "orcid", "n_works", "n_core_works", "n_citations_received",
+                  "n_distinct_citing_works"]
+AUTHOR_CITATION_COLUMNS = ["author_id", "record_id", "position", "raw_author"]
+
+
+def read_stage_csv(path: Path, *, columns: list[str], index_col: str | None = None) -> pd.DataFrame:
+    """Read a checkpoint, accepting only truly blank legacy files as empty."""
+    try:
+        frame = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        frame = pd.DataFrame(columns=columns)
+    # Bibliographic APIs support either author representation, including legacy CSVs.
+    required = [c for c in columns if c not in ("Authors", "Authors_List", "Journal")]
+    if "ring" in columns:
+        required = [c for c in required if c not in ("ring", "source_file")]
+    require_columns(frame, required, artifact=path.stem)
+    if "Authors" in columns and not {"Authors", "Authors_List"} & set(frame.columns):
+        raise ValueError(f"{path.name} is missing required column: Authors or Authors_List")
+    return frame.set_index(index_col) if index_col else frame
+
+
+def fingerprint(value: Any) -> str:
+    """Content digest for provenance only, never for entity ID generation."""
+    def clean(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {str(k): clean(v) for k, v in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [clean(v) for v in item]
+        if isinstance(item, str):
+            if not item:
+                return None
+            structured = _parse_structured(item)
+            return clean(structured) if structured is not None else item
+        if item is None or pd.isna(item):
+            return None
+        if hasattr(item, "item"):
+            item = item.item()
+        if isinstance(item, float) and item.is_integer():
+            return int(item)
+        return item
+    payload = json.dumps(clean(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def frame_fingerprint(frame: pd.DataFrame) -> str:
+    rows = frame.reset_index() if frame.index.name and frame.index.name not in frame.columns else frame
+    return fingerprint(rows.to_dict("records"))
+
+
+def metadata_fingerprint(record: dict) -> str:
+    authors = parse_authors_list(record.get("Authors_List"))
+    return fingerprint({"Title": record.get("Title"), "Authors_List": authors,
+                        "Authors": ", ".join(authors) if authors else record.get("Authors"),
+                        "Journal": record.get("Journal"), "Year": record.get("Year")})

@@ -25,7 +25,7 @@ from citegraph.authors import AuthorClusterConfig
 from citegraph.config import get_settings
 from citegraph.dedup import DedupConfig
 from citegraph.enrich import EnrichConfig
-from citegraph.io import OutLayout
+from citegraph.io import CITATION_COLUMNS, OutLayout, read_stage_csv
 from citegraph.pdf_to_markdown import OCRMode
 from citegraph.pipeline import Pipeline, StageNotReadyError
 
@@ -476,7 +476,7 @@ def dedup(
 
     citations_raw: pd.DataFrame | None = None
     if citations_raw_csv is not None:
-        citations_raw = pd.read_csv(citations_raw_csv)
+        citations_raw = read_stage_csv(citations_raw_csv, columns=CITATION_COLUMNS)
 
     pipeline = Pipeline(pdf_dir=None, out_dir=out, dedup_config=cfg)
     try:

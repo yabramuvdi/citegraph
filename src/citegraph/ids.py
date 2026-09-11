@@ -63,3 +63,44 @@ def make_work_id(
     title_str = title if isinstance(title, str) else ""
     title_slug = slugify(title_str or "untitled", max_length=40, word_boundary=True) or "untitled"
     return f"w-{author}-{year_token}-{title_slug}"
+
+
+def assign_source_ids(records: list[dict], previous_registry: dict | None = None) -> tuple[list[dict], dict]:
+    """Allocate source observation IDs without dropping collisions or reusing history."""
+    from citegraph.io import metadata_fingerprint
+
+    previous = previous_registry or {}
+    entries = [dict(e) for e in previous.get("entries", [])]
+    reserved = set(previous.get("reserved_ids", [])) | {e["id"] for e in entries}
+    lookup = {(e["source_file"], e["metadata_fingerprint"]): e["id"] for e in entries}
+    if len({e["id"] for e in entries}) != len(entries):
+        raise ValueError("source_ids.json assigns one ID to multiple observations; restore the registry")
+    result = [dict(r) for r in records]
+    collision_ids = set(previous.get("collision_ids", []))
+    # Base IDs are not hashes; sort complete metadata first so allocation is reproducible.
+    order = sorted(range(len(result)), key=lambda i: (
+        str(result[i].get("Title", "")), str(result[i].get("Authors_List", "")),
+        str(result[i].get("Journal", "")), str(result[i].get("Year", "")),
+        str(result[i]["source_file"])))
+    for i in order:
+        rec = result[i]
+        signature = metadata_fingerprint(rec)
+        key = (str(rec["source_file"]), signature)
+        if key in lookup:
+            rec["id"] = lookup[key]
+            continue
+        base = make_work_id(rec.get("Authors_List") or rec.get("Authors", ""), rec.get("Year"), rec.get("Title", ""))
+        candidate = base
+        suffix = 2
+        while candidate in reserved:
+            collision_ids.add(base)
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        if candidate != base:
+            collision_ids.add(candidate)
+        reserved.add(candidate)
+        rec["id"] = candidate
+        lookup[key] = candidate
+        entries.append(dict(source_file=key[0], metadata_fingerprint=signature, id=candidate))
+    return result, dict(schema_version=1, entries=entries, reserved_ids=sorted(reserved),
+                        collision_ids=sorted(collision_ids))

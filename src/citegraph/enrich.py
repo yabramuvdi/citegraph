@@ -31,6 +31,8 @@ from tenacity import (
 if TYPE_CHECKING:
     from citegraph.io import OutLayout
 
+from citegraph.io import metadata_fingerprint, parse_authors_list, read_json, write_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -366,6 +368,8 @@ def _normalize_record(item: dict, source: str) -> dict:
             if isinstance(orcid, str) and orcid.startswith("http"):
                 # CrossRef returns ORCIDs as full URLs; keep just the id.
                 orcid = orcid.rstrip("/").rsplit("/", 1)[-1]
+            if not display:
+                continue
             author_objs.append(
                 {
                     "display_name": display,
@@ -434,10 +438,22 @@ def _scalar_str(value: Any) -> str:
     return str(value)
 
 
-def _write_cache(cache_path: Path, data: dict) -> None:
-    tmp = cache_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.rename(cache_path)
+def _write_cache(cache_path: Path, data: dict, input_fingerprint: str) -> None:
+    write_json(cache_path, {"schema_version": 2, "input_fingerprint": input_fingerprint, "result": data})
+
+
+def _apply_enrichment_result(row: dict, result: dict) -> dict:
+    """Apply the same non-destructive policy on cache hits and fresh matches."""
+    out = dict(row)
+    bibliographic = {"Title", "Authors", "Authors_List", "Journal", "Year"}
+    for key, value in _with_cache_diagnostics(result).items():
+        if key not in bibliographic or (value is not None and not (isinstance(value, float) and math.isnan(value)) and bool(value)):
+            out[key] = value
+    authors = parse_authors_list(out.get("Authors_List"))
+    if authors:
+        out["Authors_List"] = authors
+        out["Authors"] = ", ".join(authors)
+    return out
 
 
 def _miss_record(reason: str, diagnostics: dict[str, Any] | None = None) -> dict:
@@ -475,6 +491,7 @@ def _enrich_one(
 ) -> dict:
     """Resolve one reference row, using the per-ref cache when available."""
     row_dict = row.to_dict()
+    input_fingerprint = metadata_fingerprint(row_dict)
 
     if enrichment_dir is not None:
         cache_path = enrichment_dir / f"{ref_id}.json"
@@ -489,9 +506,20 @@ def _enrich_one(
             # An http_error miss is a transient outage (rate limit, 5xx,
             # timeout), not a lookup result — fall through and retry the
             # providers instead of serving it forever.
-            if cached.get("enrichment_miss_reason") != "http_error":
-                row_dict.update(_with_cache_diagnostics(cached))
-                return row_dict
+            valid = True
+            if cached.get("schema_version") == 2:
+                valid = cached.get("input_fingerprint") == input_fingerprint
+                cached = cached["result"]
+            else:
+                # Path is derived from OutLayout, including for direct cache callers.
+                from citegraph.io import OutLayout
+                registry_path = OutLayout(enrichment_dir.parent).source_ids_json
+                if registry_path.exists():
+                    valid = ref_id not in read_json(registry_path).get("collision_ids", [])
+            if valid and cached.get("enrichment_miss_reason") != "http_error":
+                return _apply_enrichment_result(row_dict, cached)
+            if not valid:
+                logger.warning("Refreshing incompatible enrichment cache for %s", ref_id)
 
     # NaN is truthy and str()s to "nan", which would be sent as a real query.
     title = _scalar_str(row.get("Title"))
@@ -509,31 +537,13 @@ def _enrich_one(
         match = openalex.match
 
     if match:
-        if enrichment_dir is not None:
-            _write_cache(enrichment_dir / f"{ref_id}.json", match)
-        row_dict["doi"] = match["doi"]
-        row_dict["enrichment_source"] = match["enrichment_source"]
-        for column in ("Title", "Authors_List", "Authors", "Journal", "Year"):
-            if match.get(column):
-                row_dict[column] = match[column]
-        # OpenAlex_Authors is a list-of-dicts; it may legitimately be []
-        # for entries that have no authorships, so we don't gate on
-        # truthiness — copy it through whenever the match carries it.
-        if "OpenAlex_Authors" in match:
-            row_dict["OpenAlex_Authors"] = match["OpenAlex_Authors"]
-        for column in _DIAGNOSTIC_COLUMNS:
-            row_dict[column] = match.get(column)
+        result = match
     else:
         report = _select_miss_report(crossref, openalex)
-        miss = _miss_record(
-            report.miss_reason or "no_openalex_candidates",
-            report.diagnostics,
-        )
-        if enrichment_dir is not None:
-            _write_cache(enrichment_dir / f"{ref_id}.json", miss)
-        row_dict.update(miss)
-
-    return row_dict
+        result = _miss_record(report.miss_reason or "no_openalex_candidates", report.diagnostics)
+    if enrichment_dir is not None:
+        _write_cache(enrichment_dir / f"{ref_id}.json", result, input_fingerprint)
+    return _apply_enrichment_result(row_dict, result)
 
 
 def _select_miss_report(*reports: _LookupReport) -> _LookupReport:

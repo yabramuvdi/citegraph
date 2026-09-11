@@ -37,10 +37,17 @@ from citegraph.dedup import DedupConfig, canonicalize_works
 from citegraph.enrich import EnrichConfig
 from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_to_record
 from citegraph.extract_references import extract_references_from_markdown
+from citegraph.ids import assign_source_ids
 from citegraph.io import (
+    CITATION_COLUMNS,
+    SOURCE_COLUMNS,
+    WORK_COLUMNS,
     OutLayout,
+    frame_fingerprint,
+    metadata_fingerprint,
     parse_openalex_authors,
     read_json,
+    read_stage_csv,
     write_json,
     write_pydantic,
     write_pydantic_list,
@@ -176,7 +183,7 @@ class Pipeline:
             raise StageNotReadyError(
                 f"Missing {path}. Run `citegraph metadata` first."
             )
-        return pd.read_csv(path)
+        return read_stage_csv(path, columns=SOURCE_COLUMNS)
 
     def _load_citations_raw(self) -> pd.DataFrame:
         path = self.layout.citations_raw_csv
@@ -184,7 +191,7 @@ class Pipeline:
             raise StageNotReadyError(
                 f"Missing {path}. Run `citegraph references` first."
             )
-        return pd.read_csv(path)
+        return read_stage_csv(path, columns=CITATION_COLUMNS)
 
     def _load_works(self) -> pd.DataFrame:
         path = self.layout.works_csv
@@ -192,7 +199,7 @@ class Pipeline:
             raise StageNotReadyError(
                 f"Missing {path}. Run `citegraph dedup` first."
             )
-        return pd.read_csv(path, index_col="id")
+        return read_stage_csv(path, columns=WORK_COLUMNS, index_col="id")
 
     # ------------------------------------------------------------------
     # Stage 1: PDFs -> markdown
@@ -273,9 +280,19 @@ class Pipeline:
                 self.layout.metadata_failures_jsonl,
             )
 
-        df = pd.DataFrame(records)
-        if not df.empty:
-            df = df.drop_duplicates(subset="id", keep="first").reset_index(drop=True)
+        registry = None
+        if self.layout.source_ids_json.exists():
+            registry = read_json(self.layout.source_ids_json)
+        elif self.layout.sources_csv.exists():
+            old = read_stage_csv(self.layout.sources_csv, columns=SOURCE_COLUMNS)
+            unique = old[~old["id"].duplicated(keep=False)]
+            registry = {"entries": [dict(source_file=r["source_file"],
+                        metadata_fingerprint=metadata_fingerprint(r), id=r["id"])
+                        for r in unique.to_dict("records")],
+                        "reserved_ids": old["id"].tolist()}
+        records, registry = assign_source_ids(records, registry)
+        write_json(self.layout.source_ids_json, registry)
+        df = pd.DataFrame(records, columns=SOURCE_COLUMNS)
         df.to_csv(self.layout.sources_csv, index=False)
         logger.info("Wrote %s (%d rows)", self.layout.sources_csv, len(df))
 
@@ -303,6 +320,9 @@ class Pipeline:
             markdown_paths = self._load_markdown_paths()
         if sources_df is None:
             sources_df = self._load_sources()
+
+        if sources_df.empty:
+            raise StageNotReadyError("No successful source metadata. Run `citegraph metadata` and inspect metadata_failures.jsonl.")
 
         source_to_id = dict(zip(sources_df["source_file"], sources_df["id"], strict=False))
 
@@ -407,7 +427,7 @@ class Pipeline:
                 self.layout.papers_no_references_json,
             )
 
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows, columns=CITATION_COLUMNS)
         df.to_csv(self.layout.citations_raw_csv, index=False)
         logger.info("Wrote %s (%d rows)", self.layout.citations_raw_csv, len(df))
         return df
@@ -425,6 +445,9 @@ class Pipeline:
         if citations_raw is None:
             citations_raw = self._load_citations_raw()
 
+        if sources.empty:
+            raise StageNotReadyError("No successful source metadata. Run `citegraph metadata` first.")
+
         if citations_raw.empty:
             citations_raw = pd.DataFrame(
                 columns=["Title", "Authors", "Authors_List", "Journal", "Year", "citing_id"]
@@ -439,6 +462,14 @@ class Pipeline:
         self._canonicalize_stats = stats
         works.to_csv(self.layout.works_csv)
         graph.to_csv(self.layout.graph_csv, index=False)
+        write_json(self.layout.canonicalization_audit_json, {
+            "schema_version": 1,
+            "algorithm_version": "canonicalize-1",
+            "config": self.dedup_config.__dict__,
+            "source_cluster_ids": {str(sources.iloc[i].get("source_file", i)): str(stats["source_cluster_ids"][i])
+                                    for i in range(len(sources))},
+            "citation_cluster_ids": [str(x) for x in stats["citation_cluster_ids"]],
+        })
         logger.info(
             "Wrote %s (%d works) and %s (%d edges); %d self-loop(s) dropped, "
             "%d duplicate source(s) merged",
@@ -499,19 +530,40 @@ class Pipeline:
                     self.layout.enrichment_dir,
                 )
 
+        if enriched is not None:
+            if self.layout.enrichment_provenance_json.exists():
+                provenance = read_json(self.layout.enrichment_provenance_json)
+                if (provenance.get("works_fingerprint") != frame_fingerprint(works)
+                        or provenance.get("enriched_fingerprint") != frame_fingerprint(enriched)):
+                    logger.warning("Enrichment is stale for these works; run `citegraph enrich` before using external author IDs")
+                    enriched = None
+            elif self.layout.source_ids_json.exists():
+                collisions = set(read_json(self.layout.source_ids_json).get("collision_ids", []))
+                if collisions & set(enriched.index):
+                    logger.warning("Unverified enrichment for colliding IDs ignored; run `citegraph enrich`")
+                    enriched = enriched.drop(index=list(collisions), errors="ignore")
+
         aliases = load_aliases(self.layout.author_aliases_csv)
 
+        resolution_audit: list[dict] = []
         authors_df, citations_df, review = normalize_authors(
             works=works,
             enriched_works=enriched,
             citation_edges=graph,
             cfg=self.author_config,
             aliases=aliases,
+            audit=resolution_audit,
         )
 
         authors_df.to_csv(self.layout.authors_csv)
         citations_df.to_csv(self.layout.author_citations_csv, index=False)
         write_author_review(self.layout.author_review_json, review)
+        write_json(self.layout.author_resolution_audit_json, {
+            "schema_version": 1,
+            "algorithm_version": "authors-1",
+            "config": self.author_config.__dict__,
+            "decisions": resolution_audit,
+        })
         if review:
             logger.warning(
                 "%d author cluster(s) flagged for review; see %s",
@@ -539,6 +591,9 @@ class Pipeline:
 
         enriched = enrich_works(works, cfg=self.enrich_config, layout=self.layout)
         enriched.to_csv(self.layout.enriched_works_csv)
+        write_json(self.layout.enrichment_provenance_json, {
+            "schema_version": 1, "works_fingerprint": frame_fingerprint(works),
+            "enriched_fingerprint": frame_fingerprint(enriched)})
         logger.info("Wrote enriched %s", self.layout.enriched_works_csv)
         return enriched
 
@@ -568,8 +623,9 @@ class Pipeline:
         sources = self.extract_paper_metadata(markdown_paths)
         citations_raw = self.extract_paper_references(markdown_paths, sources)
         works, graph = self.deduplicate(sources, citations_raw)
+        canonical_works = works
         works = self.maybe_enrich(works)
-        authors_df, citations_df = self.normalize_authors(works=works, graph=graph)
+        authors_df, citations_df = self.normalize_authors(works=canonical_works, graph=graph)
 
         ring0 = (
             set(works.index[works["ring"] == 0])

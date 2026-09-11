@@ -31,7 +31,7 @@ from typing import Any
 import pandas as pd
 
 from citegraph.dedup import DedupConfig, canonicalize_works
-from citegraph.io import OutLayout
+from citegraph.io import OutLayout, read_json
 
 __all__ = ["collect_report_data", "build_report_html", "write_report"]
 
@@ -764,16 +764,20 @@ def _collect_dedup_panel(
     panel["merge_audit_truncated"] = 0
     try:
         raw = raw_refs_df.reset_index(drop=True)
-        if sources_df is None:
+        saved_audit = read_json(layout.canonicalization_audit_json) if layout.canonicalization_audit_json.exists() else None
+        if saved_audit is not None and isinstance(saved_audit.get("citation_cluster_ids"), list):
+            mapping = saved_audit["citation_cluster_ids"]
+        elif sources_df is None:
             sources_for_audit = pd.DataFrame(
                 columns=["id", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
             )
         else:
             sources_for_audit = sources_df
-        _, _, audit_stats = canonicalize_works(
-            sources_for_audit, raw, DedupConfig(), show_progress=False
-        )
-        mapping = audit_stats["citation_cluster_ids"]
+        if saved_audit is None:
+            _, _, audit_stats = canonicalize_works(
+                sources_for_audit, raw, DedupConfig(), show_progress=False
+            )
+            mapping = audit_stats["citation_cluster_ids"]
         members_by_cluster: dict[str, list[int]] = {}
         for idx, cluster_id in enumerate(mapping):
             members_by_cluster.setdefault(str(cluster_id), []).append(int(idx))

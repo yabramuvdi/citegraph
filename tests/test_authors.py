@@ -208,8 +208,8 @@ def test_normalize_diacritic_insensitive():
     assert len(authors_df) == 1
 
 
-def test_normalize_loose_mode_collapses_aggressively():
-    """'Diamond, Adele' and 'Diamond, Andrew' merge under loose mode."""
+def test_normalize_loose_mode_respects_full_name_conflicts():
+    """Loose matching cannot override contradictory full given names."""
     refs = _refs([
         {"id": "r-1", "Title": "T1", "Authors_List": ["Diamond, Adele"],  "Year": 2010},
         {"id": "r-2", "Title": "T2", "Authors_List": ["Diamond, Andrew"], "Year": 2012},
@@ -217,7 +217,7 @@ def test_normalize_loose_mode_collapses_aggressively():
     authors_df, _, _ = normalize_authors(
         works=refs, cfg=AuthorClusterConfig(merge_mode="loose"),
     )
-    assert len(authors_df) == 1
+    assert len(authors_df) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -718,8 +718,8 @@ def test_incompatible_second_initial_not_absorbed():
     assert len(cardenas) == 2
 
 
-def test_identical_raw_strings_cluster_together():
-    """Two 'Diamond, A.' records move as one unit instead of splitting by context."""
+def test_identical_initials_use_occurrence_specific_coauthor_context():
+    """One occurrence's coauthor evidence cannot decide another's identity."""
     refs = _refs([
         {"id": "r-1", "Title": "T1",
          "Authors_List": ["Diamond, Adele", "Posner, M."], "Year": 2010},
@@ -734,7 +734,8 @@ def test_identical_raw_strings_cluster_together():
     adele = authors_df[authors_df["display_name"].str.contains("Adele", case=False)]
     aid = adele.index[0]
     adele_records = set(citations_df[citations_df["author_id"] == aid]["record_id"])
-    assert {"r-1", "r-3", "r-4"} <= adele_records
+    assert {"r-1", "r-3"} <= adele_records
+    assert "r-4" not in adele_records
 
 
 def test_display_keeps_full_given_sequence():
@@ -1145,3 +1146,106 @@ def test_author_metrics_span_core_and_cited_roles():
     assert int(ostrom["n_citations_received"]) == 3  # 2 into w-c + 1 into w-b
 
     assert set(citations_df.columns) == {"author_id", "record_id", "position", "raw_author"}
+
+
+def test_partial_enrichment_does_not_merge_smith_coauthors():
+    works = pd.DataFrame([dict(id="w-1", ring=0,
+                              Authors_List=["John Smith", "Jane Smith"])]).set_index("id")
+    enriched = pd.DataFrame([dict(id="w-1", OpenAlex_Authors=[
+        dict(display_name="John Smith", openalex_id="A1", orcid=None)
+    ])]).set_index("id")
+    authors, occurrences, review = normalize_authors(works=works, enriched_works=enriched)
+    assert occurrences.author_id.nunique() == 2
+    jane_id = occurrences.loc[occurrences.raw_author == "Jane Smith", "author_id"].iloc[0]
+    assert pd.isna(authors.loc[jane_id, "openalex_id"])
+
+
+def test_enrichment_assignment_cases():
+    from citegraph.authors import _match_enrichment_authors
+
+    cases = [
+        (["John Smith", "Jane Smith"], ["Jane Smith", "John Smith"], [1, 0]),
+        (["John Smith", "John Smith"], ["John Smith", "John Smith"], [None, None]),
+        (["John Smith"], ["John Paul Smith"], [0]),
+        (["John van Berg"], ["John van Meer"], [None]),
+        (["", "John Smith"], ["", "John Smith"], [None, 1]),
+        (["John Smith", "Jane Smith"], ["Jane Smith"], [None, 0]),
+        (["The World Bank"], ["The World Bank"], [0]),
+        (["World Bank"], ["John Bank"], [None]),
+        (["Guerra Forero, Jose"], ["Jose Guerra Forero"], [0]),
+        (["Reyes, Sandra"], ["Polania-Reyes, Sandra"], [0]),
+    ]
+    for raw, provider, expected in cases:
+        audit = []
+        output = _match_enrichment_authors(
+            [parse_author(name, known_surnames=frozenset({"guerra forero"})) for name in raw],
+            [dict(display_name=name, openalex_id=f"A{i}") for i, name in enumerate(provider)],
+            frozenset({"guerra forero"}), audit,
+        )
+        assert output == [(f"A{i}", None) if i is not None else (None, None)
+                          for i in expected], (raw, provider)
+        assert [entry["position"] for entry in audit if entry["position"] is not None] == list(range(len(raw)))
+
+
+def test_enrichment_conflict_is_reviewed_with_external_anchor():
+    works = pd.DataFrame([
+        dict(id="w-1", Authors_List=["John Smith"]),
+        dict(id="w-2", Authors_List=["John Smith"]),
+    ]).set_index("id")
+    enriched = pd.DataFrame([
+        dict(id="w-1", OpenAlex_Authors=[dict(display_name="John Smith", openalex_id="A1")]),
+        dict(id="w-2", OpenAlex_Authors=[dict(display_name="Jane Smith", openalex_id="A2")]),
+    ]).set_index("id")
+    audit = []
+    authors, occurrences, review = normalize_authors(works=works, enriched_works=enriched, audit=audit)
+    assert authors.iloc[0].openalex_id == "A1"
+    assert any(entry["reason"] == "enrichment_conflict" for entry in review)
+    assert audit[1]["author_id"] == occurrences.iloc[1].author_id
+
+
+def test_empty_author_normalization_keeps_schema():
+    from citegraph.io import AUTHOR_CITATION_COLUMNS, AUTHOR_COLUMNS
+    authors, occurrences, review = normalize_authors(works=pd.DataFrame(columns=["Authors_List"]))
+    assert authors.index.name == "id"
+    assert list(authors.columns) == [name for name in AUTHOR_COLUMNS if name != "id"]
+    assert list(occurrences.columns) == AUTHOR_CITATION_COLUMNS
+    assert review == []
+
+
+def test_reversed_provider_identifiers_follow_raw_authors_and_positions():
+    works = pd.DataFrame([dict(id="w-1", Authors_List=["", "John Smith", "Jane Smith"])]).set_index("id")
+    enriched = pd.DataFrame([dict(id="w-1", OpenAlex_Authors=[
+        dict(display_name="Jane Smith", openalex_id="A2"),
+        dict(display_name="John Smith", openalex_id="A1"),
+    ])]).set_index("id")
+    authors, occurrences, _ = normalize_authors(works=works, enriched_works=enriched)
+    for raw, position, identifier in [("John Smith", 1, "A1"), ("Jane Smith", 2, "A2")]:
+        occurrence = occurrences.loc[occurrences.raw_author == raw].iloc[0]
+        assert occurrence.position == position
+        assert authors.loc[occurrence.author_id, "openalex_id"] == identifier
+
+
+def test_blank_author_positions_survive_csv_string():
+    frames = []
+    for names in [["", "John Smith", "Jane Smith"], repr(["", "John Smith", "Jane Smith"])]:
+        works = pd.DataFrame([dict(id="w-1", Authors_List=names)]).set_index("id")
+        frames.append(normalize_authors(works=works)[1])
+    pd.testing.assert_frame_equal(*frames)
+
+
+def test_conflicting_orcids_block_shared_openalex_union():
+    works = pd.DataFrame([dict(id=f"w-{i}", Authors_List=["John Smith"]) for i in range(2)]).set_index("id")
+    enriched = pd.DataFrame([dict(id=f"w-{i}", OpenAlex_Authors=[dict(
+        display_name="John Smith", openalex_id="A1", orcid=f"0000-0000-0000-000{i}")])
+        for i in range(2)]).set_index("id")
+    audit = []
+    authors, occurrences, review = normalize_authors(works=works, enriched_works=enriched, audit=audit)
+    assert occurrences.author_id.nunique() == 2
+    assert any("orcid_conflict" in row["reason"] for row in review)
+
+
+def test_same_work_identical_names_stay_separate():
+    works = pd.DataFrame([dict(id="w-1", Authors_List=["John Smith", "John Smith"])]).set_index("id")
+    authors, occurrences, review = normalize_authors(works=works)
+    assert occurrences.author_id.nunique() == 2
+    assert review
