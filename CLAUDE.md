@@ -32,19 +32,21 @@ citegraph report --out ./out [--open]     # write self-contained report.html QC 
 citegraph ui --out ./out [--port 8765]    # serve read-only live monitor on 127.0.0.1
 ```
 
-`citegraph run` runs `convert` first, prints a cost estimate, then prompts before any LLM call. Pass `--yes`/`-y` to skip the prompt (useful in CI/automation).
+`citegraph run` and `citegraph references` print a cost estimate and prompt before any LLM call. Pass `--yes`/`-y` to skip the prompt. **Always pass it when running them backgrounded, scripted, or in CI**: with no TTY on stdin the prompt resolves to "no" and the stage exits having done nothing, which in a `&&` chain looks like a silent stall rather than an error. `citegraph metadata` does not prompt.
 
 The library mirrors the CLI: every `Pipeline` stage method accepts its input
 explicitly *or* loads it from `out_dir` if called with no arguments. Missing
 upstream artifacts raise `StageNotReadyError` with a hint at the prior step.
 
-`GOOGLE_API_KEY` is required for any path that calls Gemini. Tests avoid the network entirely (see "Testing without network" below).
+`GOOGLE_API_KEY` is required for any path that calls Gemini. `OPENALEX_API_KEY` is optional but strongly recommended for stage 5 on a real corpus — see the enrichment stage below for what it buys. Both are read from the environment or `.env` via [config.py](src/citegraph/config.py). Tests avoid the network entirely (see "Testing without network" below).
 
 ## Architecture
 
 `citegraph` turns a folder of academic PDFs into a canonical **works** table plus a citation graph (`works.csv`, `citation_graph.csv`). Every bibliographic record is a *work* with a single role-free `w-` id and two orthogonal stored facts: **`ring`** — discovery depth, where ring 0 is the user's own PDFs (the *core*) and ring n was first discovered in a ring n−1 bibliography — and **`source_file`** — non-empty when we processed a PDF for it. Today ring 0 ⇔ has a source file; snowballing later (processing PDFs of important references) is a data change, not a schema change. The whole flow is orchestrated by `Pipeline.run()` in [pipeline.py](src/citegraph/pipeline.py); everything else is a stage it composes.
 
 **Migrating a pre-works-model out_dir** (one that has `papers.csv`/`references.csv`): the per-stem caches are reused, so re-running `citegraph metadata && citegraph references && citegraph dedup && citegraph authors` (plus `enrich` if used — its per-item cache falls back to the legacy `r-` filenames) rebuilds everything without new docling or Gemini calls. Stale legacy CSVs can then be deleted.
+
+**Repairing one badly-converted paper** without reprocessing the corpus: re-convert just that PDF with `convert_pdf_to_markdown(pdf, markdown_dir, overwrite=True, ocr=True, cache_stem=...)` — passing `--ocr` to the CLI would force OCR on *every* PDF and overwrite good markdown with worse. Then delete that stem's `metadata/<stem>.json` and `references/<stem>.json` (the caches are keyed by stem, and a stale cache is what pins the bad result), and re-run `metadata`, `references`, `dedup`, `enrich`, `authors`, `report`. Every other paper is served from cache, so the whole repair costs roughly one Gemini call per extraction stage. Note that the work's `id` changes once real metadata exists, so its enrichment cache entry is written fresh under the new id.
 
 ### Stage pipeline (each stage is checkpointed on disk)
 
