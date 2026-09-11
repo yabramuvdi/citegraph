@@ -404,3 +404,135 @@ def test_to_networkx_builds_directed_graph(small_graph: CitationGraph) -> None:
     # Edge direction: citing -> cited.
     assert g.has_edge("w-a", "w-x")
     assert not g.has_edge("w-x", "w-a")
+
+
+# ---------------------------------------------------------------------------
+# Author co-citation network
+# ---------------------------------------------------------------------------
+def _cocitation_graph() -> CitationGraph:
+    """Toy corpus whose co-citation weights, pruning and self-pairs differ.
+
+    Three core papers cite four stubs written by three canonical authors::
+
+      p1 -> r1 (A), r2 (B), r4 (A & B)
+      p2 -> r1 (A), r2 (B)
+      p3 -> r1 (A), r3 (C)
+
+    So A and B are co-cited by two papers, A and C by one, B and C by
+    none. Papers citing each author: A three, B two, C one. Stub ``r4``
+    is co-authored, so p1 cites two A-works and must still yield one
+    A-B edge and no A-A self-loop.
+    """
+    works = pd.DataFrame(
+        [
+            {"id": "p1", "ring": 0, "source_file": "p1.pdf", "Title": "Core 1", "Year": 2020},
+            {"id": "p2", "ring": 0, "source_file": "p2.pdf", "Title": "Core 2", "Year": 2021},
+            {"id": "p3", "ring": 0, "source_file": "p3.pdf", "Title": "Core 3", "Year": 2022},
+            {"id": "r1", "ring": 1, "source_file": "", "Title": "Ref 1", "Year": 1990},
+            {"id": "r2", "ring": 1, "source_file": "", "Title": "Ref 2", "Year": 1995},
+            {"id": "r3", "ring": 1, "source_file": "", "Title": "Ref 3", "Year": 2000},
+            {"id": "r4", "ring": 1, "source_file": "", "Title": "Ref 4", "Year": 2005},
+        ]
+    ).set_index("id")
+    edges = pd.DataFrame(
+        [
+            {"citing_id": "p1", "cited_id": "r1"},
+            {"citing_id": "p1", "cited_id": "r2"},
+            {"citing_id": "p1", "cited_id": "r4"},
+            {"citing_id": "p2", "cited_id": "r1"},
+            {"citing_id": "p2", "cited_id": "r2"},
+            {"citing_id": "p3", "cited_id": "r1"},
+            {"citing_id": "p3", "cited_id": "r3"},
+        ]
+    )
+    authors = pd.DataFrame(
+        [
+            {"id": "a-alpha", "display_name": "Ada Alpha", "surname": "Alpha",
+             "surname_norm": "alpha", "canonical_given": "Ada", "initials": "A",
+             "openalex_id": None, "orcid": None, "n_works": 2,
+             "n_core_works": 0, "n_citations_received": 4, "n_distinct_citing_works": 3},
+            {"id": "a-beta", "display_name": "Ben Beta", "surname": "Beta",
+             "surname_norm": "beta", "canonical_given": "Ben", "initials": "B",
+             "openalex_id": None, "orcid": None, "n_works": 2,
+             "n_core_works": 0, "n_citations_received": 3, "n_distinct_citing_works": 2},
+            {"id": "a-gamma", "display_name": "Cleo Gamma", "surname": "Gamma",
+             "surname_norm": "gamma", "canonical_given": "Cleo", "initials": "C",
+             "openalex_id": None, "orcid": None, "n_works": 1,
+             "n_core_works": 0, "n_citations_received": 1, "n_distinct_citing_works": 1},
+        ]
+    ).set_index("id")
+    citations = pd.DataFrame(
+        [
+            {"author_id": "a-alpha", "record_id": "r1", "position": 0, "raw_author": "Alpha, A"},
+            {"author_id": "a-beta", "record_id": "r2", "position": 0, "raw_author": "Beta, B"},
+            {"author_id": "a-gamma", "record_id": "r3", "position": 0, "raw_author": "Gamma, C"},
+            {"author_id": "a-alpha", "record_id": "r4", "position": 0, "raw_author": "Alpha, A"},
+            {"author_id": "a-beta", "record_id": "r4", "position": 1, "raw_author": "Beta, B"},
+        ]
+    )
+    return CitationGraph(
+        works=works, edges=edges, authors=authors, author_citations=citations
+    )
+
+
+def test_author_cocitation_network_weights_edges_by_shared_citing_papers() -> None:
+    nx = pytest.importorskip("networkx")
+    g = _cocitation_graph().author_cocitation_network(min_papers=1)
+
+    assert isinstance(g, nx.Graph)
+    assert g["a-alpha"]["a-beta"]["weight"] == 2
+    assert g["a-alpha"]["a-gamma"]["weight"] == 1
+    assert not g.has_edge("a-beta", "a-gamma")
+
+
+def test_author_cocitation_network_has_no_self_loops() -> None:
+    pytest.importorskip("networkx")
+    g = _cocitation_graph().author_cocitation_network(min_papers=1)
+
+    # p1 cites two works by Alpha (r1 and r4); that is not a co-citation.
+    assert not g.has_edge("a-alpha", "a-alpha")
+
+
+def test_author_cocitation_network_prunes_authors_below_min_papers() -> None:
+    pytest.importorskip("networkx")
+    g = _cocitation_graph().author_cocitation_network(min_papers=2)
+
+    # Gamma is cited by one paper only, so both the node and its edge go.
+    assert set(g.nodes) == {"a-alpha", "a-beta"}
+    assert g.number_of_edges() == 1
+
+
+def test_author_cocitation_network_carries_display_name_and_paper_count() -> None:
+    pytest.importorskip("networkx")
+    g = _cocitation_graph().author_cocitation_network(min_papers=1)
+
+    assert g.nodes["a-alpha"]["display_name"] == "Ada Alpha"
+    assert g.nodes["a-alpha"]["n_citing_papers"] == 3
+    assert g.nodes["a-beta"]["n_citing_papers"] == 2
+
+
+def test_author_cocitation_network_restricts_to_given_citing_works() -> None:
+    pytest.importorskip("networkx")
+    # Only p3 remains, which cites Alpha and Gamma but not Beta.
+    g = _cocitation_graph().author_cocitation_network(min_papers=1, citing_ids=["p3"])
+
+    assert set(g.nodes) == {"a-alpha", "a-gamma"}
+    assert g["a-alpha"]["a-gamma"]["weight"] == 1
+    assert g.nodes["a-alpha"]["n_citing_papers"] == 1
+
+
+def test_author_cocitation_network_drops_authors_absent_from_selection() -> None:
+    pytest.importorskip("networkx")
+    # Restricting to p2 leaves Alpha and Beta co-cited; Gamma disappears
+    # entirely rather than lingering as a zero-degree node.
+    g = _cocitation_graph().author_cocitation_network(min_papers=1, citing_ids=["p2"])
+
+    assert set(g.nodes) == {"a-alpha", "a-beta"}
+
+
+def test_author_cocitation_network_raises_without_author_tables(
+    small_graph: CitationGraph,
+) -> None:
+    pytest.importorskip("networkx")
+    with pytest.raises(RuntimeError, match="Author tables"):
+        small_graph.author_cocitation_network()

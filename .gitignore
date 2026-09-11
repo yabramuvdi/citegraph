@@ -48,3 +48,7 @@ out_archive/
 
 # ...except the curated example notebook.
 !examples/quickstart.ipynb
+
+# Per-machine Claude Code settings (tool permissions, absolute paths).
+# Project skills under .claude/skills/ are shared and stay tracked.
+.claude/settings.local.json

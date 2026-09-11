@@ -223,21 +223,12 @@ if g.has_authors:
 
 ## Pipeline
 
-```
-PDFs ──docling──▶ markdown ──Gemini──▶ metadata + references
-                                          │
-                                          ▼
-                     canonicalization into works (rapidfuzz)
-                                          │
-                                  optional CrossRef/OpenAlex
-                                          │
-                                          ▼
-                                  citation_graph.csv
-                                          │
-                                          ▼
-                             author normalization
-                          (authors.csv + author_citations.csv)
-```
+![citegraph extraction pipeline: PDFs are converted to markdown, an LLM extracts metadata and references as structured output, and canonicalization produces the works table and citation graph](docs/figures/pipeline.svg)
+
+After canonicalization, two optional stages complete the pipeline: CrossRef/OpenAlex
+enrichment (DOIs and external author ids for every work) and author normalization
+(`authors.csv` + `author_citations.csv`). A PDF version of the figure lives at
+[docs/figures/pipeline.pdf](docs/figures/pipeline.pdf).
 
 ## Output schema
 

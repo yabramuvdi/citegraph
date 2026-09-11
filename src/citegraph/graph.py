@@ -27,6 +27,8 @@ and ``source_file`` (non-empty when we processed a PDF for it).
 
 from __future__ import annotations
 
+import itertools
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -482,6 +484,90 @@ class CitationGraph:
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Author co-citation network
+    # ------------------------------------------------------------------
+    def author_cocitation_network(
+        self,
+        min_papers: int = 3,
+        citing_ids: Iterable[str] | None = None,
+    ) -> nx.Graph:
+        """Return the author co-citation network as a weighted ``networkx.Graph``.
+
+        Two authors are joined when the same bibliography cites both of
+        them, and the edge ``weight`` counts how many bibliographies do
+        so. This is the standard author co-citation projection of
+        bibliometrics (White & Griffith 1981; White & McCain 1998).
+
+        It exists because the raw work-level graph is one hop deep: only
+        works we processed a PDF for have outgoing edges, so path-based
+        centrality over :meth:`to_networkx` would measure the sampling
+        design rather than the literature. The co-citation projection is
+        a genuine one-mode network, so degree, eigenvector and
+        betweenness centrality are all well defined on it.
+
+        A citing work that cites several works by one author still
+        contributes a single mention of that author, and never a
+        self-loop.
+
+        ``min_papers`` drops authors cited by fewer than that many
+        citing works, which prunes the long tail of once-cited names.
+        ``citing_ids`` restricts the citing side, which is how you build
+        a variant that excludes a given author's own papers.
+
+        Requires ``networkx`` (not a default dependency) and the author
+        tables (run ``citegraph authors``). Nodes carry ``display_name``
+        and ``n_citing_papers``; nodes are inserted in sorted order so
+        that seeded layouts are reproducible across runs.
+        """
+        self._require_authors()
+        try:
+            import networkx as nx
+        except ImportError as exc:  # pragma: no cover - import guard
+            raise ImportError(
+                "author_cocitation_network() requires networkx. "
+                "Install with: pip install networkx"
+            ) from exc
+
+        edges = self.edges[["citing_id", "cited_id"]].drop_duplicates()
+        if citing_ids is not None:
+            edges = edges[edges["citing_id"].isin(set(citing_ids))]
+
+        work_authors = self.author_citations[["author_id", "record_id"]].drop_duplicates()
+        # One mention per (citing work, cited author): citing three works
+        # by the same author is one appearance of that author, not three.
+        mentions = (
+            edges.merge(work_authors, left_on="cited_id", right_on="record_id")[
+                ["citing_id", "author_id"]
+            ]
+            .drop_duplicates()
+        )
+
+        n_citing_papers = mentions.groupby("author_id")["citing_id"].nunique()
+        keep = n_citing_papers[n_citing_papers >= min_papers]
+        mentions = mentions[mentions["author_id"].isin(set(keep.index))]
+
+        names = (
+            self.authors["display_name"]
+            if "display_name" in self.authors.columns
+            else pd.Series(dtype=object)
+        )
+
+        g: nx.Graph = nx.Graph()
+        for author_id in sorted(keep.index):
+            g.add_node(
+                author_id,
+                display_name=names.get(author_id, author_id),
+                n_citing_papers=int(keep[author_id]),
+            )
+        for _, group in mentions.groupby("citing_id"):
+            for a, b in itertools.combinations(sorted(group["author_id"]), 2):
+                if g.has_edge(a, b):
+                    g[a][b]["weight"] += 1
+                else:
+                    g.add_edge(a, b, weight=1)
+        return g
+
     def to_networkx(self) -> nx.DiGraph:
         """Return a ``networkx.DiGraph``: nodes are works, edges go citing → cited.
 
