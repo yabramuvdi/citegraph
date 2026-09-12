@@ -6,6 +6,7 @@ import pandas as pd
 
 from citegraph.dedup import (
     DedupConfig,
+    _assess_work_match,
     _compute_rings,
     canonicalize_works,
     compare_papers,
@@ -356,9 +357,9 @@ def test_dedup_uses_candidate_blocking_for_unrelated_rows(monkeypatch):
     def counted_compare(a, b, cfg):
         nonlocal calls
         calls += 1
-        return compare_papers(a, b, cfg)
+        return _assess_work_match(a, b, cfg)
 
-    monkeypatch.setattr("citegraph.dedup.compare_papers", counted_compare)
+    monkeypatch.setattr("citegraph.dedup._assess_work_match", counted_compare)
 
     canonical, mapping = _canonicalize_citations(df, DedupConfig(year_window=0))
 

@@ -30,8 +30,15 @@ from typing import Any
 
 import pandas as pd
 
-from citegraph.dedup import DedupConfig, canonicalize_works
-from citegraph.io import OutLayout, read_json
+from citegraph.io import (
+    AUTHOR_AUDIT_INPUTS,
+    AUTHOR_AUDIT_OUTPUTS,
+    WORK_AUDIT_INPUTS,
+    WORK_AUDIT_OUTPUTS,
+    OutLayout,
+    artifact_fingerprint,
+    read_json,
+)
 
 __all__ = ["collect_report_data", "build_report_html", "write_report"]
 
@@ -341,7 +348,7 @@ def collect_report_data(out_dir: Path, *, include_markdown_previews: bool = True
     n_md = len(md_stems)
     n_meta = len(meta_stems)
     n_ref = len(ref_stems)
-    n_ref_expected = max(n_md - len(duplicate_of), 0)
+    n_ref_expected = n_md
     data["stages"] = _collect_stages(
         layout,
         n_md=n_md,
@@ -383,6 +390,12 @@ def collect_report_data(out_dir: Path, *, include_markdown_previews: bool = True
         data["dedup"]["core_to_core"] = core_to_core
     data["enrichment"] = _collect_enrichment_panel(enriched_df, misses_df, enrichment_summary)
     data["authors"] = _collect_authors_panel(authors_df, author_citations_df, author_review)
+    if data["authors"] is not None:
+        data["authors"].update(_collect_resolution_audit(
+            layout.author_resolution_audit_json, errors,
+            inputs=AUTHOR_AUDIT_INPUTS, outputs=AUTHOR_AUDIT_OUTPUTS,
+        ))
+        data["authors"].pop("saved_audit", None)
 
     # --- problems summary ---------------------------------------------
     n_missing_year = 0
@@ -697,6 +710,48 @@ def _collect_stages(
     return stages
 
 
+def _collect_resolution_audit(
+    path: Path, errors: list[dict], *, inputs: set[str], outputs: set[str],
+) -> dict:
+    """Read saved evidence only when every bound checkpoint still matches."""
+    result = {"audit_status": "unavailable", "audit_config": None, "audit_decisions": []}
+    if not path.exists():
+        return result
+    try:
+        saved = read_json(path)
+        if not isinstance(saved, dict):
+            raise ValueError("Audit must be a JSON object")
+        if saved.get("schema_version") != 2:
+            return result
+        for key, expected in (("input_fingerprints", inputs), ("output_fingerprints", outputs)):
+            values = saved.get(key)
+            if not isinstance(values, dict) or set(values) != expected:
+                raise ValueError(f"Audit has invalid {key}")
+            if any(value is not None and (not isinstance(value, str) or len(value) != 64)
+                   for value in values.values()):
+                raise ValueError(f"Audit has invalid digest in {key}")
+        if not isinstance(saved.get("config"), dict) or not isinstance(saved.get("algorithm_version"), str):
+            raise ValueError("Audit is missing its algorithm/configuration")
+        decisions = saved.get("decisions")
+        if not isinstance(decisions, list) or any(not isinstance(row, dict) for row in decisions):
+            raise ValueError("Audit decisions must be a list of objects")
+        for key in ("input_fingerprints", "output_fingerprints"):
+            for name, expected in saved[key].items():
+                if artifact_fingerprint(path.parent / name) != expected:
+                    result["audit_status"] = "stale"
+                    return result
+        result.update(
+            audit_status="current", audit_config=saved["config"],
+            audit_algorithm=saved["algorithm_version"], audit_decisions=decisions[:200],
+            audit_decisions_truncated=max(len(decisions) - 200, 0),
+            enrichment_status=saved.get("enrichment_status"), saved_audit=saved,
+        )
+    except Exception as exc:  # noqa: BLE001 - corrupt artifacts are report findings
+        result["audit_status"] = "invalid"
+        _record_error(errors, path, exc)
+    return result
+
+
 def _collect_dedup_panel(
     raw_refs_df: pd.DataFrame | None,
     works_df: pd.DataFrame | None,
@@ -757,27 +812,38 @@ def _collect_dedup_panel(
             )
     panel["top_cited"] = top_cited
 
-    # Merge audit: recompute the canonicalization with default DedupConfig so
-    # the user can inspect every cluster that absorbed more than one citation
-    # event. Failure here (bad columns etc.) is recorded, not raised.
+    # Historical membership comes solely from the stage's bound observations.
     panel["merge_audit"] = []
     panel["merge_audit_truncated"] = 0
+    panel.update(_collect_resolution_audit(
+        layout.canonicalization_audit_json, errors,
+        inputs=WORK_AUDIT_INPUTS, outputs=WORK_AUDIT_OUTPUTS,
+    ))
+    if panel["audit_status"] != "current":
+        return panel
     try:
-        raw = raw_refs_df.reset_index(drop=True)
-        saved_audit = read_json(layout.canonicalization_audit_json) if layout.canonicalization_audit_json.exists() else None
-        if saved_audit is not None and isinstance(saved_audit.get("citation_cluster_ids"), list):
-            mapping = saved_audit["citation_cluster_ids"]
-        elif sources_df is None:
-            sources_for_audit = pd.DataFrame(
-                columns=["id", "source_file", "Title", "Authors", "Authors_List", "Journal", "Year"]
-            )
-        else:
-            sources_for_audit = sources_df
-        if saved_audit is None:
-            _, _, audit_stats = canonicalize_works(
-                sources_for_audit, raw, DedupConfig(), show_progress=False
-            )
-            mapping = audit_stats["citation_cluster_ids"]
+        saved_audit = panel.pop("saved_audit")
+        source_mapping = saved_audit.get("source_cluster_ids")
+        citation_mapping = saved_audit.get("citation_cluster_ids")
+        if (not isinstance(source_mapping, list) or sources_df is None
+                or len(source_mapping) != len(sources_df)
+                or not isinstance(citation_mapping, list) or len(citation_mapping) != len(raw_refs_df)):
+            raise ValueError("Audit observation mappings do not match the checkpoint rows")
+        mapping = source_mapping + citation_mapping
+        if any(not isinstance(cid, str) or cid not in works_df.index for cid in mapping):
+            raise ValueError("Audit refers to an unknown canonical work")
+        raw = pd.concat([sources_df, raw_refs_df], ignore_index=True)
+        for decision in saved_audit["decisions"]:
+            for key in ("left_index", "right_index"):
+                idx = decision.get(key)
+                if not isinstance(idx, int) or not 0 <= idx < len(raw):
+                    raise ValueError("Audit decision refers to an unknown observation")
+        panel["audit_decisions"] = [
+            dict(decision, left_title=_as_str(raw.iloc[decision["left_index"]].get("Title")),
+                 right_title=_as_str(raw.iloc[decision["right_index"]].get("Title")))
+            for decision in saved_audit["decisions"] if decision.get("decision") == "review"
+        ][:200]
+        panel["id_collisions"] = saved_audit.get("id_collisions", [])
         members_by_cluster: dict[str, list[int]] = {}
         for idx, cluster_id in enumerate(mapping):
             members_by_cluster.setdefault(str(cluster_id), []).append(int(idx))
@@ -795,11 +861,13 @@ def _collect_dedup_panel(
                         "title": _as_str(row.get("Title")),
                         "year": _as_int(row.get("Year")),
                         "citing_id": _as_str(row.get("citing_id")),
+                        "source_file": _as_str(row.get("source_file")),
                     }
                 )
             panel["merge_audit"].append({"id": cluster_id, "members": members})
     except Exception as exc:  # noqa: BLE001 - audit is best-effort
-        _record_error(errors, layout.citations_raw_csv, exc)
+        panel.update(audit_status="invalid", merge_audit=[], audit_decisions=[])
+        _record_error(errors, layout.canonicalization_audit_json, exc)
 
     return panel
 
@@ -1231,12 +1299,12 @@ def _render_dedup_section(panel: dict | None) -> str:
     for cluster in panel["merge_audit"]:
         members = "".join(
             f"<li>{_esc(m['title'])} <span class='soft'>({_esc(_year_str(m['year']))}, "
-            f"cited by <span class='mono'>{_esc(m['citing_id'])}</span>)</span></li>"
+            f"<span class='mono'>{_esc(m['source_file'] or m['citing_id'])}</span>)</span></li>"
             for m in cluster["members"]
         )
         audit_parts.append(
             f'<details class="cluster"><summary><span class="mono">{_esc(cluster["id"])}</span>'
-            f' <span class="soft">absorbed {len(cluster["members"])} citation events</span>'
+            f' <span class="soft">contains {len(cluster["members"])} observations</span>'
             f"</summary><ul>{members}</ul></details>"
         )
     if audit_parts:
@@ -1248,18 +1316,41 @@ def _render_dedup_section(panel: dict | None) -> str:
             )
         audit_html = (
             "<h3>Merge audit</h3>"
-            '<p class="soft">Clusters that absorbed more than one citation event '
-            "(recomputed with default DedupConfig). Inspect these for false merges.</p>"
+            '<p class="soft">Saved clusters containing multiple source or citation observations. '
+            "Inspect these for false merges.</p>"
             + "".join(audit_parts)
             + note
         )
     else:
         audit_html = (
-            "<h3>Merge audit</h3><p class='soft'>No cluster absorbed more than one "
-            "citation event (recomputed with default DedupConfig).</p>"
+            "<h3>Merge audit</h3><p class='soft'>No saved merged groups to display.</p>"
         )
 
-    return stats + core_html + top_html + audit_html
+    return stats + core_html + top_html + audit_html + _render_resolution_evidence(panel)
+
+
+def _render_resolution_evidence(panel: dict) -> str:
+    status = panel.get("audit_status", "unavailable")
+    if status != "current":
+        return (f"<p class='soft'>Resolution evidence: {_esc(status)}. "
+                "Re-run the corresponding stage to save evidence for the current artifacts.</p>")
+    result = (
+        "<h3>Resolution evidence</h3><p class='soft'>Saved evidence matches the current artifacts. "
+        f"Algorithm: {_esc(panel.get('audit_algorithm'))}. "
+        f"Settings: {_esc(json.dumps(panel.get('audit_config'), sort_keys=True))}.</p>"
+    )
+    if panel.get("enrichment_status"):
+        result += f"<p>Enrichment evidence: {_esc(panel['enrichment_status'])}.</p>"
+    decisions = panel.get("audit_decisions", [])
+    if decisions:
+        items = "".join(
+            "<li>" + "; ".join(f"<b>{_esc(k)}</b>: {_esc(v)}" for k, v in row.items()) + "</li>"
+            for row in decisions
+        )
+        result += f"<details><summary>Decisions and review evidence</summary><ul>{items}</ul></details>"
+    if panel.get("audit_decisions_truncated"):
+        result += "<p class='soft'>Additional decisions are available in the audit JSON file.</p>"
+    return result
 
 
 def _render_enrichment_section(panel: dict | None) -> str:
@@ -1386,7 +1477,7 @@ def _render_authors_section(panel: dict | None) -> str:
             "strings — the merge audit for people.</p>" + "".join(variant_parts)
         )
 
-    return stats + top_html + review_html + variant_html
+    return stats + top_html + review_html + variant_html + _render_resolution_evidence(panel)
 
 
 def _render_integrity_section(table: list[dict]) -> str:

@@ -173,3 +173,93 @@ def test_author_positions_survive_csv_roundtrip():
     row = pd.Series({"Authors_List": ["", "John Smith", "Jane Smith"]})
     csv_row = pd.read_csv(__import__('io').StringIO(pd.DataFrame([row]).to_csv(index=False))).iloc[0]
     assert _row_authors(row) == _row_authors(csv_row) == ["", "John Smith", "Jane Smith"]
+
+
+def test_failed_run_removes_previous_success_summary(tmp_path, monkeypatch):
+    p, md = setup_cached(tmp_path)
+    p.layout.run_summary_json.write_text('{"n_works": 99}')
+    (p.layout.metadata_dir / "paper.json").write_text("broken")
+    monkeypatch.setattr(p, "convert_pdfs", lambda: [md])
+    with pytest.raises(StageNotReadyError):
+        p.run()
+    assert not p.layout.run_summary_json.exists()
+
+
+def test_pipeline_corrections_and_failure_leave_saved_outputs_unchanged(tmp_path):
+    from tests.test_author_overrides import correction, works
+    p, _ = setup_cached(tmp_path)
+    frame = works(["Smith, John", "Smith, John", "Jones, Jane"]).rename_axis("id")
+    frame.to_csv(p.layout.works_csv)
+    rows = [correction("separate", "w-1", "w-2"), correction("merge", "w-1", "w-3")]
+    pd.DataFrame(rows).to_csv(p.layout.author_overrides_csv, index=False)
+    _, occurrences = p.normalize_authors(works=frame)
+    ids = occurrences.set_index("record_id").author_id
+    assert ids["w-1"] == ids["w-3"] != ids["w-2"]
+    assert p.layout.author_overrides_meta_json.exists()
+    artifacts = [p.layout.authors_csv, p.layout.author_citations_csv,
+                 p.layout.author_resolution_audit_json, p.layout.author_overrides_meta_json]
+    saved = {path: path.read_bytes() for path in artifacts}
+    rows.append(correction("merge", "w-1", "w-2"))
+    pd.DataFrame(rows).to_csv(p.layout.author_overrides_csv, index=False)
+    with pytest.raises(ValueError, match="contradiction"):
+        p.normalize_authors(works=frame)
+    assert {path: path.read_bytes() for path in artifacts} == saved
+
+
+def test_first_invalid_correction_does_not_bind_snapshot(tmp_path):
+    from tests.test_author_overrides import correction, works
+    p, _ = setup_cached(tmp_path)
+    frame = works(["Smith, John", "Smith, John"])
+    pd.DataFrame([correction("merge", "w-1", "w-2"),
+                  correction("separate", "w-1", "w-2")]).to_csv(p.layout.author_overrides_csv, index=False)
+    with pytest.raises(ValueError, match="contradiction"):
+        p.normalize_authors(works=frame)
+    assert not p.layout.author_overrides_meta_json.exists()
+    assert not p.layout.authors_csv.exists()
+
+
+def test_graph_accepts_legacy_blank_author_checkpoints(tmp_path):
+    from citegraph.graph import CitationGraph
+    p, md = setup_cached(tmp_path, names=[])
+    sources = p.extract_paper_metadata([md])
+    refs = p.extract_paper_references([md], sources)
+    p.deduplicate(sources, refs)
+    p.layout.authors_csv.write_text("\n")
+    p.layout.author_citations_csv.write_text("\n")
+    graph = CitationGraph.from_out_dir(tmp_path)
+    assert graph.authors.empty and graph.author_citations.empty
+    assert graph.n_works == 1
+
+
+def test_cited_collision_history_blocks_legacy_cache_and_identifiers(tmp_path, monkeypatch):
+    from citegraph.enrich import EnrichConfig, _enrich_one, _LookupReport
+    p, md = setup_cached(tmp_path)
+    sources = p.extract_paper_metadata([md])
+    prefix = "Studies in economic and social behavior: "
+    titles = [prefix + "agricultural irrigation water allocation and collective farming",
+              prefix + "monetary inflation central banking interest rates and currency speculation"]
+    refs = pd.DataFrame([dict(Title=title, Authors="John Smith", Authors_List=["John Smith"],
+                              Journal="J", Year=2020, citing_id=sources.iloc[0].id) for title in titles])
+    refs.to_csv(p.layout.citations_raw_csv, index=False)
+    works, _ = p.deduplicate(sources, refs)
+    base = works.index[works.Title == titles[0]][0]
+    legacy = dict(Title=titles[1], doi="10.old/wrong", Authors_List=["John Smith"],
+                  OpenAlex_Authors=[dict(display_name="John Smith", openalex_id="WRONG")])
+    cache_path = p.layout.enrichment_dir / f"{base}.json"
+    cache_path.write_text(json.dumps(legacy))
+    calls = []
+    def lookup(*args, **kwargs):
+        calls.append(args[0])
+        return _LookupReport(match=dict(Title=titles[0], doi="10.new/correct"))
+    monkeypatch.setattr("citegraph.enrich._crossref_lookup_report", lookup)
+    result = _enrich_one(base, works.loc[base], EnrichConfig(), None, p.layout.enrichment_dir)
+    assert result["doi"] == "10.new/correct"
+    assert calls == [titles[0]]
+    # Removing the other collider must not rehabilitate the old cache/CSV.
+    works, _ = p.deduplicate(sources, refs.iloc[:1])
+    pd.DataFrame([dict(id=base, **legacy)]).set_index("id").to_csv(p.layout.enriched_works_csv)
+    authors, _ = p.normalize_authors(works=works)
+    assert "WRONG" not in set(authors.openalex_id.dropna())
+    cache_path.write_text(json.dumps(legacy))
+    _enrich_one(base, works.loc[base], EnrichConfig(), None, p.layout.enrichment_dir)
+    assert len(calls) == 2

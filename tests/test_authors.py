@@ -1249,3 +1249,38 @@ def test_same_work_identical_names_stay_separate():
     authors, occurrences, review = normalize_authors(works=works)
     assert occurrences.author_id.nunique() == 2
     assert review
+def test_ambiguous_external_bridge_does_not_choose_orcid_by_input_order():
+    from itertools import permutations
+    frame = pd.DataFrame({"Authors_List": [["John Smith"]] * 3}, index=["w-0", "w-1", "w-2"])
+    enriched = pd.DataFrame({"OpenAlex_Authors": [[dict(
+        display_name="John Smith", openalex_id="A1", orcid=orcid)]
+        for orcid in [None, "0001", "0002"]]}, index=frame.index)
+    for order in permutations(frame.index):
+        _, occurrences, _ = normalize_authors(works=frame.loc[list(order)], enriched_works=enriched)
+        assert occurrences.author_id.nunique() == 3
+
+
+def test_shared_external_id_cannot_merge_corporate_and_person():
+    frame = pd.DataFrame({"Authors_List": [["The World Bank"], ["John Smith"]]}, index=["w-0", "w-1"])
+    enriched = pd.DataFrame({"OpenAlex_Authors": [[dict(display_name=name, openalex_id="A1")]
+                            for name in ["The World Bank", "John Smith"]]}, index=frame.index)
+    authors, _, review = normalize_authors(works=frame, enriched_works=enriched)
+    assert len(authors) == 2
+    assert any("corporate_person_conflict" in row.get("reason", "") for row in review)
+
+
+def test_transitive_orcid_free_bridges_remain_unresolved():
+    frame = pd.DataFrame({"Authors_List": [["John Smith"]] * 6}, index=[f"w-{i}" for i in range(6)])
+    ids = [("A1", "O1"), ("A1", None), ("A2", None), ("A2", None), ("A3", None), ("A3", "O2")]
+    enriched = pd.DataFrame({"OpenAlex_Authors": [[dict(display_name="John Smith", openalex_id=oa, orcid=orc)]
+                            for oa, orc in ids]}, index=frame.index)
+    constraints = [dict(action="merge", left_record_id=f"w-{a}", left_position=0,
+                        right_record_id=f"w-{b}", right_position=0, reason="Confirmed variant")
+                   for a, b in [(1, 2), (3, 4)]]
+    for order in [list(frame.index), list(reversed(frame.index))]:
+        _, occurrences, _ = normalize_authors(works=frame.loc[order], enriched_works=enriched,
+                                              constraints=constraints)
+        mapping = occurrences.set_index("record_id").author_id
+        assert mapping["w-0"] != mapping["w-5"]
+        assert mapping["w-1"] == mapping["w-2"] == mapping["w-3"] == mapping["w-4"]
+        assert mapping["w-1"] not in {mapping["w-0"], mapping["w-5"]}

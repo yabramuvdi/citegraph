@@ -1,0 +1,367 @@
+[
+  {
+    "case_id": "conflicting_orcid_bridge",
+    "works": [
+      {"id": "w-0", "Authors_List": ["John Smith"]},
+      {"id": "w-1", "Authors_List": ["John Smith"]},
+      {"id": "w-2", "Authors_List": ["John Smith"]}
+    ],
+    "enriched_works": [
+      {"id": "w-0", "OpenAlex_Authors": [{"display_name": "John Smith", "openalex_id": "A1"}]},
+      {"id": "w-1", "OpenAlex_Authors": [{"display_name": "John Smith", "openalex_id": "A1", "orcid": "O1"}]},
+      {"id": "w-2", "OpenAlex_Authors": [{"display_name": "John Smith", "openalex_id": "A1", "orcid": "O2"}]}
+    ],
+    "labels": [
+      {"left": "w-1:0", "right": "w-2:0", "label": "different"},
+      {"left": "w-0:0", "right": "w-1:0", "label": "ambiguous"}
+    ]
+  },
+  {
+    "case_id": "corporate_provider_conflict",
+    "works": [
+      {"id": "w-0", "Authors_List": ["The World Bank"]},
+      {"id": "w-1", "Authors_List": ["John Smith"]}
+    ],
+    "enriched_works": [
+      {"id": "w-0", "OpenAlex_Authors": [{"display_name": "The World Bank", "openalex_id": "A1"}]},
+      {"id": "w-1", "OpenAlex_Authors": [{"display_name": "John Smith", "openalex_id": "A1"}]}
+    ],
+    "labels": [{"left": "w-0:0", "right": "w-1:0", "label": "different"}]
+  },
+  {
+    "case_id": "partial_enrichment",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "John Smith",
+          "Jane Smith"
+        ]
+      }
+    ],
+    "enriched_works": [
+      {
+        "id": "w-0",
+        "OpenAlex_Authors": [
+          {
+            "display_name": "John Smith",
+            "openalex_id": "A1"
+          }
+        ]
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-0:1",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "initials_bridge",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "John Smith"
+        ]
+      },
+      {
+        "id": "w-1",
+        "ring": 0,
+        "Authors_List": [
+          "J. Smith"
+        ]
+      },
+      {
+        "id": "w-2",
+        "ring": 0,
+        "Authors_List": [
+          "Jane Smith"
+        ]
+      }
+    ],
+    "enriched_works": [
+      {
+        "id": "w-0",
+        "OpenAlex_Authors": [
+          {
+            "display_name": "John Smith",
+            "openalex_id": "A1"
+          }
+        ]
+      },
+      {
+        "id": "w-1",
+        "OpenAlex_Authors": [
+          {
+            "display_name": "J. Smith",
+            "openalex_id": "A1"
+          }
+        ]
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-1:0",
+        "label": "same"
+      },
+      {
+        "left": "w-0:0",
+        "right": "w-2:0",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "attested_variant",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "Juan Camilo Cardenas"
+        ]
+      },
+      {
+        "id": "w-1",
+        "ring": 0,
+        "Authors_List": [
+          "Camilo Cardenas"
+        ]
+      },
+      {
+        "id": "w-2",
+        "ring": 0,
+        "Authors_List": [
+          "Camilo Cardenas"
+        ]
+      }
+    ],
+    "enriched_works": [
+      {
+        "id": "w-0",
+        "OpenAlex_Authors": [
+          {
+            "display_name": "Juan Camilo Cardenas",
+            "openalex_id": "A1"
+          }
+        ]
+      },
+      {
+        "id": "w-1",
+        "OpenAlex_Authors": [
+          {
+            "display_name": "Camilo Cardenas",
+            "openalex_id": "A1"
+          }
+        ]
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-2:0",
+        "label": "same"
+      }
+    ]
+  },
+  {
+    "case_id": "compound",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "García Márquez, Gabriel"
+        ]
+      },
+      {
+        "id": "w-1",
+        "ring": 0,
+        "Authors_List": [
+          "Gabriel García Márquez"
+        ]
+      }
+    ],
+    "enriched_works": [],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-1:0",
+        "label": "same"
+      }
+    ]
+  },
+  {
+    "case_id": "prefix_conflict",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "Gabriel Garcia"
+        ]
+      },
+      {
+        "id": "w-1",
+        "ring": 0,
+        "Authors_List": [
+          "Gabriela Garcia"
+        ]
+      }
+    ],
+    "enriched_works": [],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-1:0",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "ambiguous_initial",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "J. Smith"
+        ]
+      },
+      {
+        "id": "w-1",
+        "ring": 0,
+        "Authors_List": [
+          "John Smith"
+        ]
+      },
+      {
+        "id": "w-2",
+        "ring": 0,
+        "Authors_List": [
+          "Jane Smith"
+        ]
+      }
+    ],
+    "enriched_works": [],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-1:0",
+        "label": "ambiguous"
+      },
+      {
+        "left": "w-1:0",
+        "right": "w-2:0",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "same_name_coauthors",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "John Smith",
+          "John Smith"
+        ]
+      }
+    ],
+    "enriched_works": [],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-0:1",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "corporate_isolation",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "The World Bank"
+        ]
+      },
+      {
+        "id": "w-1",
+        "ring": 0,
+        "Authors_List": [
+          "World Bank"
+        ]
+      },
+      {
+        "id": "w-2",
+        "ring": 0,
+        "Authors_List": [
+          "John Bank"
+        ]
+      }
+    ],
+    "enriched_works": [],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-2:0",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "different_ids_same_names",
+    "works": [
+      {
+        "id": "w-0",
+        "ring": 0,
+        "Authors_List": [
+          "John Smith"
+        ]
+      },
+      {
+        "id": "w-1",
+        "ring": 0,
+        "Authors_List": [
+          "John Smith"
+        ]
+      }
+    ],
+    "enriched_works": [
+      {
+        "id": "w-0",
+        "OpenAlex_Authors": [
+          {
+            "display_name": "John Smith",
+            "openalex_id": "A1"
+          }
+        ]
+      },
+      {
+        "id": "w-1",
+        "OpenAlex_Authors": [
+          {
+            "display_name": "John Smith",
+            "openalex_id": "A2"
+          }
+        ]
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-0:0",
+        "right": "w-1:0",
+        "label": "different"
+      }
+    ]
+  }
+]

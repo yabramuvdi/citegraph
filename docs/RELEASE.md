@@ -62,3 +62,41 @@ python -m venv /tmp/citegraph-pypi-check
 /tmp/citegraph-pypi-check/bin/python -m pip install citegraph
 /tmp/citegraph-pypi-check/bin/citegraph --help
 ```
+
+## Canonicalization reliability release gate
+
+Install the dev extras and optional graph/plot dependencies used by the suite.
+Run the full suite without default test selection and execute the offline gate:
+
+```bash
+python -m pytest -o addopts=''
+ruff check .
+python scripts/evaluate_canonicalization.py \
+  --fixtures tests/fixtures/canonicalization \
+  --out /private/tmp/citegraph-evaluation.json
+```
+
+Require zero false merges on must-separate fixtures and no false splits on
+explicitly supported positives. Inspect every changed reversed-input author
+partition; report any remaining work-order sensitivity. Check repeats and CSV
+roundtrips, and the pipeline tests for cached/fresh and staged/composed equivalence,
+registry stability, complete lineage, empty checkpoints, and override validation.
+Optional graph/plot tests must execute for a release check. Loopback restrictions
+may prevent HTTP-server tests; identify that environment limitation separately
+from a code failure and rerun in a permitted environment before claiming a full
+release pass.
+
+Follow the copy-only migration in [USER_GUIDE.md](USER_GUIDE.md#rebuild-an-existing-corpus-in-a-copy).
+Keep `source_ids.json`, `work_id_collisions.json`, and correction bindings; inspect missing extraction caches
+and invalidated enrichment before provider work. Accepted title containments that
+introduce negation, different part numbers, or substantive expansions now stay
+separate for review; explicit compatible subtitles and supported name variants
+remain regression positives. Reports expose unavailable or stale saved evidence
+instead of guessing past decisions.
+
+A synthetic fixture pass does not validate representative-corpus accuracy. Freeze
+the 150-author/150-work stratified sample and held-out split before tuning. Record
+human labels, false merges/splits, independently detected retrieval omissions,
+review workload, and migration changes to citation counts and rankings. If human
+labels are unavailable, state that the corpus accuracy gate remains unverified.
+Do not publish invented precision/recall estimates or imply order invariance.

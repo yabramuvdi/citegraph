@@ -493,6 +493,8 @@ class AuthorOccurrence:
     co_author_keys: tuple[str, ...] = ()  # surname_norm of the other authors on the same record
     openalex_id: str | None = None
     orcid: str | None = None
+    cannot_link: set[tuple[str, int]] = field(default_factory=set)
+    ambiguous_identity_links: set[tuple[str, int]] = field(default_factory=set)
 
 
 @dataclass
@@ -695,10 +697,16 @@ def _cluster_signatures(
 
 def _author_conflict_reasons(left: list[AuthorOccurrence], right: list[AuthorOccurrence]) -> list[str]:
     """Contradictions are independent of positive matching evidence."""
+    if any((r.record_id, r.position) in member.cannot_link for member in left for r in right):
+        return ["explicit_separate"]
+    if any((r.record_id, r.position) in member.ambiguous_identity_links for member in left for r in right):
+        return ["ambiguous_external_identity"]
     lo = {o.orcid for o in left if o.orcid}
     ro = {o.orcid for o in right if o.orcid}
     if lo and ro and len(lo | ro) > 1:
         return ["orcid_conflict"]
+    if any(a.parsed.is_corporate != b.parsed.is_corporate for a in left for b in right):
+        return ["corporate_person_conflict"]
     li, ri = _cluster_external_ids(left), _cluster_external_ids(right)
     if li & ri:
         return []  # Consistent direct identity supports observed name variants.
@@ -709,8 +717,6 @@ def _author_conflict_reasons(left: list[AuthorOccurrence], right: list[AuthorOcc
         reasons.append("same_work_distinct_positions")
     for left_occurrence in left:
         for right_occurrence in right:
-            if left_occurrence.parsed.is_corporate != right_occurrence.parsed.is_corporate:
-                reasons.append("corporate_person_conflict")
             lu, ru = _given_units(left_occurrence.parsed), _given_units(right_occurrence.parsed)
             if lu and ru and not (_units_compatible(lu, ru) or _given_subsequence(lu, ru)):
                 reasons.append("given_name_conflict")
@@ -757,25 +763,33 @@ def _merge_unidentified_into_external_clusters(
     return external + unresolved
 
 
-def _cluster_block(occs: list[AuthorOccurrence], cfg: AuthorClusterConfig) -> list[list[AuthorOccurrence]]:
+def _cluster_block(occs: list[AuthorOccurrence], cfg: AuthorClusterConfig,
+                   seeds: list[list[AuthorOccurrence]] | None = None) -> list[list[AuthorOccurrence]]:
     """Resolve external identities globally before occurrence-specific name joins."""
-    external = _merge_clusters_by_external_id([[o] for o in occs if o.openalex_id or o.orcid])
-    unidentified = [o for o in occs if not (o.openalex_id or o.orcid)]
+    seeds = seeds if seeds is not None else [[o] for o in occs]
+    external = _merge_clusters_by_external_id([c for c in seeds if len(c) > 1 or _has_external_id(c)])
+    unidentified = [c[0] for c in seeds if len(c) == 1 and not _has_external_id(c)]
     # Full evidence comes first; stable tie ordering preserves deterministic IDs.
     unidentified.sort(key=lambda o: (
         tuple(-x for x in _units_informativeness(_given_units(o.parsed))),
         " ".join(v for _, v in _given_units(o.parsed)), o.record_id, o.position,
     ))
     clusters = external[:]
+    surname_candidates: dict[str, list[list[AuthorOccurrence]]] = defaultdict(list)
+    def index_cluster(cluster):
+        for surname in {o.parsed.surname_norm for o in cluster}:
+            surname_candidates[surname].append(cluster)
+    for cluster in clusters:
+        index_cluster(cluster)
     held: list[list[AuthorOccurrence]] = []
     for occurrence in unidentified:
         one = [occurrence]
         if cfg.merge_mode == "loose":
-            candidates = [c for c in clusters if c[0].parsed.surname_norm == occurrence.parsed.surname_norm
+            candidates = [c for c in surname_candidates[occurrence.parsed.surname_norm] if c[0].parsed.surname_norm == occurrence.parsed.surname_norm
                           and c[0].parsed.first_initial == occurrence.parsed.first_initial
                           and not _author_clusters_conflict(one, c)]
         else:
-            candidates = [c for c in clusters if _name_supported(one, c)
+            candidates = [c for c in surname_candidates[occurrence.parsed.surname_norm] if _name_supported(one, c)
                           and not _author_clusters_conflict(one, c)]
         if len(candidates) > 1:
             overlap = [c for c in candidates if _has_coauthor_overlap(occurrence, c)]
@@ -787,10 +801,11 @@ def _cluster_block(occs: list[AuthorOccurrence], cfg: AuthorClusterConfig) -> li
             held.append(one)
         else:
             clusters.append(one)
+            index_cluster(one)
     # Identical unresolved signatures can combine across works, without making
     # an ambiguous initial cluster an anchor for other abbreviated signatures.
     for one in held:
-        matches = [c for c in clusters if not _has_external_id(c)
+        matches = [c for c in surname_candidates[one[0].parsed.surname_norm] if not _has_external_id(c)
                    and c[0].parsed.surname_norm == one[0].parsed.surname_norm
                    and _given_units(c[0].parsed) == _given_units(one[0].parsed)
                    and not _author_clusters_conflict(one, c)]
@@ -798,12 +813,59 @@ def _cluster_block(occs: list[AuthorOccurrence], cfg: AuthorClusterConfig) -> li
             matches[0].extend(one)
         else:
             clusters.append(one)
+            index_cluster(one)
     return clusters
 
 
 def _cluster_external_ids(cluster: list[AuthorOccurrence]) -> set[str]:
     return {kind + value for o in cluster
             for kind, value in (("oa:", o.openalex_id), ("orcid:", o.orcid)) if value}
+
+
+def _mark_identity_ambiguities(clusters: list[list[AuthorOccurrence]]) -> None:
+    """Find contradictory identity components before any order-dependent unions.
+
+    A seed compatible with both sides of a contradiction cannot choose either.
+    Keep that evidence unresolved across every later name/identity merge pass.
+    Explicitly forced groups are already seeds, so reviewed choices remain valid.
+    """
+    parent = list(range(len(clusters)))
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    owner: dict[str, int] = {}
+    for i, cluster in enumerate(clusters):
+        for key in _cluster_external_ids(cluster):
+            if key in owner:
+                parent[root(i)] = root(owner[key])
+            else:
+                owner[key] = i
+    components: dict[int, list[int]] = defaultdict(list)
+    for i in range(len(clusters)):
+        components[root(i)].append(i)
+    blocked: set[tuple[int, int]] = set()
+    for indices in components.values():
+        conflicts = [(i, j) for pos, i in enumerate(indices) for j in indices[pos + 1:]
+                     if {"orcid_conflict", "explicit_separate"}
+                     & set(_author_conflict_reasons(clusters[i], clusters[j]))]
+        for left, right in conflicts:
+            for i in indices:
+                if i in (left, right):
+                    continue
+                # Membership of this component already supplies transitive ID
+                # evidence. Distinct direct IDs or name spellings are not hard
+                # contradictions to an anchor elsewhere in the component.
+                hard_conflicts = {"orcid_conflict", "explicit_separate", "corporate_person_conflict"}
+                if (not hard_conflicts.intersection(_author_conflict_reasons(clusters[i], clusters[left]))
+                        and not hard_conflicts.intersection(_author_conflict_reasons(clusters[i], clusters[right]))):
+                    blocked.update(((i, left), (i, right)))
+    for left, right in blocked:
+        for own, other in ((left, right), (right, left)):
+            coordinates = {(o.record_id, o.position) for o in clusters[other]}
+            for occurrence in clusters[own]:
+                occurrence.ambiguous_identity_links.update(coordinates)
 
 
 def _merge_clusters_by_external_id(clusters: list[list[AuthorOccurrence]]) -> list[list[AuthorOccurrence]]:
@@ -814,6 +876,9 @@ def _merge_clusters_by_external_id(clusters: list[list[AuthorOccurrence]]) -> li
                    and not _author_clusters_conflict(c, cluster)]
         # An ORCID-free bridge shared by conflicting identities cannot choose one.
         if len({o.orcid for c in targets + [cluster] for o in c if o.orcid}) > 1:
+            targets = []
+        if any('explicit_separate' in _author_conflict_reasons(a, b)
+               for i, a in enumerate(targets) for b in targets[i + 1:]):
             targets = []
         if targets:
             primary = targets[0]
@@ -922,6 +987,7 @@ def normalize_authors(
     citation_edges: pd.DataFrame | None = None,
     cfg: AuthorClusterConfig | None = None,
     aliases: dict[str, str] | None = None,
+    constraints: list[dict] | None = None,
     audit: list[dict] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[dict]]:
     """Cluster authors across the corpus.
@@ -979,7 +1045,10 @@ def normalize_authors(
     for o in occurrences:
         blocks[o.parsed.surname_norm].append(o)
 
-    raw_clusters = _cluster_block(occurrences, cfg)
+    from citegraph.author_overrides import prepare_constraints
+    seeds = prepare_constraints(occurrences, constraints or [])
+    _mark_identity_ambiguities(seeds)
+    raw_clusters = _cluster_block(occurrences, cfg, seeds)
 
     # Cross-block passes: shared external ids override blocking, then
     # single-surname clusters bridge into compound-surname clusters when
@@ -1077,12 +1146,10 @@ def normalize_authors(
         if c.review_reason
     ]
 
+    author_by_occurrence = {(row.record_id, row.position): row.author_id
+                            for row in citations_df.itertuples(index=False)}
     for entry in attachment_audit:
-        matching = citations_df[
-            (citations_df.record_id == entry["record_id"])
-            & (citations_df.position == entry["position"])
-        ]
-        entry["author_id"] = matching.author_id.iloc[0] if not matching.empty else None
+        entry["author_id"] = author_by_occurrence.get((entry["record_id"], entry["position"]))
         if entry["decision"] in {"ambiguous", "conflict"}:
             review.append({**entry, "reason": "enrichment_" + entry["decision"]})
     resolution_audit: list[dict] = []
@@ -1099,8 +1166,18 @@ def normalize_authors(
             reasons.append("duplicate_authorship")
         for reason in reasons:
             review.append({"author_id": cluster.id, "reason": reason, **identifiers})
+    evidence_candidates: dict[str, set[int]] = defaultdict(set)
+    for i, cluster in enumerate(clusters):
+        for key in ({'surname:' + o.parsed.surname_norm for o in cluster.occurrences}
+                    | _cluster_external_ids(cluster.occurrences)):
+            evidence_candidates[key].add(i)
     for i, left in enumerate(clusters):
-        for right in clusters[i + 1:]:
+        candidate_indices: set[int] = set()
+        for key in ({'surname:' + o.parsed.surname_norm for o in left.occurrences}
+                    | _cluster_external_ids(left.occurrences)):
+            candidate_indices.update(evidence_candidates[key])
+        for j in sorted(index for index in candidate_indices if index > i):
+            right = clusters[j]
             if not (_name_supported(left.occurrences, right.occurrences)
                     or _cluster_external_ids(left.occurrences) & _cluster_external_ids(right.occurrences)):
                 continue
@@ -1113,6 +1190,9 @@ def normalize_authors(
     if audit is not None:
         audit.extend(attachment_audit)
         audit.extend(resolution_audit)
+        audit.extend({"decision": "manual_override", **row} for row in constraints or [])
+        audit.extend({"decision": "legacy_alias", "cluster_id": source, "canonical_id": target}
+                     for source, target in aliases.items())
 
     logger.info(
         "Author normalization: %d occurrences → %d clusters (%d flagged for review)",
@@ -1448,17 +1528,29 @@ def _apply_aliases(
     """Merge clusters according to ``aliases``: {cluster_id: canonical_id}.
 
     Aliases are followed transitively (A→B, B→C ⇒ A absorbed into C).
-    Unknown ids on either side are silently ignored — the alias file is a
-    user-edited surface and we'd rather not blow up on stale entries.
+    Reject stale identifiers and cycles so corrections cannot silently disappear.
     """
     by_id = {c.id: c for c in clusters}
+    stale = (set(aliases) | set(aliases.values())) - set(by_id)
+    if stale:
+        raise ValueError(f'Stale author aliases: {sorted(stale)}; review against current authors')
 
     def resolve(cid: str, seen: set[str]) -> str:
-        if cid in seen or cid not in aliases:
+        if cid in seen:
+            raise ValueError(f'Author alias cycle involving {cid}')
+        if cid not in aliases:
             return cid
         seen.add(cid)
         return resolve(aliases[cid], seen)
 
+    groups: dict[str, list[AuthorOccurrence]] = defaultdict(list)
+    for c in clusters:
+        groups[resolve(c.id, set())].extend(c.occurrences)
+    for target, group in groups.items():
+        if len({o.orcid for o in group if o.orcid}) > 1:
+            raise ValueError(f'Author alias {target} has conflicting ORCIDs')
+        if any((r.record_id, r.position) in member.cannot_link for member in group for r in group):
+            raise ValueError(f'Author alias {target} contradicts explicit separate constraint')
     merged: dict[str, AuthorCluster] = {}
     for c in clusters:
         target_id = resolve(c.id, set())
@@ -1583,5 +1675,7 @@ def load_aliases(path: Path | str | None) -> dict[str, str]:
             if src.lower() == "cluster_id" and dst.lower() == "canonical_id":
                 continue  # header
             if src and dst:
+                if src in out and out[src] != dst:
+                    raise ValueError(f'Author alias conflict for {src}: {out[src]} versus {dst}')
                 out[src] = dst
     return out

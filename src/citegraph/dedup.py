@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import pandas as pd
-from rapidfuzz.fuzz import token_set_ratio
+from rapidfuzz.fuzz import ratio, token_set_ratio
 
 from citegraph._progress import iter_with_progress
 from citegraph.ids import _first_author_token, make_work_id
@@ -82,11 +82,11 @@ def _read_year(value: object) -> tuple[int | None, bool]:
       (e.g. ``"abc"``). Callers should fail closed in this case, preserving
       the original conservative behaviour for corrupt data.
     """
-    if value is None or value == "":
+    if value is None or pd.isna(value) or value == "":
         return None, True
     try:
         year = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None, False
     if year <= 0:
         return None, True
@@ -105,13 +105,23 @@ def compare_papers(paper1: dict, paper2: dict, cfg: DedupConfig) -> bool:
     Genuinely unparseable values (e.g. a stray non-numeric string) still
     fail closed — see :func:`_read_year`.
     """
-    # token_set_ratio (rather than plain Levenshtein ratio or token_sort_ratio)
-    # tolerates the two most common citation-style mismatches: a record listing
-    # only the first author ("Bowles, S.") vs the full list ("Samuel Bowles, ..."),
-    # and a title with a subtitle ("...: presidential address, APSA") vs the
-    # bare title. Both patterns scored 77-85 with the previous scorer mix and
-    # slipped under the 85 threshold; token_set_ratio scores them ~100 while
-    # still rejecting genuinely different papers that share only a few tokens.
+    return _assess_work_match(paper1, paper2, cfg)["decision"] == "match"
+
+
+def _normalize_work_record(record: dict) -> dict:
+    """Normalize representations without changing bibliographic display values."""
+    out = dict(record)
+    authors = parse_authors_list(record.get("Authors_List"))
+    if authors and not isinstance(record.get("Authors"), str):
+        out["Authors"] = ", ".join(authors)
+    elif authors and not record.get("Authors", "").strip():
+        out["Authors"] = ", ".join(authors)
+    return out
+
+
+def _assess_work_match(paper1: dict, paper2: dict, cfg: DedupConfig) -> dict:
+    """Score a pair, retaining reasons when strong fuzzy evidence is unsafe."""
+    paper1, paper2 = _normalize_work_record(paper1), _normalize_work_record(paper2)
     title1 = normalize_text(paper1.get("Title"))
     title2 = normalize_text(paper2.get("Title"))
     raw_title1 = paper1.get("Title") if isinstance(paper1.get("Title"), str) else ""
@@ -120,9 +130,7 @@ def compare_papers(paper1: dict, paper2: dict, cfg: DedupConfig) -> bool:
     for raw_left, raw_right in ((raw_title1, raw_title2), (raw_title2, raw_title1)):
         if ":" in raw_left or "—" in raw_left:
             prefix = raw_left.replace("—", ":").split(":", 1)[0]
-            subtitle_shortening |= normalize_text(prefix) == normalize_text(raw_right)
-    if _unsafe_title_difference(title1, title2) and not subtitle_shortening:
-        return False
+            subtitle_shortening |= _title_without_leading_article(normalize_text(prefix)) == _title_without_leading_article(normalize_text(raw_right))
     title_score = token_set_ratio(
         _title_without_leading_article(title1), _title_without_leading_article(title2)
     )
@@ -148,7 +156,18 @@ def compare_papers(paper1: dict, paper2: dict, cfg: DedupConfig) -> bool:
     else:
         year_ok = abs(y1 - y2) <= cfg.year_window
 
-    return weighted >= cfg.threshold and year_ok
+    reasons = _title_conflict_reasons(title1, title2, subtitle_shortening=subtitle_shortening)
+    if not year_ok:
+        decision, reasons = "reject", ["invalid_year" if not ok1 or not ok2 else "year_window"]
+    elif weighted < cfg.threshold:
+        decision, reasons = "reject", ["below_threshold"]
+    elif reasons:
+        decision = "review"
+    else:
+        decision, reasons = "match", ["compatible_metadata"]
+    return dict(decision=decision, reason_codes=reasons, title_score=title_score,
+                title_full_score=ratio(title1, title2), authors_score=authors_score,
+                journal_score=journal_score, weighted_score=weighted, year_ok=year_ok)
 
 
 _LEADING_ARTICLES = {"a", "an", "the"}
@@ -161,11 +180,13 @@ def _title_without_leading_article(title: str) -> str:
     return " ".join(words[1:] if words and words[0] in _LEADING_ARTICLES else words)
 
 
-def _unsafe_title_difference(left: str, right: str) -> bool:
+def _title_conflict_reasons(left: str, right: str, *, subtitle_shortening: bool = False) -> list[str]:
     """Guard high-scoring containment matches that change work identity."""
-    lw, rw = left.split(), right.split()
-    if bool(set(lw) & _NEGATION_WORDS) != bool(set(rw) & _NEGATION_WORDS):
-        return True
+    lw = _title_without_leading_article(left).split()
+    rw = _title_without_leading_article(right).split()
+    reasons = []
+    if (set(lw) & _NEGATION_WORDS) != (set(rw) & _NEGATION_WORDS):
+        reasons.append("negation_conflict")
     def marker(words: list[str]) -> tuple[str, str] | None:
         for i, word in enumerate(words[:-1]):
             if _PART_MARKER.match(word) and re.fullmatch(r"[ivxlcdm]+|\d+", words[i + 1]):
@@ -173,11 +194,12 @@ def _unsafe_title_difference(left: str, right: str) -> bool:
         return None
     lm, rm = marker(lw), marker(rw)
     if lm != rm and (lm or rm):
-        return True
-    shorter, longer = (lw, rw) if len(lw) < len(rw) else (rw, lw)
-    if shorter != longer and len(longer) - len(shorter) >= 2:
-        return True
-    return False
+        reasons.append("part_conflict")
+    # Explicit subtitle omission may explain containment, but cannot explain
+    # away the protected conflicts above. No semantic equivalence is inferred.
+    if not subtitle_shortening and (set(lw) < set(rw) or set(rw) < set(lw)):
+        reasons.append("title_expansion")
+    return reasons
 
 
 def _row_to_dict(row: pd.Series) -> dict:
@@ -206,7 +228,22 @@ def _title_block_key(title: object) -> str:
 
 def _author_block_key(row: pd.Series) -> str:
     authors_list = parse_authors_list(row.get("Authors_List"))
-    return _first_author_token(authors_list or row.get("Authors", ""))
+    value = authors_list or row.get("Authors", "")
+    def strip_accents(text: str) -> str:
+        return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    if isinstance(value, list):
+        value = [strip_accents(a) for a in value]
+    elif isinstance(value, str):
+        value = strip_accents(value)
+    return _first_author_token(value)
+
+
+def _title_block_keys(title: object) -> set[str]:
+    full = _title_without_leading_article(normalize_text(title))
+    if not full:
+        return set()
+    return {"full:" + full, "prefix:" + " ".join(full.split()[:6]),
+            "tokens:" + " ".join(sorted(set(full.split())))}
 
 
 def _years_can_match(a: object, b: object, cfg: DedupConfig) -> bool:
@@ -226,13 +263,11 @@ def _candidate_index_lookup(df: pd.DataFrame) -> tuple[dict[str, set[int]], dict
 
     for idx, row in df.iterrows():
         author_key = _author_block_key(row)
-        title_key = _title_block_key(row.get("Title"))
         author_blocks[author_key].add(idx)
         if author_key == "unknown":
             unknown_author.add(idx)
-        if title_key:
+        for title_key in _title_block_keys(row.get("Title")):
             title_blocks[title_key].add(idx)
-            title_blocks[" ".join(sorted(set(title_key.split())))].add(idx)
     return author_blocks, title_blocks, unknown_author
 
 
@@ -244,13 +279,12 @@ def _candidate_indices(
     unknown_author: set[int],
 ) -> set[int]:
     author_key = _author_block_key(row)
-    title_key = _title_block_key(row.get("Title"))
+    if author_key == "unknown":
+        # Symmetric with the known-author side's inclusion of unknown rows.
+        return set().union(*author_blocks.values()) if author_blocks else set()
     candidates = set(author_blocks.get(author_key, set())) | unknown_author
-    if title_key:
+    for title_key in _title_block_keys(row.get("Title")):
         candidates.update(title_blocks.get(title_key, set()))
-    # A second route based on the complete substantive token set catches
-    # harmless leading-article and accent differences without scanning all rows.
-    candidates.update(title_blocks.get(" ".join(sorted(set(title_key.split()))), set()))
     return candidates
 
 
@@ -261,6 +295,8 @@ def _cluster_rows(
     *,
     show_progress: bool,
     description: str,
+    decisions: list[dict] | None = None,
+    collisions: list[dict] | None = None,
 ) -> tuple[list[str], list[tuple[str, dict]]]:
     """Single-pass blocked clustering shared by dedup and canonicalization.
 
@@ -290,7 +326,10 @@ def _cluster_rows(
             n = 2
             while f"{cluster_id}-{n}" in used_ids:
                 n += 1
-            cluster_id = f"{cluster_id}-{n}"
+            new_id = f"{cluster_id}-{n}"
+            if collisions is not None:
+                collisions.append({"row_index": i, "base_id": cluster_id, "assigned_id": new_id})
+            cluster_id = new_id
         used_ids.add(cluster_id)
         cluster_ids[i] = cluster_id
         representatives.append((cluster_id, paper_i))
@@ -306,7 +345,11 @@ def _cluster_rows(
                 continue
             if not _years_can_match(df.iloc[i].get("Year"), df.iloc[j].get("Year"), cfg):
                 continue
-            if compare_papers(paper_i, _row_to_dict(df.iloc[j]), cfg):
+            assessment = _assess_work_match(paper_i, _row_to_dict(df.iloc[j]), cfg)
+            if decisions is not None and assessment["decision"] != "reject":
+                decisions.append({"left_index": i, "right_index": j,
+                                  "representative_id": cluster_id, **assessment})
+            if assessment["decision"] == "match":
                 cluster_ids[j] = cluster_id
     # Every entry is filled: each row either joined a cluster or started one.
     return cluster_ids, representatives  # type: ignore[return-value]
@@ -372,6 +415,8 @@ def canonicalize_works(
             "n_source_duplicates_merged": 0,
             "source_cluster_ids": [],
             "citation_cluster_ids": [],
+            "decisions": [],
+            "id_collisions": [],
         }
 
     combined = pd.concat([src, cit], ignore_index=True, sort=False)
@@ -385,12 +430,16 @@ def canonicalize_works(
             row.get("Title", ""),
         )
 
+    decisions: list[dict] = []
+    collisions: list[dict] = []
     cluster_ids, representatives = _cluster_rows(
         combined,
         cfg,
         _cluster_id,
         show_progress=show_progress,
         description="Canonicalizing works",
+        decisions=decisions,
+        collisions=collisions,
     )
 
     source_canonical = {str(src.iloc[i]["id"]): cluster_ids[i] for i in range(n_src)}
@@ -434,6 +483,8 @@ def canonicalize_works(
         # raw citation events merged into which work.
         "citation_cluster_ids": [str(c) for c in cluster_ids[n_src:]],
         "source_cluster_ids": [str(c) for c in cluster_ids[:n_src]],
+        "decisions": decisions,
+        "id_collisions": collisions,
     }
     logger.info(
         "Canonicalized %d sources + %d citations into %d works (%d edges)",

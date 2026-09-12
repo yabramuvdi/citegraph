@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 import pandas as pd
 
 from citegraph._progress import iter_with_progress
+from citegraph.author_overrides import bind_author_constraints, load_author_constraints
 from citegraph.authors import AuthorClusterConfig, load_aliases, normalize_authors
 from citegraph.config import get_settings
 from citegraph.dedup import DedupConfig, canonicalize_works
@@ -39,15 +40,19 @@ from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_
 from citegraph.extract_references import extract_references_from_markdown
 from citegraph.ids import assign_source_ids
 from citegraph.io import (
+    AUTHOR_AUDIT_INPUTS,
+    AUTHOR_AUDIT_OUTPUTS,
     CITATION_COLUMNS,
     SOURCE_COLUMNS,
     WORK_COLUMNS,
     OutLayout,
+    artifact_fingerprint,
     frame_fingerprint,
     metadata_fingerprint,
     parse_openalex_authors,
     read_json,
     read_stage_csv,
+    unverified_collision_ids,
     write_json,
     write_pydantic,
     write_pydantic_list,
@@ -460,15 +465,26 @@ class Pipeline:
             show_progress=self.show_progress,
         )
         self._canonicalize_stats = stats
+        collision_ids = unverified_collision_ids(self.layout)
+        for collision in stats["id_collisions"]:
+            collision_ids.update((collision["base_id"], collision["assigned_id"]))
+        write_json(self.layout.work_id_collisions_json, {
+            "schema_version": 1, "collision_ids": sorted(collision_ids),
+        })
         works.to_csv(self.layout.works_csv)
         graph.to_csv(self.layout.graph_csv, index=False)
         write_json(self.layout.canonicalization_audit_json, {
-            "schema_version": 1,
-            "algorithm_version": "canonicalize-1",
+            "schema_version": 2,
+            "algorithm_version": "canonicalize-2",
             "config": self.dedup_config.__dict__,
-            "source_cluster_ids": {str(sources.iloc[i].get("source_file", i)): str(stats["source_cluster_ids"][i])
-                                    for i in range(len(sources))},
+            "input_fingerprints": {"sources.csv": frame_fingerprint(sources),
+                                   "citations_raw.csv": frame_fingerprint(citations_raw)},
+            "output_fingerprints": {"works.csv": frame_fingerprint(works),
+                                    "citation_graph.csv": frame_fingerprint(graph)},
+            "source_cluster_ids": [str(x) for x in stats["source_cluster_ids"]],
             "citation_cluster_ids": [str(x) for x in stats["citation_cluster_ids"]],
+            "decisions": stats["decisions"],
+            "id_collisions": stats["id_collisions"],
         })
         logger.info(
             "Wrote %s (%d works) and %s (%d edges); %d self-loop(s) dropped, "
@@ -507,9 +523,15 @@ class Pipeline:
         if graph is None and self.layout.graph_csv.exists():
             graph = pd.read_csv(self.layout.graph_csv)
 
+        constraints = load_author_constraints(
+            self.layout.author_overrides_csv, works=works,
+            metadata_path=self.layout.author_overrides_meta_json,
+        )
         enriched: pd.DataFrame | None = None
+        enrichment_status = "unavailable"
         if self.layout.enriched_works_csv.exists():
             enriched = pd.read_csv(self.layout.enriched_works_csv, index_col="id")
+            enrichment_status = "unverified"
             # ``OpenAlex_Authors`` round-trips as a string in CSV; turn it
             # back into a list of dicts so the normalizer sees structured
             # data. Bad rows are silently dropped to keep the stage resilient.
@@ -537,11 +559,15 @@ class Pipeline:
                         or provenance.get("enriched_fingerprint") != frame_fingerprint(enriched)):
                     logger.warning("Enrichment is stale for these works; run `citegraph enrich` before using external author IDs")
                     enriched = None
-            elif self.layout.source_ids_json.exists():
-                collisions = set(read_json(self.layout.source_ids_json).get("collision_ids", []))
+                    enrichment_status = "stale_ignored"
+                else:
+                    enrichment_status = "current"
+            else:
+                collisions = unverified_collision_ids(self.layout)
                 if collisions & set(enriched.index):
                     logger.warning("Unverified enrichment for colliding IDs ignored; run `citegraph enrich`")
                     enriched = enriched.drop(index=list(collisions), errors="ignore")
+                    enrichment_status = "unverified_collisions_ignored"
 
         aliases = load_aliases(self.layout.author_aliases_csv)
 
@@ -553,15 +579,34 @@ class Pipeline:
             cfg=self.author_config,
             aliases=aliases,
             audit=resolution_audit,
+            constraints=constraints,
         )
 
+        # No binding or generated author artifacts change until all constraints
+        # and legacy aliases have passed the normalizer's conflict checks.
+        bind_author_constraints(
+            self.layout.author_overrides_csv, works=works,
+            metadata_path=self.layout.author_overrides_meta_json,
+        )
+        input_fingerprints = {
+            name: artifact_fingerprint(self.layout.out_dir / name)
+            for name in sorted(AUTHOR_AUDIT_INPUTS)
+        }
+        input_fingerprints["works.csv"] = frame_fingerprint(works)
+        input_fingerprints["citation_graph.csv"] = frame_fingerprint(graph) if graph is not None else None
         authors_df.to_csv(self.layout.authors_csv)
         citations_df.to_csv(self.layout.author_citations_csv, index=False)
         write_author_review(self.layout.author_review_json, review)
         write_json(self.layout.author_resolution_audit_json, {
-            "schema_version": 1,
-            "algorithm_version": "authors-1",
+            "schema_version": 2,
+            "algorithm_version": "authors-2",
             "config": self.author_config.__dict__,
+            "input_fingerprints": input_fingerprints,
+            "output_fingerprints": {
+                name: artifact_fingerprint(self.layout.out_dir / name)
+                for name in sorted(AUTHOR_AUDIT_OUTPUTS)
+            },
+            "enrichment_status": enrichment_status,
             "decisions": resolution_audit,
         })
         if review:
@@ -619,6 +664,7 @@ class Pipeline:
     # Top level
     # ------------------------------------------------------------------
     def run(self) -> PipelineResult:
+        self.layout.run_summary_json.unlink(missing_ok=True)
         markdown_paths = self.convert_pdfs()
         sources = self.extract_paper_metadata(markdown_paths)
         citations_raw = self.extract_paper_references(markdown_paths, sources)
@@ -657,7 +703,7 @@ class Pipeline:
             "dedup_config": self.dedup_config.__dict__,
             "author_config": self.author_config.__dict__,
         }
-        run_summary_path = self.layout.out_dir / "run_summary.json"
+        run_summary_path = self.layout.run_summary_json
         write_json(run_summary_path, run_summary)
         write_artifact_manifest(
             self.layout,

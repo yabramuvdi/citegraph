@@ -46,6 +46,10 @@ class OutLayout:
         return self.out_dir / "source_ids.json"
 
     @property
+    def work_id_collisions_json(self) -> Path:
+        return self.out_dir / "work_id_collisions.json"
+
+    @property
     def markdown_dir(self) -> Path:
         return self.out_dir / "markdown"
 
@@ -124,6 +128,18 @@ class OutLayout:
     @property
     def author_aliases_csv(self) -> Path:
         return self.out_dir / "author_aliases.csv"
+
+    @property
+    def author_overrides_csv(self) -> Path:
+        return self.out_dir / "author_overrides.csv"
+
+    @property
+    def author_overrides_meta_json(self) -> Path:
+        return self.out_dir / "author_overrides_meta.json"
+
+    @property
+    def run_summary_json(self) -> Path:
+        return self.out_dir / "run_summary.json"
 
     @property
     def metadata_failures_jsonl(self) -> Path:
@@ -301,7 +317,38 @@ def fingerprint(value: Any) -> str:
 
 def frame_fingerprint(frame: pd.DataFrame) -> str:
     rows = frame.reset_index() if frame.index.name and frame.index.name not in frame.columns else frame
-    return fingerprint(rows.to_dict("records"))
+    return fingerprint({"columns": list(rows.columns), "records": rows.to_dict("records")})
+
+
+def artifact_fingerprint(path: Path) -> str | None:
+    """Snapshot a checkpoint; distinguish absence from a present empty artifact."""
+    if not path.exists():
+        return None
+    if path.suffix == ".csv":
+        try:
+            return frame_fingerprint(pd.read_csv(path))
+        except pd.errors.EmptyDataError:
+            return frame_fingerprint(pd.DataFrame())
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# Fixed names also constrain report reads: audit contents never select arbitrary paths.
+WORK_AUDIT_INPUTS = {"sources.csv", "citations_raw.csv"}
+WORK_AUDIT_OUTPUTS = {"works.csv", "citation_graph.csv"}
+AUTHOR_AUDIT_INPUTS = {
+    "works.csv", "citation_graph.csv", "enriched_works.csv", "enrichment_provenance.json",
+    "source_ids.json", "work_id_collisions.json", "author_aliases.csv", "author_overrides.csv", "author_overrides_meta.json",
+}
+AUTHOR_AUDIT_OUTPUTS = {"authors.csv", "author_citations.csv", "author_review.json"}
+
+
+def unverified_collision_ids(layout: OutLayout) -> set[str]:
+    """IDs whose legacy identity evidence is unsafe, including historical collisions."""
+    ids: set[str] = set()
+    for path in (layout.source_ids_json, layout.work_id_collisions_json):
+        if path.exists():
+            ids.update(read_json(path).get("collision_ids", []))
+    return ids
 
 
 def metadata_fingerprint(record: dict) -> str:

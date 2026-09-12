@@ -1,0 +1,391 @@
+[
+  {
+    "case_id": "representative_order_sensitivity",
+    "sources": [],
+    "citations": [
+      {"observation_id": "a", "citing_id": "w-core", "Title": "abcdefghij", "Authors_List": ["John Smith"], "Journal": "J", "Year": 2020},
+      {"observation_id": "b", "citing_id": "w-core", "Title": "abcdefghxy", "Authors_List": ["John Smith"], "Journal": "J", "Year": 2020},
+      {"observation_id": "c", "citing_id": "w-core", "Title": "abcdefwxyz", "Authors_List": ["John Smith"], "Journal": "J", "Year": 2020}
+    ],
+    "labels": [
+      {"left": "a", "right": "b", "label": "ambiguous"},
+      {"left": "b", "right": "c", "label": "ambiguous"}
+    ]
+  },
+  {
+    "case_id": "accent_article",
+    "sources": [
+      {
+        "Authors_List": [
+          "José García"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "paper.pdf",
+        "Title": "Effects of monetary policy on employment"
+      }
+    ],
+    "citations": [
+      {
+        "Authors_List": [
+          "Jose Garcia"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c1",
+        "citing_id": "w-source",
+        "Title": "The effects of monetary policy on employment"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "same"
+      }
+    ]
+  },
+  {
+    "case_id": "negation",
+    "sources": [
+      {
+        "Authors_List": [
+          "José García"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "paper.pdf",
+        "Title": "Effects of monetary policy on employment"
+      }
+    ],
+    "citations": [
+      {
+        "Authors_List": [
+          "Jose Garcia"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c1",
+        "citing_id": "w-source",
+        "Title": "No effects of monetary policy on employment"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "parts",
+    "sources": [
+      {
+        "Authors_List": [
+          "José García"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "paper.pdf",
+        "Title": "Effects of monetary policy part I"
+      }
+    ],
+    "citations": [
+      {
+        "Authors_List": [
+          "Jose Garcia"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c1",
+        "citing_id": "w-source",
+        "Title": "Effects of monetary policy part II"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "subtitle",
+    "sources": [
+      {
+        "Authors_List": [
+          "José García"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "paper.pdf",
+        "Title": "Effects of monetary policy on employment"
+      }
+    ],
+    "citations": [
+      {
+        "Authors_List": [
+          "Jose Garcia"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c1",
+        "citing_id": "w-source",
+        "Title": "Effects of monetary policy on employment: Evidence from Europe"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "same"
+      }
+    ]
+  },
+  {
+    "case_id": "expansion",
+    "sources": [
+      {
+        "Authors_List": [
+          "José García"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "paper.pdf",
+        "Title": "Effects of monetary policy on employment"
+      }
+    ],
+    "citations": [
+      {
+        "Authors_List": [
+          "Jose Garcia"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c1",
+        "citing_id": "w-source",
+        "Title": "Effects of monetary policy on employment and inflation"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "ambiguous"
+      }
+    ]
+  },
+  {
+    "case_id": "ocr",
+    "sources": [
+      {
+        "Authors_List": [
+          "José García"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "paper.pdf",
+        "Title": "Effects of monetary policy on employment"
+      }
+    ],
+    "citations": [
+      {
+        "Authors_List": [
+          "Jose Garcia"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c1",
+        "citing_id": "w-source",
+        "Title": "Effects of monetary polcy on employment"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "same"
+      }
+    ]
+  },
+  {
+    "case_id": "duplicate_sources_preserve_citations",
+    "sources": [
+      {
+        "Title": "Effects of monetary policy on employment",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source-a",
+        "source_file": "a.pdf"
+      },
+      {
+        "Title": "Effects of monetary policy on employment",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source-b",
+        "source_file": "b.pdf"
+      }
+    ],
+    "citations": [
+      {
+        "Title": "A separate study of taxes and productivity",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c1",
+        "citing_id": "w-source-a"
+      },
+      {
+        "Title": "A separate study of taxes and productivity",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "observation_id": "c2",
+        "citing_id": "w-source-b"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source-a",
+        "right": "w-source-b",
+        "label": "same"
+      },
+      {
+        "left": "c1",
+        "right": "c2",
+        "label": "same"
+      },
+      {
+        "left": "w-source-a",
+        "right": "c1",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "unknown_year",
+    "sources": [
+      {
+        "Title": "Effects of monetary policy on employment",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "a.pdf"
+      }
+    ],
+    "citations": [
+      {
+        "Title": "Effects of monetary policy on employment",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 0,
+        "observation_id": "c1",
+        "citing_id": "w-source"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "same"
+      }
+    ]
+  },
+  {
+    "case_id": "malformed_year",
+    "sources": [
+      {
+        "Title": "Effects of monetary policy on employment",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "a.pdf"
+      }
+    ],
+    "citations": [
+      {
+        "Title": "Effects of monetary policy on employment",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": "unknown",
+        "observation_id": "c1",
+        "citing_id": "w-source"
+      }
+    ],
+    "labels": [
+      {
+        "left": "w-source",
+        "right": "c1",
+        "label": "different"
+      }
+    ]
+  },
+  {
+    "case_id": "slug_collision_remains_separate",
+    "sources": [
+      {
+        "Title": "Effects of monetary policy on employment",
+        "Authors_List": [
+          "John Smith"
+        ],
+        "Journal": "Economics",
+        "Year": 2020,
+        "id": "w-source",
+        "source_file": "a.pdf"
+      }
+    ],
+    "citations": [
+      {
+        "Title": "",
+        "Authors_List": [],
+        "Journal": "Economics",
+        "Year": 0,
+        "observation_id": "c1",
+        "citing_id": "w-source"
+      },
+      {
+        "Title": "",
+        "Authors_List": [],
+        "Journal": "Economics",
+        "Year": 0,
+        "observation_id": "c2",
+        "citing_id": "w-source"
+      }
+    ],
+    "labels": [
+      {
+        "left": "c1",
+        "right": "c2",
+        "label": "different"
+      }
+    ]
+  }
+]

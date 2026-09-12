@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from citegraph.io import OutLayout
+from citegraph.io import AUTHOR_CITATION_COLUMNS, AUTHOR_COLUMNS, OutLayout
 from citegraph.schemas import PipelineResult
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -94,14 +94,17 @@ class CitationGraph:
                 + ", ".join(str(p) for p in missing)
                 + ". Run the pipeline first (`citegraph run ...`)."
             )
-        authors_df = (
-            pd.read_csv(layout.authors_csv, index_col="id")
-            if layout.authors_csv.exists() else None
-        )
-        author_citations_df = (
-            pd.read_csv(layout.author_citations_csv)
-            if layout.author_citations_csv.exists() else None
-        )
+        def read_optional(path: Path, columns: list[str], index_col: str | None = None):
+            if not path.exists():
+                return None
+            try:
+                return pd.read_csv(path, index_col=index_col)
+            except pd.errors.EmptyDataError:
+                empty = pd.DataFrame(columns=columns)
+                return empty.set_index(index_col) if index_col else empty
+
+        authors_df = read_optional(layout.authors_csv, AUTHOR_COLUMNS, "id")
+        author_citations_df = read_optional(layout.author_citations_csv, AUTHOR_CITATION_COLUMNS)
         return cls(
             works=pd.read_csv(layout.works_csv, index_col="id"),
             edges=pd.read_csv(layout.graph_csv),

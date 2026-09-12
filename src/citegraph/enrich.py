@@ -31,7 +31,7 @@ from tenacity import (
 if TYPE_CHECKING:
     from citegraph.io import OutLayout
 
-from citegraph.io import metadata_fingerprint, parse_authors_list, read_json, write_json
+from citegraph.io import metadata_fingerprint, parse_authors_list, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -512,10 +512,8 @@ def _enrich_one(
                 cached = cached["result"]
             else:
                 # Path is derived from OutLayout, including for direct cache callers.
-                from citegraph.io import OutLayout
-                registry_path = OutLayout(enrichment_dir.parent).source_ids_json
-                if registry_path.exists():
-                    valid = ref_id not in read_json(registry_path).get("collision_ids", [])
+                from citegraph.io import OutLayout, unverified_collision_ids
+                valid = ref_id not in unverified_collision_ids(OutLayout(enrichment_dir.parent))
             if valid and cached.get("enrichment_miss_reason") != "http_error":
                 return _apply_enrichment_result(row_dict, cached)
             if not valid:

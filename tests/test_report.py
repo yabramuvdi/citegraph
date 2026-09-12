@@ -193,16 +193,13 @@ def test_full_corpus_flags_all_problem_categories(tmp_path: Path) -> None:
     zeroref = next(p for p in data["papers"] if p["stem"] == "zeroref")
     assert zeroref["references"]["status"] == "zero"
 
-    # Dedup panel: the Ostrom pair must appear as a >1-member cluster.
+    # Legacy artifacts have no historical decisions; never invent an audit.
     dedup = data["dedup"]
     assert dedup["n_raw"] == 3
     assert dedup["n_missing_year"] == 1
     audit = dedup["merge_audit"]
-    assert len(audit) == 1
-    assert len(audit[0]["members"]) == 2
-    assert {m["citing_id"] for m in audit[0]["members"]} == {
-        "w-one-2020-alpha", "w-one-2020-beta",
-    }
+    assert audit == []
+    assert dedup["audit_status"] == "unavailable"
 
     # A healthy paper with <5 references gets flagged as suspicious... but 6 is fine.
     beta = next(p for p in data["papers"] if p["stem"] == "beta")
@@ -223,8 +220,8 @@ def test_full_corpus_flags_all_problem_categories(tmp_path: Path) -> None:
     assert "failref" in html
     assert "zeroref" in html
     assert "Governing the Commons" in html
-    assert "absorbed 2 citation events" in html
-    assert "recomputed with default DedupConfig" in html
+    assert "Resolution evidence: unavailable" in html
+    assert "recomputed with default DedupConfig" not in html
 
 
 def test_suspiciously_few_references_note(tmp_path: Path) -> None:

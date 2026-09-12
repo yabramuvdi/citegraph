@@ -313,3 +313,9 @@ assert metrics["recall"] == 1.0
 7. Corrections can separate previously conflated occurrences without editing generated tables, and contradictory corrections fail before output mutation.
 8. Lint and the full installed-extra test suite pass. Evaluation reports distinguish synthetic regression guarantees from held-out corpus accuracy.
 9. Any remaining order sensitivity, unresolved ambiguity, missing human labels, ID migrations, or required API refresh is stated explicitly in the implementation handoff.
+# Implementation status — 2026-09-12
+
+Tasks 1–10 are implemented and verified. The checklists below preserve the
+original execution plan; current outcomes, test evidence and remaining corpus
+validation requirements are recorded in
+[implementation results](2026-09-12-canonicalization-reliability-results.md).

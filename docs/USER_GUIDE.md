@@ -159,8 +159,9 @@ If `author_review.json` exists, inspect the flagged clusters.
 
 By default clustering is precision-first (`--merge-mode strict`): an
 initial-only name merges into a full-name cluster only when the match is
-unambiguous. Pass `--merge-mode loose` to collapse every
-(surname, first-initial) combination instead when recall matters more.
+unambiguous. `--merge-mode loose` uses surname and first initial as positive
+evidence, but still respects contradictory full names, identifiers, distinct
+same-work positions, corporate/person separation, and manual separation rules.
 
 For a manual correction, create `author_aliases.csv` with
 `cluster_id,canonical_id` columns, then rerun `citegraph authors` (or pass an
@@ -268,3 +269,192 @@ directories, screenshots, or committed configuration.
 
 Re-running a stage is normally safe: successful per-paper caches are reused and
 failed items are retried.
+
+## Canonicalization reliability and migration
+
+`sources.csv` now retains every successful PDF observation, including duplicate
+PDFs. `source_ids.json` reserves provisional IDs by source filename and complete
+metadata fingerprint. Keep it with the corpus: unchanged observations retain
+allocations when files are added or inputs are reordered. Changed metadata may
+allocate a new ID. A fresh registry after corpus growth can assign different
+numeric suffixes from an incremental registry. Canonical works still prefer a
+source representative; genuinely distinct works with colliding slugs receive
+suffixes rather than disappearing.
+
+`work_id_collisions.json` also retains historical collisions among canonical
+works, including cited works. Keep this file with `source_ids.json`: removing
+one collider later must not make an old enrichment identity trustworthy again.
+Legacy enrichment without input fingerprints is ignored for these IDs.
+
+Work matching normalizes accents and author lists before candidate lookup and
+scoring. Negation changes, differing part numbers, and substantive title
+expansions remain separate for review. An explicit omitted subtitle can still
+match when there is no protected title conflict. Missing years remain unknown;
+malformed nonempty years reject a match. Similar titles and initials are evidence,
+not established identity. Work clustering still uses the first representative,
+so changing input order can change a partition in borderline cases.
+
+Author occurrences always come from extracted canonical works. Enrichment adds
+one-to-one identity evidence; a provider-only extra author does not become an
+extracted occurrence. Review includes unmatched or ambiguous enrichment names,
+contradictory full names or identifiers, and duplicate same-work identity claims.
+Initials cannot bridge conflicting full names. Same-name coauthors remain
+separate without direct consistent identity evidence. Inspect `author_review.json`
+and `author_resolution_audit.json` before interpreting author rankings.
+An ORCID-free identity chain connected to conflicting ORCIDs stays unresolved
+instead of selecting whichever anchor appears first. Corporate/person conflicts
+also block automatic merging even when the provider assigned the same identifier.
+
+`canonicalization_audit.json` and `author_resolution_audit.json` preserve actual
+stage assignments, reasons, effective settings, and input/output fingerprints.
+The report reads this saved evidence. Missing legacy audits are unavailable;
+changed snapshots are stale. Neither status causes the report to reconstruct
+historical decisions using current defaults. Preserve these files with the CSVs.
+
+### Correct an author merge or split
+
+For new corrections, put occurrence coordinates in `author_overrides.csv`:
+
+```csv
+action,left_record_id,left_position,right_record_id,right_position,reason
+separate,w-1,0,w-2,0,Distinct people verified from the papers
+merge,w-1,0,w-3,0,Same person verified from the papers
+```
+
+Positions are zero-based within the extracted `Authors_List`. Use actual work
+IDs from your snapshot, then run `citegraph authors --out "$OUT_DIR"`. Forced
+merge components are applied before automatic name joins; separation constraints
+apply to all joins, including legacy aliases and external-ID joins. A forced
+merge can override name evidence but cannot override conflicting ORCIDs or an
+explicit separation. Contradictions, invalid positions, and stale legacy alias
+targets or cycles fail with a diagnostic rather than silently changing membership.
+
+The first successful validation binds corrections to the works snapshot in
+`author_overrides_meta.json`. If that snapshot changes, review every referenced
+occurrence against the new works table. Only after that review, remove the binding
+file and rerun authors to bind the reviewed correction file. Keep the old binding
+and corrections in your research archive. Existing `author_aliases.csv` files
+remain supported, but cannot express a split and are subject to conflict checks.
+
+### Rebuild an existing corpus in a copy
+
+Use a new output directory. The following commands preserve the original and
+reuse per-stem extraction caches. Replace the first two paths before running:
+
+```bash
+export CITEGRAPH_ORIGINAL_OUT="/absolute/path/to/existing-out"
+export CITEGRAPH_MIGRATION_OUT="/private/tmp/citegraph-migration-review"
+test -d "$CITEGRAPH_ORIGINAL_OUT" || exit 1
+test ! -e "$CITEGRAPH_MIGRATION_OUT" || exit 1
+cp -a "$CITEGRAPH_ORIGINAL_OUT" "$CITEGRAPH_MIGRATION_OUT"
+python - <<'PY'
+import json
+import os
+from pathlib import Path
+from citegraph.schemas import PaperMetadata, Reference
+out = Path(os.environ['CITEGRAPH_MIGRATION_OUT'])
+problems = []
+markdown = sorted((out / 'markdown').glob('*.md'))
+if not markdown:
+    problems.append('No cached markdown; restore it before rebuilding')
+for md in markdown:
+    for stage in ('metadata', 'references'):
+        cache = out / stage / f'{md.stem}.json'
+        try:
+            value = json.loads(cache.read_text())
+            if stage == 'metadata':
+                PaperMetadata.model_validate(value)
+            else:
+                if not isinstance(value, list):
+                    raise ValueError('expected a reference list')
+                for item in value:
+                    Reference.model_validate(item)
+        except Exception as exc:
+            problems.append(f'{cache}: {exc}')
+print('\n'.join(problems) if problems else 'All per-stem extraction caches validate.')
+print('Enrichment may need provider refresh after IDs or fingerprints change; '
+      'the offline rebuild below does not run enrichment.')
+if problems:
+    raise SystemExit('Stop: missing/invalid caches can trigger paid extraction. '
+                     'Review citegraph estimate before authorizing provider work.')
+PY
+```
+
+Continue only if this preflight succeeds. A failed preflight requires restoring
+caches or explicitly authorizing extraction after `citegraph estimate --out
+"$CITEGRAPH_MIGRATION_OUT"`. Missing reference caches can trigger Gemini calls;
+metadata itself does not prompt. A scripted reference run uses `--yes` only after
+that work is authorized. When the validated caches are all present:
+
+```bash
+citegraph metadata --out "$CITEGRAPH_MIGRATION_OUT"
+citegraph references --out "$CITEGRAPH_MIGRATION_OUT" --yes
+citegraph dedup --out "$CITEGRAPH_MIGRATION_OUT"
+```
+
+Before author normalization, set aside the copied enrichment table for comparison
+so the initial review is explicitly based on extracted names:
+
+```bash
+python - <<'PY'
+import os
+from pathlib import Path
+out = Path(os.environ['CITEGRAPH_MIGRATION_OUT'])
+old = out / 'enriched_works.csv'
+backup = out / 'enriched_works.before-migration.csv'
+if old.exists():
+    if backup.exists():
+        raise SystemExit(f'Preserve the existing backup before continuing: {backup}')
+    old.rename(backup)
+PY
+citegraph authors --out "$CITEGRAPH_MIGRATION_OUT"
+citegraph report --out "$CITEGRAPH_MIGRATION_OUT"
+```
+
+Existing corrections can stop this run because IDs or bindings changed. Resolve
+those diagnostics by reviewing the copied correction files, not by editing
+generated author tables. Preserve `source_ids.json`; do not delete it to clear an
+error. Compare observation counts, graph endpoints, source membership, author
+memberships, citation counts, and top rankings with the original before adoption.
+
+For enrichment, changed input fingerprints invalidate cached provider responses;
+collision-affected legacy entries also need refresh. Unaffected compatible caches
+remain reusable. There is no promise that rebuilding enrichment is free: inspect
+changed IDs and available caches, contact/rate-limit settings, and provider
+budgets before authorizing `citegraph enrich`. After authorized enrichment, rerun
+`authors` and `report` and compare rankings again. Keep the original corpus until
+both the migration and any provider refresh have been reviewed.
+
+### Offline evaluation and human review
+
+```bash
+python scripts/evaluate_canonicalization.py \
+  --fixtures tests/fixtures/canonicalization \
+  --out /private/tmp/citegraph-evaluation.json
+python scripts/evaluate_canonicalization.py \
+  --corpus-out "$CITEGRAPH_MIGRATION_OUT" \
+  --sample-out /private/tmp/citegraph-human-review.json
+```
+
+The fixture evaluator reports TP/FP/FN/TN, precision, recall, excluded ambiguity,
+work candidate recall, and review volume separately. Undefined ratios are null.
+It also checks identical-input repeats, CSV roundtrips, and reversed-input
+partitions, while preserving the assignments and work citation counts for
+inspection. Author candidate recall is unavailable rather than inferred from
+final merges. These hand-labeled synthetic regressions are not corpus accuracy.
+
+Sampling never invokes providers or assigns labels. It targets 150 work and 150
+author observation groups (all available when smaller), balancing review strata
+such as common surnames, initials, compounds, identifier conflicts, similar
+titles, and current or historical ID collisions. When the work audit matches the
+current files, each work group includes its source and raw-citation members,
+including variants absorbed by canonicalization. If `work_audit_status` is not
+`current`, rebuild the dedup audit before assessing false merges. Each group
+contains its raw context; provider
+context is observational and may itself be stale. A deterministic fifth is marked
+`held_out` before labeling, and the output refuses overwrite to protect the split.
+Keep held-out labels out of tuning. Reviewers must locate independently known
+duplicates outside candidate groups to measure blocking omissions, and record
+`same`, `different`, or `ambiguous` pair labels using observation IDs. Neither
+unlabeled samples nor candidate-only labels establish recall. Representative
+corpus accuracy remains unknown until that human evaluation is complete.

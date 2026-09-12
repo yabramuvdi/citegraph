@@ -64,3 +64,21 @@ def test_outlayout_works_model_paths(tmp_path: Path) -> None:
     assert layout.citations_raw_csv == tmp_path / "citations_raw.csv"
     assert layout.works_csv == tmp_path / "works.csv"
     assert layout.enriched_works_csv == tmp_path / "enriched_works.csv"
+def test_empty_snapshot_fingerprints_include_schema():
+    from citegraph.io import frame_fingerprint
+    assert frame_fingerprint(pd.DataFrame(columns=["citing_id", "cited_id"])) != frame_fingerprint(
+        pd.DataFrame(columns=["wrong"]))
+
+
+def test_interrupted_atomic_json_replace_preserves_previous_file(tmp_path, monkeypatch):
+    from citegraph.io import write_json
+    path = tmp_path / "audit.json"
+    write_json(path, {"before": True})
+    previous = path.read_bytes()
+    def fail_replace(*args):
+        raise OSError("interrupted replacement")
+    monkeypatch.setattr("citegraph.io.os.replace", fail_replace)
+    with pytest.raises(OSError, match="interrupted"):
+        write_json(path, {"after": True})
+    assert path.read_bytes() == previous
+    assert list(tmp_path.iterdir()) == [path]

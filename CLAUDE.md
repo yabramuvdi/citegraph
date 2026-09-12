@@ -48,6 +48,34 @@ upstream artifacts raise `StageNotReadyError` with a hint at the prior step.
 
 **Repairing one badly-converted paper** without reprocessing the corpus: re-convert just that PDF with `convert_pdf_to_markdown(pdf, markdown_dir, overwrite=True, ocr=True, cache_stem=...)` — passing `--ocr` to the CLI would force OCR on *every* PDF and overwrite good markdown with worse. Then delete that stem's `metadata/<stem>.json` and `references/<stem>.json` (the caches are keyed by stem, and a stale cache is what pins the bad result), and re-run `metadata`, `references`, `dedup`, `enrich`, `authors`, `report`. Every other paper is served from cache, so the whole repair costs roughly one Gemini call per extraction stage. Note that the work's `id` changes once real metadata exists, so its enrichment cache entry is written fresh under the new id.
 
+### Canonicalization reliability requirements
+
+The reliability implementation refines the older stage descriptions below:
+
+- Metadata retains every successful source observation and reserves IDs in
+  `source_ids.json`. Duplicate PDFs retain their separate reference caches;
+  their bibliographies are all processed before canonical work clustering.
+- Work assessments distinguish match/review/reject. Protected negation, part
+  numbers, and substantive expansions prevent unsafe title-containment merges.
+  `work_id_collisions.json` retains canonical collision history, including cited
+  works. Both collision registries exclude unverified legacy enrichment IDs.
+- Author enrichment attaches one-to-one to extracted author positions. Global
+  identity evidence is checked before unions; conflicting ORCIDs, ambiguous
+  identity bridges, corporate/person conflicts, and explicit separation cannot
+  be bypassed by automatic merges. Loose mode still respects hard conflicts.
+  Coauthor evidence belongs to individual occurrences, not signature buckets.
+- `author_overrides.csv` uses occurrence coordinates and merge/separate actions;
+  `author_overrides_meta.json` binds the reviewed works snapshot. Validate all
+  constraints and aliases before binding or changing generated author outputs.
+- Versioned work/author audits contain actual assignments and fingerprinted
+  inputs/outputs. Reports must not reconstruct historical decisions with defaults;
+  missing, invalid, and stale evidence must be identified explicitly.
+- Enrichment cache v2 binds original metadata; cold/cache results agree. Author
+  occurrences always come from canonical extracted works, even in an enriched run.
+- Empty valid stages write schema-bearing CSVs; all-failed metadata blocks
+  dependent stages. The offline evaluator and copy-only migration instructions
+  are in `docs/USER_GUIDE.md`; synthetic regression metrics are not corpus accuracy.
+
 ### Stage pipeline (each stage is checkpointed on disk)
 
 1. **PDFs → markdown** — [pdf_to_markdown.py](src/citegraph/pdf_to_markdown.py) calls `docling`. Output cached as `out_dir/markdown/<stem>.md`. Idempotent: re-runs skip files unless `overwrite_markdown=True`. Docling is imported lazily inside the function so `import citegraph` stays cheap. Pass `recursive=True` (Pipeline kwarg / `--recursive` CLI flag) to walk subdirectories of `pdf_dir`; in that mode cache stems carry the relative path via `cache_stem_for` (e.g. `journal_X/paper.pdf` → `journal_X__paper`) so same-named PDFs in different folders don't clobber each other. Hidden directories (names starting with `.`) are skipped, and a stem-collision pre-check raises a clear `ValueError` before docling is ever invoked. Pass `ocr="auto"` (Pipeline kwarg / `--ocr-auto` CLI flag) to convert normally first and re-run with EasyOCR only the outputs that came out image-only *or* glyph-corrupted; pass `ocr=True` / `--ocr` to force full-page OCR for every PDF. After each conversion pass, `check_conversion_quality` in [reports.py](src/citegraph/reports.py) checks every output markdown and writes `conversion_warnings.json` when any file fails. Two independent detectors, because they fail in opposite directions: `_is_image_only` (strips `<!-- image -->` tags and `#` headers; flags files with fewer than 200 substantive chars) catches scanned PDFs, while `_has_unmappable_glyphs` catches a PDF whose embedded font carries no ToUnicode map — docling emits one `glyph<UNKNOWN>` per unmappable character, so the output is *long* and sails past the image-only check while still yielding empty metadata. The glyph rate is measured against mapped alphanumerics and deliberately kept low (≥1%, with a ≥20-occurrence floor so stray math symbols don't cry wolf): corruption is often concentrated, and a title page in a different font can be fully unmappable while the body reads fine.
