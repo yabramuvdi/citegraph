@@ -52,6 +52,20 @@ def test_compare_papers_identifies_duplicates():
     assert compare_papers(a, b, cfg) is True
 
 
+def test_canonicalize_considers_fuzzy_match_when_block_keys_differ():
+    sources = pd.DataFrame([{
+        "id": "w-source", "source_file": "paper.md", "Title": "Understanding collective action in rural communities",
+        "Authors": "John Smith", "Authors_List": ["John Smith"], "Journal": "Science", "Year": 2020,
+    }])
+    citations = pd.DataFrame([{
+        "Title": "Understanding collective action in rural comunities", "Authors": "John Smyth",
+        "Authors_List": ["John Smyth"], "Journal": "Science", "Year": 2020, "citing_id": "w-source",
+    }])
+    works, edges, _ = canonicalize_works(sources, citations, show_progress=False)
+    assert len(works) == 1
+    assert edges.empty
+
+
 def test_compare_papers_rejects_different_papers():
     cfg = DedupConfig()
     a = {

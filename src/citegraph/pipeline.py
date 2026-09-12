@@ -47,12 +47,15 @@ from citegraph.io import (
     WORK_COLUMNS,
     OutLayout,
     artifact_fingerprint,
+    cache_is_current,
     frame_fingerprint,
     metadata_fingerprint,
     parse_openalex_authors,
     read_json,
     read_stage_csv,
     unverified_collision_ids,
+    write_cache_fingerprint,
+    write_csv,
     write_json,
     write_pydantic,
     write_pydantic_list,
@@ -237,13 +240,14 @@ class Pipeline:
         def _process_one(md: Path) -> tuple[dict | None, PaperFailure | None]:
             cache = self.layout.metadata_dir / f"{md.stem}.json"
             try:
-                if cache.exists():
+                if cache.exists() and cache_is_current(cache, md):
                     logger.debug("Loading metadata from cache: %s", cache.name)
                     meta = PaperMetadata.model_validate(read_json(cache))
                 else:
                     logger.info("Extracting metadata from %s", md.name)
                     meta = extract_metadata_from_markdown(md, client=self.client)
                     write_pydantic(cache, meta)
+                    write_cache_fingerprint(cache, md)
                 return metadata_to_record(meta, source_file=md.name), None
             except Exception as exc:  # noqa: BLE001 - one bad paper shouldn't kill the run
                 logger.error("Metadata extraction failed for %s: %s", md.name, exc)
@@ -298,7 +302,7 @@ class Pipeline:
         records, registry = assign_source_ids(records, registry)
         write_json(self.layout.source_ids_json, registry)
         df = pd.DataFrame(records, columns=SOURCE_COLUMNS)
-        df.to_csv(self.layout.sources_csv, index=False)
+        write_csv(self.layout.sources_csv, df)
         logger.info("Wrote %s (%d rows)", self.layout.sources_csv, len(df))
 
         duplicates = detect_source_duplicates(records, self.dedup_config)
@@ -357,13 +361,14 @@ class Pipeline:
         def _process_one(md: Path, citing_id: str) -> tuple[list[dict], PaperFailure | None]:
             cache = self.layout.references_dir / f"{md.stem}.json"
             try:
-                if cache.exists():
+                if cache.exists() and cache_is_current(cache, md):
                     refs = [Reference.model_validate(r) for r in read_json(cache)]
                     logger.debug("Loaded %d cached references for %s", len(refs), md.name)
                 else:
                     logger.info("Extracting references from %s", md.name)
                     refs = extract_references_from_markdown(md, client=self.client)
                     write_pydantic_list(cache, refs)
+                    write_cache_fingerprint(cache, md)
                 rows = []
                 for ref in refs:
                     rows.append({**ref.model_dump(), "citing_id": citing_id})
@@ -433,7 +438,7 @@ class Pipeline:
             )
 
         df = pd.DataFrame(rows, columns=CITATION_COLUMNS)
-        df.to_csv(self.layout.citations_raw_csv, index=False)
+        write_csv(self.layout.citations_raw_csv, df)
         logger.info("Wrote %s (%d rows)", self.layout.citations_raw_csv, len(df))
         return df
 
@@ -471,8 +476,8 @@ class Pipeline:
         write_json(self.layout.work_id_collisions_json, {
             "schema_version": 1, "collision_ids": sorted(collision_ids),
         })
-        works.to_csv(self.layout.works_csv)
-        graph.to_csv(self.layout.graph_csv, index=False)
+        write_csv(self.layout.works_csv, works, index=True)
+        write_csv(self.layout.graph_csv, graph)
         write_json(self.layout.canonicalization_audit_json, {
             "schema_version": 2,
             "algorithm_version": "canonicalize-2",
@@ -594,8 +599,8 @@ class Pipeline:
         }
         input_fingerprints["works.csv"] = frame_fingerprint(works)
         input_fingerprints["citation_graph.csv"] = frame_fingerprint(graph) if graph is not None else None
-        authors_df.to_csv(self.layout.authors_csv)
-        citations_df.to_csv(self.layout.author_citations_csv, index=False)
+        write_csv(self.layout.authors_csv, authors_df, index=True)
+        write_csv(self.layout.author_citations_csv, citations_df)
         write_author_review(self.layout.author_review_json, review)
         write_json(self.layout.author_resolution_audit_json, {
             "schema_version": 2,
@@ -635,7 +640,7 @@ class Pipeline:
         from citegraph.enrich import enrich_works
 
         enriched = enrich_works(works, cfg=self.enrich_config, layout=self.layout)
-        enriched.to_csv(self.layout.enriched_works_csv)
+        write_csv(self.layout.enriched_works_csv, enriched, index=True)
         write_json(self.layout.enrichment_provenance_json, {
             "schema_version": 1, "works_fingerprint": frame_fingerprint(works),
             "enriched_fingerprint": frame_fingerprint(enriched)})

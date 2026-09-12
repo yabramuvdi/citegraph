@@ -193,6 +193,35 @@ def write_json(path: Path, data: dict | list) -> None:
             os.unlink(temporary)
 
 
+def write_csv(path: Path, frame: pd.DataFrame, *, index: bool = False) -> None:
+    """Atomically replace a CSV checkpoint."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    os.close(fd)
+    try:
+        frame.to_csv(temporary, index=index)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def cache_input_fingerprint(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def cache_is_current(path: Path, input_path: Path) -> bool:
+    """Accept legacy caches without sidecars; validate new caches by input hash."""
+    sidecar = path.with_suffix(path.suffix + ".sha256")
+    return not sidecar.exists() or sidecar.read_text(encoding="ascii").strip() == cache_input_fingerprint(input_path)
+
+
+def write_cache_fingerprint(path: Path, input_path: Path) -> None:
+    path.with_suffix(path.suffix + ".sha256").write_text(
+        cache_input_fingerprint(input_path), encoding="ascii"
+    )
+
+
 def read_json(path: Path) -> dict | list:
     return json.loads(path.read_text(encoding="utf-8"))
 

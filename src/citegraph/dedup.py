@@ -242,7 +242,9 @@ def _title_block_keys(title: object) -> set[str]:
     full = _title_without_leading_article(normalize_text(title))
     if not full:
         return set()
-    return {"full:" + full, "prefix:" + " ".join(full.split()[:6]),
+    words = full.split()
+    return {"full:" + full, "prefix:" + " ".join(words[:6]),
+            "prefix4:" + " ".join(words[:4]),
             "tokens:" + " ".join(sorted(set(full.split())))}
 
 

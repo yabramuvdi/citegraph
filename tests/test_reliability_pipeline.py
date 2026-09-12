@@ -29,6 +29,30 @@ def test_zero_references_checkpoint_can_resume(tmp_path):
     assert list(edges.columns) == ["citing_id", "cited_id"]
 
 
+def test_changed_markdown_invalidates_extraction_caches(tmp_path, monkeypatch):
+    p, md = setup_cached(tmp_path)
+    (p.layout.metadata_dir / "paper.json").unlink()
+    (p.layout.references_dir / "paper.json").unlink()
+    calls = []
+    original = __import__("citegraph.pipeline", fromlist=["extract_metadata_from_markdown"]).extract_metadata_from_markdown
+    monkeypatch.setattr("citegraph.pipeline.extract_metadata_from_markdown",
+                        lambda *args, **kwargs: (calls.append("metadata") or original(*args, **kwargs)))
+    p.extract_paper_metadata([md])
+    md.write_text("changed paper", encoding="utf-8")
+    p.extract_paper_metadata([md])
+    assert calls == ["metadata", "metadata"]
+
+    refs_calls = []
+    original_refs = __import__("citegraph.pipeline", fromlist=["extract_references_from_markdown"]).extract_references_from_markdown
+    monkeypatch.setattr("citegraph.pipeline.extract_references_from_markdown",
+                        lambda *args, **kwargs: (refs_calls.append("references") or original_refs(*args, **kwargs)))
+    sources = p._load_sources()
+    p.extract_paper_references([md], sources)
+    md.write_text("changed again", encoding="utf-8")
+    p.extract_paper_references([md], sources)
+    assert refs_calls == ["references", "references"]
+
+
 def test_legacy_blank_reference_checkpoint_can_resume(tmp_path):
     p, md = setup_cached(tmp_path)
     p.extract_paper_metadata([md])

@@ -368,6 +368,48 @@ default dependency &mdash; install separately):
 nx_graph = g.to_networkx()         # DiGraph with edges citing -> cited
 ```
 
+### Author co-citation networks
+
+`to_networkx()` exports the citation graph as it stands, which is one hop
+deep: only works you processed a PDF for have outgoing edges. Path-based
+centrality over that graph would rank the PDFs you happened to collect rather
+than the literature.
+
+`author_cocitation_network()` builds the standard alternative from
+bibliometrics &mdash; the **author co-citation projection** (White & Griffith
+1981; White & McCain 1998, following Small 1973 on document co-citation). Two
+authors are joined when the same bibliography cites both, and the tie weight
+counts how many bibliographies do so.
+
+![How an author co-citation network is built: each bibliography joins every pair of authors it cites, and the tie weight counts how many bibliographies do so](docs/figures/cocitation_build.svg)
+
+```python
+G = g.author_cocitation_network(min_papers=3)   # weighted, undirected networkx.Graph
+
+ostrom_id = g.find_author("ostrom").index[0]
+G.nodes[ostrom_id]["display_name"]              # also: n_citing_papers
+G[ostrom_id][cardenas_id]["weight"]             # bibliographies citing both
+
+# Self-citation robustness variant: drop this author's own papers
+# from the citing side.
+own = set(g.citing_papers_by_author(cardenas_id)["paper_id"])
+G_ex = g.author_cocitation_network(min_papers=3, citing_ids=set(g.core.index) - own)
+```
+
+The ties are undirected and imply no contact between the authors &mdash; a
+third party's reference list is what creates them. Two construction rules
+follow, both drawn in
+[`cocitation_projection.svg`](docs/figures/cocitation_projection.svg): a
+citing work naming several works by one author still contributes a single
+mention, and no author is ever joined to themselves. `min_papers` prunes the
+long tail of once-cited names.
+
+Because the projection is a genuine one-mode network, degree, betweenness and
+eigenvector centrality are all well defined on it;
+[`cocitation_why.svg`](docs/figures/cocitation_why.svg) contrasts it with the
+work-level graph. PDF versions of all three figures sit alongside them in
+[`docs/figures/`](docs/figures/).
+
 ### Sidecar files
 
 Most warning sidecar files follow the same convention: **absent means clean**.

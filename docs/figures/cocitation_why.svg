@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1680 620" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <title>Why author co-citation: the work-level citation graph is one hop deep, so path-based centrality there measures the sampling design, while the author projection is a genuine one-mode network</title>
+  <defs>
+    <marker id="arrS" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1680" height="620" fill="#ffffff"/>
+
+  <!-- ================= PANEL HEADERS ================= -->
+  <circle cx="58" cy="52" r="14" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="58" y="56.5" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">A</text>
+  <text x="82" y="57" font-size="16" font-weight="bold" fill="#1e293b">The work-level citation graph</text>
+  <text x="82" y="78" font-size="11.5" fill="#64748b">only the works you processed a PDF for have outgoing edges</text>
+
+  <circle cx="898" cy="52" r="14" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="898" y="56.5" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">B</text>
+  <text x="922" y="57" font-size="16" font-weight="bold" fill="#1e293b">The author co-citation projection</text>
+  <text x="922" y="78" font-size="11.5" fill="#64748b">a one-mode network built from the same bibliographies</text>
+
+  <line x1="860" y1="100" x2="860" y2="510" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- ================= PANEL A: one-hop-deep work graph ================= -->
+  <text x="220" y="132" text-anchor="middle" font-size="9.5" letter-spacing="0.8" fill="#94a3b8">RING 0 &#183; YOUR PDFS</text>
+  <text x="580" y="132" text-anchor="middle" font-size="9.5" letter-spacing="0.8" fill="#94a3b8">RING 1 &#183; WORKS THEY CITE</text>
+
+  <rect x="548" y="148" width="64" height="380" rx="16" fill="none" stroke="#cbd5e1" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+  <g stroke="#94a3b8" stroke-width="1.4">
+    <line x1="235" y1="208" x2="564" y2="172" marker-end="url(#arrS)"/>
+    <line x1="235" y1="211" x2="564" y2="225" marker-end="url(#arrS)"/>
+    <line x1="235" y1="213" x2="564" y2="279" marker-end="url(#arrS)"/>
+    <line x1="234" y1="326" x2="565" y2="230" marker-end="url(#arrS)"/>
+    <line x1="235" y1="330" x2="564" y2="338" marker-end="url(#arrS)"/>
+    <line x1="235" y1="333" x2="564" y2="391" marker-end="url(#arrS)"/>
+    <line x1="235" y1="448" x2="564" y2="397" marker-end="url(#arrS)"/>
+    <line x1="235" y1="450" x2="564" y2="450" marker-end="url(#arrS)"/>
+    <line x1="235" y1="452" x2="564" y2="504" marker-end="url(#arrS)"/>
+  </g>
+
+  <g fill="#1e293b">
+    <circle cx="220" cy="210" r="13"/>
+    <circle cx="220" cy="330" r="13"/>
+    <circle cx="220" cy="450" r="13"/>
+  </g>
+  <g font-size="12" font-weight="bold" fill="#1e293b" text-anchor="end">
+    <text x="196" y="214">B1</text>
+    <text x="196" y="334">B2</text>
+    <text x="196" y="454">B3</text>
+  </g>
+  <g fill="#ffffff" stroke="#94a3b8" stroke-width="1.6">
+    <circle cx="580" cy="170" r="10"/>
+    <circle cx="580" cy="226" r="10"/>
+    <circle cx="580" cy="282" r="10"/>
+    <circle cx="580" cy="338" r="10"/>
+    <circle cx="580" cy="394" r="10"/>
+    <circle cx="580" cy="450" r="10"/>
+    <circle cx="580" cy="506" r="10"/>
+  </g>
+
+  <text x="632" y="318" font-size="11.5" fill="#64748b">no outgoing edges &#8212;</text>
+  <text x="632" y="338" font-size="11.5" fill="#64748b">we never processed</text>
+  <text x="632" y="358" font-size="11.5" fill="#64748b">their PDFs</text>
+
+  <rect x="250" y="532" width="360" height="26" rx="13" fill="#e2e8f0"/>
+  <text x="430" y="549" text-anchor="middle" font-size="11.5" fill="#334155">depth is fixed at 1 by the sampling design</text>
+  <text x="430" y="590" text-anchor="middle" font-size="11.5" fill="#64748b">Centrality here mostly records which PDFs you happened to collect.</text>
+
+  <!-- ================= PANEL B: author projection ================= -->
+  <g stroke="#64748b">
+    <line x1="1250" y1="295" x2="1100" y2="205" stroke-width="7"/>
+    <line x1="1250" y1="295" x2="1420" y2="243" stroke-width="7"/>
+    <line x1="1250" y1="295" x2="1078" y2="385" stroke-width="3"/>
+    <line x1="1250" y1="295" x2="1360" y2="450" stroke-width="3"/>
+    <line x1="1100" y1="205" x2="1078" y2="385" stroke-width="3"/>
+    <line x1="1100" y1="205" x2="1420" y2="243" stroke-width="3"/>
+    <line x1="1420" y1="243" x2="1360" y2="450" stroke-width="3"/>
+  </g>
+  <g fill="#2563eb">
+    <circle cx="1250" cy="295" r="20"/>
+    <circle cx="1100" cy="205" r="20"/>
+    <circle cx="1078" cy="385" r="20"/>
+    <circle cx="1420" cy="243" r="20"/>
+    <circle cx="1360" cy="450" r="20"/>
+  </g>
+  <g font-size="13" font-weight="600" fill="#1e293b" text-anchor="middle">
+    <text x="1250" y="261">Ostrom</text>
+    <text x="1100" y="171">Fehr</text>
+    <text x="1078" y="431">Tversky</text>
+    <text x="1420" y="209">Bowles</text>
+    <text x="1360" y="496">C&#225;rdenas</text>
+  </g>
+
+  <rect x="1100" y="532" width="300" height="26" rx="13" fill="#2563eb"/>
+  <text x="1250" y="549" text-anchor="middle" font-size="11.5" fill="#ffffff">degree &#183; betweenness &#183; eigenvector</text>
+  <text x="1250" y="590" text-anchor="middle" font-size="11.5" fill="#64748b">Every author can reach every other, so path-based measures are defined.</text>
+</svg>
