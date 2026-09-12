@@ -6,6 +6,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 
 from citegraph.enrich import (
     EnrichConfig,
@@ -501,6 +502,33 @@ def test_enrich_works_uses_cache(tmp_path):
 
     mock_client.get.assert_not_called()
     assert result.iloc[0]["doi"] == "cached-doi"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["not json", "[]", '{"schema_version": 2, "result": []}'],
+)
+def test_enrich_works_refreshes_malformed_cache(tmp_path, payload):
+    df = _make_df()
+
+    from citegraph.io import OutLayout
+    layout = OutLayout(tmp_path)
+    layout.ensure()
+    cache_file = layout.enrichment_dir / "r-vaswani-2017-attention.json"
+    cache_file.write_text(payload, encoding="utf-8")
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
+
+    with patch("citegraph.enrich._try_import_httpx") as mock_httpx:
+        mock_httpx.return_value = MagicMock(Client=MagicMock(return_value=mock_client))
+        result = enrich_works(df, cfg=_CFG, layout=layout)
+
+    mock_client.get.assert_called()
+    assert result.iloc[0]["doi"] == "10.48550/arxiv.1706.03762"
+    assert json.loads(cache_file.read_text())["result"]["enrichment_status"] == "matched"
 
 
 def test_enrich_works_backfills_diagnostics_for_legacy_cache(tmp_path):

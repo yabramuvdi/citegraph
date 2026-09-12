@@ -502,22 +502,30 @@ def _enrich_one(
             if legacy.exists():
                 cache_path = legacy
         if cache_path.exists():
-            cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            # An http_error miss is a transient outage (rate limit, 5xx,
-            # timeout), not a lookup result — fall through and retry the
-            # providers instead of serving it forever.
-            valid = True
-            if cached.get("schema_version") == 2:
-                valid = cached.get("input_fingerprint") == input_fingerprint
-                cached = cached["result"]
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if not isinstance(cached, dict):
+                    raise TypeError("expected a JSON object")
+                valid = True
+                if cached.get("schema_version") == 2:
+                    result = cached.get("result")
+                    if not isinstance(result, dict):
+                        raise TypeError("expected a result object")
+                    valid = cached.get("input_fingerprint") == input_fingerprint
+                    cached = result
+                else:
+                    # Path is derived from OutLayout, including for direct cache callers.
+                    from citegraph.io import OutLayout, unverified_collision_ids
+                    valid = ref_id not in unverified_collision_ids(OutLayout(enrichment_dir.parent))
+            except (OSError, UnicodeError, TypeError, ValueError) as exc:
+                logger.warning("Refreshing malformed enrichment cache for %s: %s", ref_id, exc)
             else:
-                # Path is derived from OutLayout, including for direct cache callers.
-                from citegraph.io import OutLayout, unverified_collision_ids
-                valid = ref_id not in unverified_collision_ids(OutLayout(enrichment_dir.parent))
-            if valid and cached.get("enrichment_miss_reason") != "http_error":
-                return _apply_enrichment_result(row_dict, cached)
-            if not valid:
-                logger.warning("Refreshing incompatible enrichment cache for %s", ref_id)
+                # An http_error miss is a transient outage (rate limit, 5xx,
+                # timeout), not a lookup result — retry the providers.
+                if valid and cached.get("enrichment_miss_reason") != "http_error":
+                    return _apply_enrichment_result(row_dict, cached)
+                if not valid:
+                    logger.warning("Refreshing incompatible enrichment cache for %s", ref_id)
 
     # NaN is truthy and str()s to "nan", which would be sent as a real query.
     title = _scalar_str(row.get("Title"))
