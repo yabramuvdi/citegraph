@@ -377,6 +377,7 @@ def test_different_openalex_ids_split_identical_names():
     authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
     assert len(authors_df) == 2
     assert set(authors_df["openalex_id"]) == {"A1", "A2"}
+    assert set(authors_df.index) == {"a-smith-j", "a-smith-j-1"}
 
 
 # ---------------------------------------------------------------------------

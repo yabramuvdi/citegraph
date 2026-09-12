@@ -58,6 +58,7 @@ class CitationGraph:
         self.edges = edges
         # Author tables are optional — the citegraph authors stage may not
         # have been run yet. Methods that need them check `has_authors`.
+        self._author_tables_loaded = authors is not None and author_citations is not None
         self.authors = authors if authors is not None else pd.DataFrame()
         self.author_citations = (
             author_citations if author_citations is not None else pd.DataFrame()
@@ -203,7 +204,7 @@ class CitationGraph:
     @property
     def has_authors(self) -> bool:
         """True when the author-normalization stage has been run."""
-        return not self.authors.empty
+        return self._author_tables_loaded
 
     def _require_authors(self) -> None:
         if not self.has_authors:

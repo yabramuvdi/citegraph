@@ -163,20 +163,20 @@ def parse_structured_response(
     """
     parsed = getattr(response, "parsed", None)
     if parsed is not None:
-        return parsed
+        data = parsed
+    else:
+        raw = getattr(response, "text", None)
+        if not raw:
+            raise LLMError("Empty Gemini response (no .parsed and no .text).")
 
-    raw = getattr(response, "text", None)
-    if not raw:
-        raise LLMError("Empty Gemini response (no .parsed and no .text).")
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.warning("Gemini returned invalid JSON, attempting repair: %s", exc)
-        repaired = fix_incomplete_json_string(raw)
-        if repaired is None:
-            raise LLMError("Could not repair truncated JSON response.") from exc
-        data = json.loads(repaired)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("Gemini returned invalid JSON, attempting repair: %s", exc)
+            repaired = fix_incomplete_json_string(raw)
+            if repaired is None:
+                raise LLMError("Could not repair truncated JSON response.") from exc
+            data = json.loads(repaired)
 
     if schema is None:
         return data

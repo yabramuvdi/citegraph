@@ -185,6 +185,22 @@ def test_from_pipeline_result_carries_author_tables() -> None:
     assert g.top_cited_authors(n=1).index.tolist() == ["a-cardenas-juan-camilo"]
 
 
+def test_empty_author_tables_are_still_loaded(small_graph: CitationGraph) -> None:
+    from citegraph.io import AUTHOR_CITATION_COLUMNS, AUTHOR_COLUMNS
+
+    graph = CitationGraph(
+        works=small_graph.works,
+        edges=small_graph.edges,
+        authors=pd.DataFrame(columns=AUTHOR_COLUMNS).set_index("id"),
+        author_citations=pd.DataFrame(columns=AUTHOR_CITATION_COLUMNS),
+    )
+
+    assert graph.has_authors is True
+    assert graph.top_authors().empty
+    assert graph.top_cited_authors().empty
+    assert graph.find_author("smith").empty
+
+
 def test_from_out_dir_loads_csvs(tmp_path: Path, small_graph: CitationGraph) -> None:
     out = tmp_path / "out"
     out.mkdir()

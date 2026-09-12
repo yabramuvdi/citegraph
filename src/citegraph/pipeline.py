@@ -47,11 +47,11 @@ from citegraph.io import (
     WORK_COLUMNS,
     OutLayout,
     artifact_fingerprint,
-    cache_is_current,
     frame_fingerprint,
     metadata_fingerprint,
     parse_openalex_authors,
     read_json,
+    read_pydantic_cache,
     read_stage_csv,
     unverified_collision_ids,
     write_cache_fingerprint,
@@ -172,6 +172,12 @@ class Pipeline:
             self._client = GeminiClient(**self._client_kwargs)
         return self._client
 
+    @property
+    def model(self) -> str:
+        if self._client is not None:
+            return self._client.model
+        return self._client_kwargs.get("model") or get_settings().citegraph_model
+
     # ------------------------------------------------------------------
     # Disk loaders (used by stages when called with no in-memory input)
     # ------------------------------------------------------------------
@@ -240,14 +246,14 @@ class Pipeline:
         def _process_one(md: Path) -> tuple[dict | None, PaperFailure | None]:
             cache = self.layout.metadata_dir / f"{md.stem}.json"
             try:
-                if cache.exists() and cache_is_current(cache, md):
-                    logger.debug("Loading metadata from cache: %s", cache.name)
-                    meta = PaperMetadata.model_validate(read_json(cache))
-                else:
+                meta = read_pydantic_cache(cache, md, PaperMetadata)
+                if meta is None:
                     logger.info("Extracting metadata from %s", md.name)
                     meta = extract_metadata_from_markdown(md, client=self.client)
                     write_pydantic(cache, meta)
                     write_cache_fingerprint(cache, md)
+                else:
+                    logger.debug("Loading metadata from cache: %s", cache.name)
                 return metadata_to_record(meta, source_file=md.name), None
             except Exception as exc:  # noqa: BLE001 - one bad paper shouldn't kill the run
                 logger.error("Metadata extraction failed for %s: %s", md.name, exc)
@@ -361,14 +367,14 @@ class Pipeline:
         def _process_one(md: Path, citing_id: str) -> tuple[list[dict], PaperFailure | None]:
             cache = self.layout.references_dir / f"{md.stem}.json"
             try:
-                if cache.exists() and cache_is_current(cache, md):
-                    refs = [Reference.model_validate(r) for r in read_json(cache)]
-                    logger.debug("Loaded %d cached references for %s", len(refs), md.name)
-                else:
+                refs = read_pydantic_cache(cache, md, Reference, many=True)
+                if refs is None:
                     logger.info("Extracting references from %s", md.name)
                     refs = extract_references_from_markdown(md, client=self.client)
                     write_pydantic_list(cache, refs)
                     write_cache_fingerprint(cache, md)
+                else:
+                    logger.debug("Loaded %d cached references for %s", len(refs), md.name)
                 rows = []
                 for ref in refs:
                     rows.append({**ref.model_dump(), "citing_id": citing_id})
@@ -656,14 +662,9 @@ class Pipeline:
         Requires markdown files (stage 1) to exist under ``out_dir/markdown/``.
         Raises :class:`StageNotReadyError` if they are missing.
         """
-        from citegraph.config import get_settings
         from citegraph.cost_estimation import estimate_extraction_cost as _estimate
 
-        if self._client is not None:
-            model = self._client.model
-        else:
-            model = self._client_kwargs.get("model") or get_settings().citegraph_model
-        return _estimate(layout=self.layout, model=model)
+        return _estimate(layout=self.layout, model=self.model)
 
     # ------------------------------------------------------------------
     # Top level
@@ -703,7 +704,7 @@ class Pipeline:
             "n_source_duplicates": count_source_duplicates(self.layout.source_duplicates_json),
             "n_papers_no_references": count_no_references(self.layout.papers_no_references_json),
             "n_conversion_warnings": count_conversion_warnings(self.layout.conversion_warnings_json),
-            "model": self.client.model,
+            "model": self.model,
             "enrich": self.enrich,
             "dedup_config": self.dedup_config.__dict__,
             "author_config": self.author_config.__dict__,
@@ -723,7 +724,7 @@ class Pipeline:
                 "run_summary": run_summary_path,
             },
             config={
-                "model": self.client.model,
+                "model": self.model,
                 "enrich": self.enrich,
                 "dedup_config": self.dedup_config.__dict__,
                 "author_config": self.author_config.__dict__,

@@ -125,7 +125,8 @@ def test_unknown_path_is_404(served_corpus) -> None:
     port, _ = served_corpus
     with pytest.raises(HTTPError) as excinfo:
         _get(port, "/api/nope")
-    assert excinfo.value.code == 404
+    with excinfo.value:
+        assert excinfo.value.code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +146,8 @@ def test_api_markdown_unknown_stem_is_404(served_corpus) -> None:
     port, _ = served_corpus
     with pytest.raises(HTTPError) as excinfo:
         _get(port, "/api/markdown?stem=doesnotexist")
-    assert excinfo.value.code == 404
+    with excinfo.value:
+        assert excinfo.value.code == 404
 
 
 @pytest.mark.parametrize(
@@ -156,7 +158,8 @@ def test_api_markdown_rejects_traversal(served_corpus, stem: str) -> None:
     port, _ = served_corpus
     with pytest.raises(HTTPError) as excinfo:
         _get(port, f"/api/markdown?stem={stem}")
-    assert excinfo.value.code in (400, 404)
+    with excinfo.value:
+        assert excinfo.value.code in (400, 404)
 
 
 # ---------------------------------------------------------------------------

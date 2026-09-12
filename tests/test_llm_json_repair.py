@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
-from citegraph.llm import fix_incomplete_json_string
+from citegraph.llm import fix_incomplete_json_string, parse_structured_response
+from citegraph.schemas import PaperMetadata, Reference
 
 
 def test_repairs_truncated_array():
@@ -32,3 +34,18 @@ def test_idempotent_on_already_valid_array():
     fixed = fix_incomplete_json_string(valid)
     assert fixed is not None
     assert json.loads(fixed) == [{"Title": "A"}, {"Title": "B"}]
+
+
+def test_parsed_response_is_validated_through_schema():
+    metadata = {"Title": "A", "Authors_List": [], "Journal": "", "Year": 2020}
+    reference = {"Title": "B", "Authors_List": [], "Journal": "", "Year": 2019}
+
+    parsed_metadata = parse_structured_response(
+        SimpleNamespace(parsed=metadata), schema=PaperMetadata
+    )
+    parsed_references = parse_structured_response(
+        SimpleNamespace(parsed=[reference]), schema=Reference
+    )
+
+    assert isinstance(parsed_metadata, PaperMetadata)
+    assert isinstance(parsed_references[0], Reference)

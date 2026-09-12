@@ -18,7 +18,7 @@ from citegraph.cost_estimation import (
     estimate_extraction_cost,
 )
 from citegraph.extract_metadata import DEFAULT_METADATA_INPUT_CHARS
-from citegraph.io import OutLayout
+from citegraph.io import OutLayout, write_cache_fingerprint
 from citegraph.pipeline import StageNotReadyError
 
 # ---------------------------------------------------------------------------
@@ -94,7 +94,10 @@ def test_short_file_metadata_not_truncated(tmp_path: Path) -> None:
 def test_fully_cached_file_contributes_zero_tokens(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     _write_md(layout, "paper.md", "C" * 5_000)
-    (layout.metadata_dir / "paper.json").write_text("{}", encoding="utf-8")
+    (layout.metadata_dir / "paper.json").write_text(
+        '{"Title":"T","Authors_List":[],"Journal":"","Year":2020}',
+        encoding="utf-8",
+    )
     (layout.references_dir / "paper.json").write_text("[]", encoding="utf-8")
 
     est = estimate_extraction_cost(layout, model="gemini-2.0-flash")
@@ -103,6 +106,43 @@ def test_fully_cached_file_contributes_zero_tokens(tmp_path: Path) -> None:
     assert est.n_references_to_process == 0
     assert est.total_input_tokens == 0
     assert est.estimated_output_tokens == 0
+
+
+def test_stale_caches_are_included_in_cost_estimate(tmp_path: Path) -> None:
+    layout = _layout(tmp_path)
+    markdown = _write_md(layout, "paper.md", "old content")
+    metadata_cache = layout.metadata_dir / "paper.json"
+    references_cache = layout.references_dir / "paper.json"
+    metadata_cache.write_text(
+        '{"Title":"T","Authors_List":[],"Journal":"","Year":2020}',
+        encoding="utf-8",
+    )
+    references_cache.write_text("[]", encoding="utf-8")
+    write_cache_fingerprint(metadata_cache, markdown)
+    write_cache_fingerprint(references_cache, markdown)
+    markdown.write_text("changed content", encoding="utf-8")
+
+    est = estimate_extraction_cost(layout, model="gemini-2.0-flash")
+
+    assert est.n_metadata_to_process == 1
+    assert est.n_references_to_process == 1
+    assert est.total_input_tokens > 0
+
+
+def test_invalid_caches_are_included_in_cost_estimate(tmp_path: Path) -> None:
+    layout = _layout(tmp_path)
+    markdown = _write_md(layout, "paper.md", "content")
+    metadata_cache = layout.metadata_dir / "paper.json"
+    references_cache = layout.references_dir / "paper.json"
+    metadata_cache.write_text("{}", encoding="utf-8")
+    references_cache.write_text("{}", encoding="utf-8")
+    write_cache_fingerprint(metadata_cache, markdown)
+    write_cache_fingerprint(references_cache, markdown)
+
+    est = estimate_extraction_cost(layout, model="gemini-2.0-flash")
+
+    assert est.n_metadata_to_process == 1
+    assert est.n_references_to_process == 1
 
 
 def test_partial_cache_only_references_cached(tmp_path: Path) -> None:
@@ -122,7 +162,10 @@ def test_partial_cache_only_references_cached(tmp_path: Path) -> None:
 def test_partial_cache_only_metadata_cached(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     _write_md(layout, "paper.md", "E" * 3_000)
-    (layout.metadata_dir / "paper.json").write_text("{}", encoding="utf-8")
+    (layout.metadata_dir / "paper.json").write_text(
+        '{"Title":"T","Authors_List":[],"Journal":"","Year":2020}',
+        encoding="utf-8",
+    )
 
     est = estimate_extraction_cost(layout, model="gemini-2.0-flash")
     fe = est.files[0]
@@ -266,7 +309,10 @@ def test_format_summary_shows_cached_count(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     _write_md(layout, "a.md", "H" * 3_000)
     _write_md(layout, "b.md", "I" * 3_000)
-    (layout.metadata_dir / "a.json").write_text("{}", encoding="utf-8")
+    (layout.metadata_dir / "a.json").write_text(
+        '{"Title":"T","Authors_List":[],"Journal":"","Year":2020}',
+        encoding="utf-8",
+    )
 
     est = estimate_extraction_cost(layout, model="gemini-2.0-flash")
     summary = est.format_summary()

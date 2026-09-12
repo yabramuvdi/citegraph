@@ -1058,7 +1058,7 @@ def normalize_authors(
     block_keys = frozenset(blocks)
 
     # Build AuthorCluster records with stable ids.
-    used_ids: dict[str, int] = defaultdict(int)
+    used_ids: set[str] = set()
     clusters: list[AuthorCluster] = []
     for occs in raw_clusters:
         if not occs:
@@ -1066,10 +1066,12 @@ def normalize_authors(
         canonical_given, given_token = _canonical_given_for_cluster(occs)
         surname_norm, surname_display = _cluster_surname(occs)
         base_id = _make_author_id(surname_norm, given_token)
-        cid = base_id if used_ids[base_id] == 0 else _make_author_id(
-            surname_norm, given_token, used_ids[base_id]
-        )
-        used_ids[base_id] += 1
+        cid = base_id
+        suffix = 1
+        while cid in used_ids:
+            cid = _make_author_id(surname_norm, given_token, suffix)
+            suffix += 1
+        used_ids.add(cid)
 
         oa_id = next((o.openalex_id for o in occs if o.openalex_id), None)
         orcid = next((o.orcid for o in occs if o.orcid), None)

@@ -70,9 +70,14 @@ def test_populated_malformed_checkpoint_is_not_empty(tmp_path):
         p.deduplicate()
 
 
-def test_all_failed_metadata_preserves_failure_then_blocks_references(tmp_path):
+def test_all_failed_metadata_preserves_failure_then_blocks_references(tmp_path, monkeypatch):
     p, md = setup_cached(tmp_path)
-    (p.layout.metadata_dir / "paper.json").write_text("broken")
+    (p.layout.metadata_dir / "paper.json").unlink()
+
+    def fail_extraction(*args, **kwargs):
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr("citegraph.pipeline.extract_metadata_from_markdown", fail_extraction)
     sources = p.extract_paper_metadata([md])
     assert sources.empty
     assert p.layout.metadata_failures_jsonl.exists()
@@ -202,7 +207,12 @@ def test_author_positions_survive_csv_roundtrip():
 def test_failed_run_removes_previous_success_summary(tmp_path, monkeypatch):
     p, md = setup_cached(tmp_path)
     p.layout.run_summary_json.write_text('{"n_works": 99}')
-    (p.layout.metadata_dir / "paper.json").write_text("broken")
+    (p.layout.metadata_dir / "paper.json").unlink()
+
+    def fail_extraction(*args, **kwargs):
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr("citegraph.pipeline.extract_metadata_from_markdown", fail_extraction)
     monkeypatch.setattr(p, "convert_pdfs", lambda: [md])
     with pytest.raises(StageNotReadyError):
         p.run()

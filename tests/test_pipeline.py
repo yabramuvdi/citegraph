@@ -239,6 +239,76 @@ def test_pipeline_caches_metadata(tmp_path: Path) -> None:
     assert reloaded.iloc[0]["Title"].startswith("Governing Common-Pool Resources")
 
 
+def test_invalid_metadata_cache_is_refreshed(tmp_path: Path) -> None:
+    markdown = tmp_path / "out" / "markdown" / "paper.md"
+    markdown.parent.mkdir(parents=True)
+    markdown.write_text("# Paper", encoding="utf-8")
+    cache = tmp_path / "out" / "metadata" / "paper.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("not json", encoding="utf-8")
+    pipeline = Pipeline(None, tmp_path / "out", client=_FakeClient(), show_progress=False)
+
+    sources = pipeline.extract_paper_metadata([markdown])
+
+    assert len(sources) == 1
+    assert json.loads(cache.read_text(encoding="utf-8"))["Title"].startswith(
+        "Governing Common-Pool Resources"
+    )
+    assert not pipeline.layout.metadata_failures_jsonl.exists()
+
+
+def test_invalid_references_cache_is_refreshed(tmp_path: Path) -> None:
+    markdown = tmp_path / "out" / "markdown" / "paper.md"
+    markdown.parent.mkdir(parents=True)
+    markdown.write_text("# Paper\n## References\nBroken cache", encoding="utf-8")
+    cache = tmp_path / "out" / "references" / "paper.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("not json", encoding="utf-8")
+    sources = pd.DataFrame(
+        [{"id": "w-source", "source_file": "paper.md", "Title": "Paper"}]
+    )
+    pipeline = Pipeline(None, tmp_path / "out", client=_FakeClient(), show_progress=False)
+
+    references = pipeline.extract_paper_references([markdown], sources)
+
+    assert len(references) == 2
+    assert len(json.loads(cache.read_text(encoding="utf-8"))) == 2
+    assert not pipeline.layout.references_failures_jsonl.exists()
+
+
+def test_fully_cached_run_does_not_require_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "")
+    markdown = tmp_path / "out" / "markdown" / "paper.md"
+    markdown.parent.mkdir(parents=True)
+    markdown.write_text("# Paper", encoding="utf-8")
+    metadata_cache = tmp_path / "out" / "metadata" / "paper.json"
+    references_cache = tmp_path / "out" / "references" / "paper.json"
+    metadata_cache.parent.mkdir(parents=True)
+    references_cache.parent.mkdir(parents=True)
+    metadata_cache.write_text(
+        json.dumps(
+            {
+                "Title": "Cached paper",
+                "Authors_List": ["Jane Doe"],
+                "Journal": "Journal",
+                "Year": 2020,
+            }
+        ),
+        encoding="utf-8",
+    )
+    references_cache.write_text("[]", encoding="utf-8")
+    pipeline = Pipeline(None, tmp_path / "out", model="cached-model", show_progress=False)
+    monkeypatch.setattr(pipeline, "convert_pdfs", lambda: [markdown])
+
+    result = pipeline.run()
+
+    assert len(result.works) == 1
+    summary = json.loads(pipeline.layout.run_summary_json.read_text(encoding="utf-8"))
+    assert summary["model"] == "cached-model"
+
+
 def test_metadata_extraction_runs_concurrently_and_preserves_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -22,7 +22,8 @@ from dataclasses import dataclass, field
 
 from citegraph.extract_metadata import DEFAULT_METADATA_INPUT_CHARS
 from citegraph.extract_references import slice_to_references_section
-from citegraph.io import OutLayout
+from citegraph.io import OutLayout, read_pydantic_cache
+from citegraph.schemas import PaperMetadata, Reference
 
 # Rough heuristic: English/academic prose averages ~4 characters per token.
 _CHARS_PER_TOKEN: int = 4
@@ -207,8 +208,10 @@ def estimate_extraction_cost(
 
     file_estimates: list[FileEstimate] = []
     for md in md_paths:
-        meta_cached = (layout.metadata_dir / f"{md.stem}.json").exists()
-        refs_cached = (layout.references_dir / f"{md.stem}.json").exists()
+        metadata_cache = layout.metadata_dir / f"{md.stem}.json"
+        references_cache = layout.references_dir / f"{md.stem}.json"
+        meta_cached = read_pydantic_cache(metadata_cache, md, PaperMetadata) is not None
+        refs_cached = read_pydantic_cache(references_cache, md, Reference, many=True) is not None
 
         if meta_cached and refs_cached:
             file_estimates.append(

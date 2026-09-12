@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 
 @dataclass(frozen=True)
@@ -224,6 +224,25 @@ def write_cache_fingerprint(path: Path, input_path: Path) -> None:
 
 def read_json(path: Path) -> dict | list:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_pydantic_cache(
+    path: Path,
+    input_path: Path,
+    schema: type[BaseModel],
+    *,
+    many: bool = False,
+) -> BaseModel | list[BaseModel] | None:
+    """Return a current, valid cache or ``None`` when it must be refreshed."""
+    if not path.exists() or not cache_is_current(path, input_path):
+        return None
+    try:
+        data = read_json(path)
+        if many:
+            return [schema.model_validate(item) for item in data] if isinstance(data, list) else None
+        return schema.model_validate(data)
+    except (json.JSONDecodeError, UnicodeError, TypeError, ValidationError):
+        return None
 
 
 def write_pydantic(path: Path, obj: BaseModel) -> None:
