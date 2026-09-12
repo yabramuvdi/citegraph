@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -318,6 +321,62 @@ def test_convert_pdf_to_markdown_respects_cache_stem(tmp_path: Path) -> None:
 
     out = convert_pdf_to_markdown(pdf, md_dir, cache_stem="custom__name")
     assert out == md_dir / "custom__name.md"
+
+
+def test_conversion_preserves_existing_cache_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_text("")
+    md_dir = tmp_path / "markdown"
+    md_dir.mkdir()
+    cached = md_dir / "paper.md"
+    cached.write_text("old conversion")
+
+    class FakeConverter:
+        def convert(self, path):
+            return SimpleNamespace(
+                document=SimpleNamespace(export_to_markdown=lambda: "new conversion")
+            )
+
+    docling = ModuleType("docling")
+    converter_module = ModuleType("docling.document_converter")
+    converter_module.DocumentConverter = FakeConverter
+    docling.document_converter = converter_module
+    monkeypatch.setitem(sys.modules, "docling", docling)
+    monkeypatch.setitem(sys.modules, "docling.document_converter", converter_module)
+    monkeypatch.setattr(os, "replace", lambda source, target: (_ for _ in ()).throw(OSError()))
+
+    with pytest.raises(OSError):
+        convert_pdf_to_markdown(pdf, md_dir, overwrite=True)
+
+    assert cached.read_text() == "old conversion"
+    assert list(md_dir.iterdir()) == [cached]
+
+
+def test_ocr_auto_preserves_fallback_cache_when_retry_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf = pdf_dir / "scan.pdf"
+    pdf.write_text("")
+    md_dir = tmp_path / "markdown"
+
+    def fake_convert(pdf_path, markdown_dir, *, overwrite=False, cache_stem=None, ocr=False):
+        out = Path(markdown_dir) / "scan.md"
+        if ocr:
+            raise RuntimeError("OCR failed")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("<!-- image -->")
+        return out
+
+    monkeypatch.setattr("citegraph.pdf_to_markdown.convert_pdf_to_markdown", fake_convert)
+
+    with pytest.raises(RuntimeError, match="OCR failed"):
+        convert_directory(pdf_dir, md_dir, ocr="auto", show_progress=False)
+
+    assert (md_dir / "scan.md").read_text() == "<!-- image -->"
 
 
 # ---------------------------------------------------------------------------

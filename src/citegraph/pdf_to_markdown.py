@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Literal
@@ -173,7 +175,14 @@ def convert_pdf_to_markdown(
         converter = DocumentConverter()
 
     result = converter.convert(str(pdf_path))
-    out_path.write_text(result.document.export_to_markdown(), encoding="utf-8")
+    fd, temporary = tempfile.mkstemp(dir=markdown_dir, prefix=f".{out_path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(result.document.export_to_markdown())
+        os.replace(temporary, out_path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     return out_path
 
 
@@ -234,8 +243,8 @@ def convert_directory(
     * ``"auto"`` — two-pass: convert everything without OCR first, run the
       :func:`_is_image_only` and :func:`_has_unmappable_glyphs` heuristics
       on each output, then re-run only the flagged PDFs with OCR (their
-      stub markdown is deleted first so the cache check doesn't
-      short-circuit the retry). OCR is the remedy for both failure modes:
+      stub markdown is atomically replaced only after a successful retry).
+      OCR is the remedy for both failure modes:
       a scanned page with no text layer, and a page whose font carries no
       ToUnicode map.
 
@@ -272,8 +281,6 @@ def convert_directory(
                 "Re-running %d poorly-converted PDF(s) with OCR (auto fallback)",
                 len(retry_pairs),
             )
-            for _pdf, md in retry_pairs:
-                md.unlink()
             _convert_loop(
                 [pdf for pdf, _ in retry_pairs],
                 pdf_dir,
