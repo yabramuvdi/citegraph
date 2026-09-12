@@ -669,9 +669,10 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Top level
     # ------------------------------------------------------------------
-    def run(self) -> PipelineResult:
+    def run(self, markdown_paths: list[Path] | None = None) -> PipelineResult:
         self.layout.run_summary_json.unlink(missing_ok=True)
-        markdown_paths = self.convert_pdfs()
+        if markdown_paths is None:
+            markdown_paths = self.convert_pdfs()
         sources = self.extract_paper_metadata(markdown_paths)
         citations_raw = self.extract_paper_references(markdown_paths, sources)
         works, graph = self.deduplicate(sources, citations_raw)

@@ -300,9 +300,13 @@ def test_fully_cached_run_does_not_require_api_key(
     )
     references_cache.write_text("[]", encoding="utf-8")
     pipeline = Pipeline(None, tmp_path / "out", model="cached-model", show_progress=False)
-    monkeypatch.setattr(pipeline, "convert_pdfs", lambda: [markdown])
+    monkeypatch.setattr(
+        pipeline,
+        "convert_pdfs",
+        lambda: pytest.fail("supplied markdown paths must skip conversion"),
+    )
 
-    result = pipeline.run()
+    result = pipeline.run(markdown_paths=[markdown])
 
     assert len(result.works) == 1
     summary = json.loads(pipeline.layout.run_summary_json.read_text(encoding="utf-8"))

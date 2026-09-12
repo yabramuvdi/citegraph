@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import pandas as pd
+import pytest
 from click import unstyle
 from typer.testing import CliRunner
 
@@ -93,6 +96,43 @@ def test_convert_rejects_mutually_exclusive_ocr_flags(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "--ocr and --ocr-auto are mutually exclusive" in result.output
+
+
+@pytest.mark.parametrize("conversion_flag", ["--overwrite-markdown", "--ocr-auto"])
+def test_run_reuses_preflight_conversion(
+    tmp_path: Path, monkeypatch, conversion_flag: str
+) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    converted = tmp_path / "out" / "markdown" / "paper.md"
+    received_paths = None
+
+    def fake_convert(pipeline):
+        return [converted]
+
+    def fake_run(pipeline, markdown_paths=None):
+        nonlocal received_paths
+        received_paths = markdown_paths
+        return SimpleNamespace(
+            works=pd.DataFrame({"ring": pd.Series(dtype=int)}),
+            graph=pd.DataFrame(),
+        )
+
+    monkeypatch.setattr("citegraph.cli.Pipeline.convert_pdfs", fake_convert)
+    monkeypatch.setattr(
+        "citegraph.cli.Pipeline.estimate_extraction_cost",
+        lambda pipeline: SimpleNamespace(format_summary=lambda: "estimate"),
+    )
+    monkeypatch.setattr("citegraph.cli.Pipeline.run", fake_run)
+
+    result = runner.invoke(
+        app,
+        ["run", str(pdf_dir), "--out", str(tmp_path / "out"), conversion_flag],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert received_paths == [converted]
 
 
 def test_llm_concurrency_option_is_exposed_on_llm_commands() -> None:

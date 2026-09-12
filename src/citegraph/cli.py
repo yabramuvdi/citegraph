@@ -244,9 +244,10 @@ def run(
         llm_concurrency=llm_concurrency,
     )
 
+    markdown_paths = None
     if not yes:
         # Convert PDFs first so we can estimate token cost before any LLM calls.
-        _run_stage(pipeline.convert_pdfs, next_hint=None)
+        markdown_paths = pipeline.convert_pdfs()
         est = pipeline.estimate_extraction_cost()
         typer.echo("\nCost estimate for LLM extraction stages:\n")
         typer.echo(est.format_summary())
@@ -256,7 +257,7 @@ def run(
             raise typer.Exit(code=0)
         typer.echo()
 
-    result = pipeline.run()  # convert_pdfs() is idempotent — cached files are skipped
+    result = pipeline.run(markdown_paths=markdown_paths)
     n_core = (
         int((result.works["ring"] == 0).sum())
         if "ring" in result.works.columns
