@@ -1285,3 +1285,130 @@ def test_transitive_orcid_free_bridges_remain_unresolved():
         assert mapping["w-0"] != mapping["w-5"]
         assert mapping["w-1"] == mapping["w-2"] == mapping["w-3"] == mapping["w-4"]
         assert mapping["w-1"] not in {mapping["w-0"], mapping["w-5"]}
+
+
+def test_contradicted_compound_family_does_not_redefine_a_surname():
+    """A mis-split CrossRef `family` must not rewrite a surname corpus-wide.
+
+    Real-corpus case: one record returns family='Claudia Lopez' given='Maria'
+    for María Claudia López while three others return family='Lopez'. Adopting
+    the boundary from the lone record shattered her into three clusters.
+    """
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Maria Claudia Lopez"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Maria Claudia Lopez"], "Year": 2011},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Maria Claudia Lopez"], "Year": 2012},
+    ])
+    enriched = pd.DataFrame([
+        {"id": "r-1", "OpenAlex_Authors": [{"display_name": "Maria Claudia Lopez",
+                                            "family": "Claudia Lopez", "given": "Maria",
+                                            "openalex_id": None, "orcid": None}]},
+        {"id": "r-2", "OpenAlex_Authors": [{"display_name": "Maria Claudia Lopez",
+                                            "family": "Lopez", "given": "Maria Claudia",
+                                            "openalex_id": None, "orcid": None}]},
+        {"id": "r-3", "OpenAlex_Authors": [{"display_name": "Maria Claudia Lopez",
+                                            "family": "Lopez", "given": "Maria Claudia",
+                                            "openalex_id": None, "orcid": None}]},
+    ]).set_index("id")
+
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
+
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["surname_norm"] == "lopez"
+
+
+def test_uncontradicted_compound_family_still_teaches_the_lexicon():
+    """A boundary no other record contradicts stays trusted."""
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Sandra Polania Reyes"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Sandra Polania Reyes"], "Year": 2011},
+    ])
+    enriched = pd.DataFrame([
+        {"id": "r-1", "OpenAlex_Authors": [{"display_name": "Sandra Polania Reyes",
+                                            "family": "Polania Reyes", "given": "Sandra",
+                                            "openalex_id": None, "orcid": None}]},
+        {"id": "r-2", "OpenAlex_Authors": [{"display_name": "Sandra Polania Reyes",
+                                            "family": "Polania Reyes", "given": "Sandra",
+                                            "openalex_id": None, "orcid": None}]},
+    ]).set_index("id")
+
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
+
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["surname_norm"] == "polania reyes"
+
+
+def test_alias_merge_preserves_the_published_id_across_a_split():
+    """A curated merge must keep the ID that external crosswalks join on.
+
+    Real-corpus case: OpenAlex spells María Claudia López's own profile
+    'Maria-Claudio Lopez' on one work. Claudia/Claudio sits below the typo
+    threshold that keeps Gabriel/Gabriela apart, so the algorithm splits her —
+    and the prior ID was then retired, breaking institutional crosswalks. The
+    alias says they are one person, which outranks the split.
+    """
+    from citegraph.identity import occurrence_key, reconcile
+
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Maria Claudia Lopez"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Maria Claudia Lopez"], "Year": 2011},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Maria-Claudio Lopez"], "Year": 2012},
+    ])
+    _, published, _ = reconcile({"a-lopez-maria-claudia": {
+        occurrence_key("r-1", 0, "Maria Claudia Lopez"),
+        occurrence_key("r-2", 0, "Maria Claudia Lopez"),
+        occurrence_key("r-3", 0, "Maria-Claudio Lopez"),
+    }})
+    state = {"schema_version": 1, "published": published, "algorithm": published}
+
+    authors_df, _, _ = normalize_authors(
+        works=refs,
+        aliases={"a-lopez-maria-claudio": "a-lopez-maria-claudia"},
+        identity_state=state,
+    )
+
+    assert "a-lopez-maria-claudia" in authors_df.index
+    assert authors_df.loc["a-lopez-maria-claudia", "n_works"] == 3
+
+
+def test_alias_merge_keeps_the_target_identity_not_the_fragment():
+    """The merged cluster must carry the target's ID *and* its name.
+
+    Duplicate OpenAlex profiles split one person; "different ids ⇒ different
+    clusters" is correct and the alias is how the user overrides it. Absorbing
+    the main cluster into the initials-only fragment would preserve the ID
+    while pointing it at the wrong person — worse than a broken join.
+    """
+    from citegraph.identity import occurrence_key, reconcile
+
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Andrés Casas-Casas"], "Year": 2010},
+        {"id": "r-2", "Title": "T2", "Authors_List": ["Andrés Casas-Casas"], "Year": 2011},
+        {"id": "r-3", "Title": "T3", "Authors_List": ["Casas-Casas, A"], "Year": 2012},
+    ])
+    def _oa(ident):
+        return [{"display_name": "Andres Casas-Casas", "family": "Casas-Casas",
+                 "given": "Andres", "openalex_id": ident, "orcid": None}]
+    enriched = pd.DataFrame([
+        {"id": "r-1", "OpenAlex_Authors": _oa("A1")},
+        {"id": "r-2", "OpenAlex_Authors": _oa("A1")},
+        {"id": "r-3", "OpenAlex_Authors": _oa("A2")},
+    ]).set_index("id")
+
+    _, published, _ = reconcile({
+        "a-casas-casas-andres": {occurrence_key("r-1", 0, "Andrés Casas-Casas"),
+                                 occurrence_key("r-2", 0, "Andrés Casas-Casas")},
+        "a-casas-casas-a": {occurrence_key("r-3", 0, "Casas-Casas, A")},
+    })
+    state = {"schema_version": 1, "published": published, "algorithm": published}
+
+    authors_df, _, _ = normalize_authors(
+        works=refs, enriched_works=enriched,
+        aliases={"a-casas-casas-a": "a-casas-casas-andres"},
+        identity_state=state,
+    )
+
+    assert list(authors_df.index) == ["a-casas-casas-andres"]
+    row = authors_df.loc["a-casas-casas-andres"]
+    assert row["n_works"] == 3
+    assert row["display_name"] == "Andrés Casas-Casas"

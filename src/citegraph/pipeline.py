@@ -574,9 +574,23 @@ class Pipeline:
             previous = self._load_works()
             aliases = load_aliases(self.layout.author_aliases_csv)
             if self.layout.authors_csv.exists() and self.layout.author_citations_csv.exists():
+                # Older releases split comma-bearing author strings differently,
+                # so a few stored occurrences no longer describe the works table.
+                # Those are dropped as evidence rather than discarding every
+                # prior assignment over them — a cluster left without an ancestor
+                # gets a fresh ID, it never continues the wrong one.
+                skipped: list = []
                 prior = seed_author_registry(
                     pd.read_csv(self.layout.authors_csv, index_col='id'),
-                    pd.read_csv(self.layout.author_citations_csv), works=previous)
+                    pd.read_csv(self.layout.author_citations_csv),
+                    works=previous, skipped=skipped)
+                if skipped:
+                    logger.warning(
+                        "%d legacy author occurrence(s) no longer match the previous "
+                        "works table and were not used as identity evidence "
+                        "(first: %s on %s); %d prior assignment(s) adopted",
+                        len(skipped), skipped[0][3], skipped[0][1], len(prior['entries']),
+                    )
                 state['published'] = prior
                 if not aliases:
                     state['algorithm'] = prior

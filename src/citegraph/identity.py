@@ -7,12 +7,21 @@ from collections import defaultdict
 from citegraph.io import fingerprint, metadata_fingerprint
 
 
-def reconcile(groups: dict[str, set[str]], previous: dict | None = None) -> tuple[dict, dict, list]:
+def reconcile(groups: dict[str, set[str]], previous: dict | None = None, *,
+              pinned: dict[str, str] | None = None) -> tuple[dict, dict, list]:
     """Keep unambiguous continuations; retire splits and redirect merged IDs.
 
     Missing entities remain reserved so removing/reintroducing input cannot give
     an old annotation key to somebody else. Membership hashes are evidence only;
     new entity IDs are always the supplied deterministic slugs (with suffixes).
+
+    ``pinned`` maps a group key to an ID a *user* asserted it continues — an
+    alias merge naming both spellings of one person. That is the strongest
+    identity evidence available, so a pin claims its ID even when the prior
+    group otherwise reads as a split: the child is not arbitrary, it is the
+    one the user pointed at. The split is still recorded, as
+    ``identity_split_resolved``, and the remaining children get fresh IDs.
+    Two groups can never claim the same pin.
     """
     previous = previous if previous is not None else {
         'schema_version': 1, 'entries': {}, 'reserved_ids': [], 'redirects': {}, 'history': []}
@@ -45,9 +54,21 @@ def reconcile(groups: dict[str, set[str]], previous: dict | None = None) -> tupl
             descendants[old].add(new)
     splits = {old for old, children in descendants.items() if len(children) > 1}
     assigned: dict[str, str] = {}
+    # A user-curated merge outranks the split rule; honour it before anything
+    # else can reserve the ID. Pinned IDs stay in ``splits`` so no *other*
+    # child can pick them up as an ordinary continuation.
+    claimed: dict[str, str] = {}
+    for new in sorted(groups):
+        target = pinned.get(new) if pinned else None
+        if target is None or target in claimed:
+            continue
+        claimed[target] = new
+        assigned[new] = target
     # Reserve all continuations before allocating any new collision suffix.
     for new in sorted(groups):
-        candidates = ancestors[new] - splits
+        if new in assigned:
+            continue
+        candidates = ancestors[new] - splits - set(claimed)
         if candidates:
             assigned[new] = new if new in candidates else min(candidates)
     used = set(assigned.values())
@@ -66,15 +87,24 @@ def reconcile(groups: dict[str, set[str]], previous: dict | None = None) -> tupl
     for new, cid in assigned.items():
         # Preserve disappeared members of a continuation for future restoration.
         members = set(groups[new])
-        for old in ancestors[new] - splits:
+        inherited = ancestors[new] - splits
+        if claimed.get(cid) == new and cid in entries:
+            inherited = inherited | {cid}
+        for old in inherited:
             members.update(entries[old])
             if old != cid:
                 redirects[old] = cid
                 changes.append({'decision': 'identity_merge', 'old_id': old, 'new_id': cid})
         retained[cid] = sorted(members)
     for old in sorted(splits):
-        changes.append({'decision': 'identity_split', 'old_id': old,
-                        'new_ids': sorted(assigned[new] for new in descendants[old])})
+        entry = {'decision': 'identity_split', 'old_id': old,
+                 'new_ids': sorted(assigned[new] for new in descendants[old])}
+        if old in claimed:
+            # A user merge decided which child continues; say so in the audit
+            # rather than reporting the ID as retired.
+            entry['decision'] = 'identity_split_resolved'
+            entry['assigned_id'] = old
+        changes.append(entry)
     # Redirects ending at a split remain retired, never choose a split child.
     state = {'schema_version': 1, 'entries': retained,
              'reserved_ids': sorted(reserved | used), 'redirects': redirects,
@@ -142,7 +172,7 @@ def seed_work_registry(works) -> dict:
     return reconcile(groups)[1]
 
 
-def seed_author_registry(authors, citations, *, works=None) -> dict:
+def seed_author_registry(authors, citations, *, works=None, skipped=None) -> dict:
     from citegraph.authors import _row_authors
 
     if not authors.index.is_unique or citations.duplicated(['record_id', 'position']).any():
@@ -155,6 +185,15 @@ def seed_author_registry(authors, citations, *, works=None) -> dict:
             names = _row_authors(works.loc[row.record_id]) if row.record_id in works.index else []
             position = int(row.position)
             if position != row.position or not 0 <= position < len(names) or names[position] != row.raw_author:
-                raise ValueError('Invalid prior author identity: occurrence differs from previous works')
+                # Older code split comma-bearing author strings differently, so
+                # a handful of legacy occurrences no longer describe the works
+                # table. Callers that pass `skipped` keep the rest of the
+                # registry: dropping an occurrence only removes an anchor, and
+                # a cluster with no surviving ancestor is allocated a fresh ID
+                # rather than silently continuing the wrong one.
+                if skipped is None:
+                    raise ValueError('Invalid prior author identity: occurrence differs from previous works')
+                skipped.append((row.author_id, row.record_id, position, row.raw_author))
+                continue
         groups[row.author_id].add(occurrence_key(row.record_id, row.position, row.raw_author))
     return reconcile(groups)[1]

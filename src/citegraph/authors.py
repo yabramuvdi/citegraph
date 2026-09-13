@@ -1142,27 +1142,74 @@ def normalize_authors(
         identity_changes.extend(changes)
         for source in aliases:
             resolve_redirect(source, aliases)  # reject cycles before resolving history
-        provisional, _, _ = reconcile(memberships(), identity_state.get('published'))
-        public_to_algorithm = {public: internal for internal, public in provisional.items()}
-        previous_bindings = identity_state.get('alias_bindings', {})
-        bindings, migrated_aliases = {}, {}
+        # A curated alias asserts that two spellings are one person. That
+        # outranks both how the algorithm clustered them and how an earlier run
+        # published them, so the merge is settled here — against stored
+        # occurrences, before any published ID is assigned — and identity
+        # assignment simply follows the membership the user chose.
+        previous_entries = (identity_state.get('published') or {}).get('entries', {})
+        current = memberships()
+        parent = {cid: cid for cid in current}
+
+        def _find(cid: str) -> str:
+            while parent[cid] != cid:
+                parent[cid] = parent[parent[cid]]
+                cid = parent[cid]
+            return cid
+
+        def _union(left: str, right: str) -> None:
+            left, right = _find(left), _find(right)
+            if left != right:
+                parent[right] = left
+
+        def _holders(public_id: str) -> list[str]:
+            """Clusters now holding a published ID's occurrences.
+
+            An ID may have been retired by a split, continued by one cluster, or
+            spread over several; following its stored occurrences covers all
+            three without the caller needing to know which happened. An ID with
+            no stored occurrences is only usable if it names a cluster outright.
+            """
+            members = set(previous_entries.get(public_id, ()))
+            holders = sorted(cid for cid, held in current.items() if members & held)
+            if holders:
+                return holders
+            return [public_id] if public_id in current else []
+
+        named: dict[str, set[str]] = defaultdict(set)
+        stale: set[str] = set()
+        bindings = {}
         for source, target in aliases.items():
-            bound = previous_bindings.get(source, {})
-            if bound.get('target') == target:
-                left, right = bound['source_id'], bound['target_id']
-            else:
-                left = public_to_algorithm.get(source, source)
-                right = public_to_algorithm.get(target, target)
-            left = resolve_redirect(left, algorithm['redirects'])
-            right = resolve_redirect(right, algorithm['redirects'])
-            bindings[source] = {'target': target, 'source_id': left, 'target_id': right}
-            if left == right:
-                if left not in {c.id for c in clusters}:
-                    raise ValueError(f'Stale author aliases: {source}; identity requires review')
+            sources, targets = _holders(source), _holders(target)
+            if not sources or not targets:
+                stale.add(source if not sources else target)
                 continue
-            if left in migrated_aliases and migrated_aliases[left] != right:
-                raise ValueError(f'Author alias conflict after identity migration: {source}')
-            migrated_aliases[left] = right
+            for cid in sources[1:] + targets:
+                _union(sources[0], cid)
+            for cid in targets:
+                named[cid].add(target)
+            bindings[source] = {'target': target, 'source_ids': sources, 'target_ids': targets}
+        if stale:
+            raise ValueError(
+                f'Stale author aliases: {sorted(stale)}; review against current authors')
+
+        components: dict[str, list[str]] = defaultdict(list)
+        for cid in current:
+            components[_find(cid)].append(cid)
+        migrated_aliases, pins = {}, {}
+        for component in components.values():
+            claims = {t for cid in component for t in named.get(cid, ())}
+            if not claims:
+                continue
+            # Absorb into a cluster the user actually named, the largest one
+            # first, so the survivor carries that person's display name instead
+            # of an initials-only fragment's.
+            canonical = max((cid for cid in component if named.get(cid)),
+                            key=lambda cid: (len(current[cid]), cid))
+            for cid in component:
+                if cid != canonical:
+                    migrated_aliases[cid] = canonical
+            pins[canonical] = max(claims, key=lambda t: (len(previous_entries.get(t, ())), t))
         aliases = migrated_aliases
 
     # Apply user-curated aliases: merge cluster B into cluster A.
@@ -1170,11 +1217,11 @@ def normalize_authors(
         clusters = _apply_aliases(clusters, aliases)
 
     if identity_state is not None:
-        # The surviving alias target may have a different public ID after an
-        # earlier split. Prefer that ID when several published groups merge.
-        for c in clusters:
-            c.id = provisional[c.id]
-        mapping, published, changes = reconcile(memberships(), identity_state.get('published'))
+        # Membership is already what the user asked for; assigning IDs is all
+        # that is left. The pins carry their merges through a split that would
+        # otherwise retire the very IDs external crosswalks join on.
+        mapping, published, changes = reconcile(
+            memberships(), identity_state.get('published'), pinned=pins)
         for c in clusters:
             c.id = mapping[c.id]
         identity_changes.extend(changes)
@@ -1349,21 +1396,44 @@ def _build_surname_lexicon(
         )
         if trusted:
             lexicon.add(norm)
+    # A multi-word `family` redefines a surname boundary for the whole corpus,
+    # so a provider record that *contradicts* another record for the same name
+    # must not carry it: CrossRef returned family="Claudia Lopez"/given="Maria"
+    # for María Claudia López on one work while others said "Lopez", and
+    # adopting the longer boundary shattered her into three clusters (one of
+    # them holding her OpenAlex id). When the corpus attests a shorter boundary
+    # for the same display name, keep the conservative last-token parse — which
+    # `author_review.json` already flags as a possible compound surname —
+    # rather than trusting the longer one. An uncontradicted `family` is still
+    # trusted on its own, so a lone "Guerra Forero" record still teaches it.
+    families_by_display: dict[str, set[str]] = defaultdict(set)
+    candidates: list[tuple[str, str]] = []
     for items in enrich_map.values():
         for item in items:
             family = item.get("family")
             if not isinstance(family, str):
                 continue
             family_norm = _norm_surname(family)
+            display = item.get("display_name")
+            display_norm = _norm_surname(display) if isinstance(display, str) else ""
+            families_by_display[display_norm].add(family_norm)
             if " " not in family_norm:
                 continue
             # CrossRef sometimes stuffs the entire name into `family`
             # (with an empty `given`); a family that swallows the whole
             # display name attests nothing about the surname boundary.
-            display = item.get("display_name")
-            if isinstance(display, str) and _norm_surname(display) == family_norm:
+            if display_norm and display_norm == family_norm:
                 continue
-            lexicon.add(family_norm)
+            candidates.append((display_norm, family_norm))
+    for display_norm, family_norm in candidates:
+        shorter = {
+            other
+            for other in families_by_display[display_norm] - {family_norm}
+            if other and family_norm.endswith(f" {other}")
+        }
+        if display_norm and shorter:
+            continue
+        lexicon.add(family_norm)
     return frozenset(lexicon)
 
 
