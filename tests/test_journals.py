@@ -159,3 +159,43 @@ def test_add_canonical_journals_preserves_the_index():
     out = add_canonical_journals(df)
     assert out.index.name == "id"
     assert list(out.index) == ["w-a"]
+
+
+# ---------------------------------------------------------------------------
+# Pipeline: which fold validates the curated rows
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_with_aliases(tmp_path, rows):
+    """A Pipeline whose out_dir carries a ``journal_aliases.csv`` of ``rows``."""
+    from citegraph.pipeline import Pipeline
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "journal_aliases.csv").write_text(
+        "raw,canonical\n" + "".join(f"{raw},{canon}\n" for raw, canon in rows),
+        encoding="utf-8",
+    )
+    return Pipeline(pdf_dir=None, out_dir=out_dir)
+
+
+def test_extracted_fold_still_rejects_an_alias_that_matches_nothing(tmp_path):
+    pipeline = _pipeline_with_aliases(tmp_path, [("Nonexistent Journal", "Something")])
+    with pytest.raises(ValueError, match="Nonexistent Journal"):
+        pipeline._with_canonical_journals(pd.DataFrame({"Journal": ["Science"]}))
+
+
+def test_enriched_fold_accepts_an_alias_the_provider_already_expanded(tmp_path):
+    """An abbreviation alias is doing its job when it matches nothing here.
+
+    ``journal_aliases.csv`` mostly expands extraction abbreviations. A work the
+    provider matched already reports the full container title, so the curated
+    row has nothing to fold on the enriched side — that is success, not a
+    stale row, and it must not raise.
+    """
+    pipeline = _pipeline_with_aliases(tmp_path, [("Ecol. Econ.", "Ecological Economics")])
+    enriched = pd.DataFrame({"Journal": ["Ecological Economics", "Science"]})
+
+    out = pipeline._with_canonical_journals(enriched, strict=False)
+
+    assert out["Journal_Canonical"].tolist() == ["Ecological Economics", "Science"]

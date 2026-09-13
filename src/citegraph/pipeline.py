@@ -795,7 +795,9 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Stage 5: optional enrichment
     # ------------------------------------------------------------------
-    def _with_canonical_journals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _with_canonical_journals(
+        self, df: pd.DataFrame, *, strict: bool = True
+    ) -> pd.DataFrame:
         """Attach ``Journal_Canonical`` using ``journal_aliases.csv`` if present.
 
         Computed twice on purpose: ``works.csv`` folds the extracted names so
@@ -803,11 +805,19 @@ class Pipeline:
         folds the provider container titles, which are the better basis. Each
         artifact is canonical for its own consumers, the same way ``Journal``
         already is.
+
+        Only the extracted fold validates the curated rows (``strict``). The
+        two folds are different vocabularies: the file exists mostly to expand
+        extraction abbreviations ("Ecol. Econ."), and a provider that matched
+        the work already reports "Ecological Economics", so those rows match
+        nothing on the enriched side. Validating there too would reject a
+        correct row for doing its job — it only ever passed before because
+        works that *missed* enrichment keep their extracted journal name.
         """
         from citegraph.journals import add_canonical_journals, load_journal_aliases
 
         aliases = load_journal_aliases(self.layout.journal_aliases_csv)
-        return add_canonical_journals(df, aliases, strict=bool(aliases))
+        return add_canonical_journals(df, aliases, strict=strict and bool(aliases))
 
     def maybe_enrich(self, works: pd.DataFrame | None = None) -> pd.DataFrame:
         if works is None:
@@ -817,7 +827,7 @@ class Pipeline:
         from citegraph.enrich import enrich_works
 
         enriched = enrich_works(works, cfg=self.enrich_config, layout=self.layout)
-        enriched = self._with_canonical_journals(enriched)
+        enriched = self._with_canonical_journals(enriched, strict=False)
         write_csv(self.layout.enriched_works_csv, enriched, index=True)
         persisted = pd.read_csv(self.layout.enriched_works_csv, index_col='id')
         write_json(self.layout.enrichment_provenance_json, {
