@@ -9,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Literal
 
+from citegraph.io import OutLayout, cache_input_fingerprint, read_json, write_json
+
 logger = logging.getLogger(__name__)
 
 # ``ocr`` flag accepted by :func:`convert_directory` and the ``Pipeline``:
@@ -100,6 +102,67 @@ def _is_image_only(path: Path, min_text_chars: int = 200) -> bool:
 _GLYPH_PLACEHOLDER = "glyph<UNKNOWN>"
 
 
+def _conversion_entries(markdown_dir: Path) -> tuple[dict[str, dict], bool]:
+    path = OutLayout(markdown_dir.parent).conversion_cache_json
+    if not path.exists():
+        return {}, True
+    try:
+        data = read_json(path)
+    except (OSError, UnicodeError, ValueError):
+        return {}, False
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return {}, False
+    entries = data.get("entries") if isinstance(data, dict) else None
+    return (entries, True) if isinstance(entries, dict) else ({}, False)
+
+
+def _write_conversion_entry(
+    markdown_dir: Path, pdf_path: Path, out_path: Path, *, ocr: bool
+) -> None:
+    layout = OutLayout(markdown_dir.parent)
+    entries, _ = _conversion_entries(markdown_dir)
+    entries[out_path.name] = {
+        "input_sha256": cache_input_fingerprint(pdf_path),
+        "output_sha256": cache_input_fingerprint(out_path),
+        "ocr": ocr,
+    }
+    write_json(layout.conversion_cache_json, {"version": 1, "entries": entries})
+
+
+def _valid_conversion(
+    entry: object, pdf_hash: str, markdown_path: Path, *, ocr: bool
+) -> bool:
+    return (
+        isinstance(entry, dict)
+        and entry.get("input_sha256") == pdf_hash
+        and (not ocr or entry.get("ocr") is True)
+        and markdown_path.exists()
+        and entry.get("output_sha256") == cache_input_fingerprint(markdown_path)
+    )
+
+
+def _copy_atomic(source: Path, target: Path) -> None:
+    fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(source.read_bytes())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _ocr_already_attempted(pdf_path: Path, markdown_path: Path) -> bool:
+    entries, _ = _conversion_entries(markdown_path.parent)
+    entry = entries.get(markdown_path.name)
+    return _valid_conversion(
+        entry,
+        cache_input_fingerprint(pdf_path),
+        markdown_path,
+        ocr=True,
+    )
+
+
 def _has_unmappable_glyphs(
     path: Path, min_glyphs: int = 20, min_rate: float = 0.01
 ) -> bool:
@@ -132,9 +195,10 @@ def convert_pdf_to_markdown(
 ) -> Path:
     """Convert a single PDF to markdown and write it to ``markdown_dir``.
 
-    If the markdown file already exists and ``overwrite`` is ``False``, the
-    existing file is reused (the docling conversion is the slow step we
-    explicitly want to cache).
+    With ``overwrite=False``, a recorded conversion is reused only while its
+    PDF, markdown output, and OCR setting still match. A content-identical PDF
+    can also reuse a recorded sibling after a rename. Existing stem caches
+    without provenance retain the historical reuse behavior.
 
     ``cache_stem`` overrides the output filename stem; without it the PDF's
     own ``stem`` is used. Pass an explicit stem (e.g. one produced by
@@ -150,9 +214,33 @@ def convert_pdf_to_markdown(
 
     stem = cache_stem if cache_stem is not None else pdf_path.stem
     out_path = markdown_dir / f"{stem}.md"
-    if out_path.exists() and not overwrite:
-        logger.debug("Skipping %s (cached at %s)", pdf_path.name, out_path)
-        return out_path
+    if not overwrite:
+        entries, allow_legacy = _conversion_entries(markdown_dir)
+        pdf_hash = cache_input_fingerprint(pdf_path)
+        entry = entries.get(out_path.name)
+        if _valid_conversion(entry, pdf_hash, out_path, ocr=ocr):
+            logger.debug("Skipping %s (cached at %s)", pdf_path.name, out_path)
+            return out_path
+        if out_path.exists() and entry is None and allow_legacy and not ocr:
+            _write_conversion_entry(markdown_dir, pdf_path, out_path, ocr=ocr)
+            logger.debug("Skipping %s (legacy cache at %s)", pdf_path.name, out_path)
+            return out_path
+        for cached_name, cached_entry in sorted(entries.items()):
+            cached_path = markdown_dir / cached_name
+            if (
+                cached_path.name == cached_name
+                and cached_path.suffix == ".md"
+                and _valid_conversion(cached_entry, pdf_hash, cached_path, ocr=ocr)
+            ):
+                _copy_atomic(cached_path, out_path)
+                _write_conversion_entry(
+                    markdown_dir,
+                    pdf_path,
+                    out_path,
+                    ocr=bool(cached_entry.get("ocr")),
+                )
+                logger.debug("Reusing %s by content at %s", pdf_path.name, out_path)
+                return out_path
 
     logger.info("Converting %s -> markdown%s", pdf_path.name, " (OCR)" if ocr else "")
     # Imported lazily so ``import citegraph`` stays cheap and so docling is
@@ -183,6 +271,7 @@ def convert_pdf_to_markdown(
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+    _write_conversion_entry(markdown_dir, pdf_path, out_path, ocr=ocr)
     return out_path
 
 
@@ -274,7 +363,8 @@ def convert_directory(
         retry_pairs = [
             (pdf, md)
             for pdf, md in zip(pdfs, out_paths, strict=True)
-            if _is_image_only(md) or _has_unmappable_glyphs(md)
+            if (_is_image_only(md) or _has_unmappable_glyphs(md))
+            and not _ocr_already_attempted(pdf, md)
         ]
         if retry_pairs:
             logger.info(

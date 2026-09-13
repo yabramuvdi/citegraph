@@ -54,7 +54,8 @@ def test_subheader_does_not_terminate_section() -> None:
 
 
 def test_last_section_runs_to_end_of_file() -> None:
-    trailing = "## APPENDIX A\n\nSurvey instrument.\n"
+    """Unrecognised trailing headers never truncate the last bibliography."""
+    trailing = "## Notas finales del autor\n\nUn comentario.\n"
     text = CHAPTER_1 + REFS_2 + trailing
     body, sections = split_reference_sections(text)
     assert sections == [REFS_2 + trailing]
@@ -148,3 +149,62 @@ def test_extraction_single_section_makes_one_call(tmp_path: Path) -> None:
 
     assert len(client.prompts) == 1
     assert [r.Title for r in result] == ["A paper"]
+
+
+# ---------------------------------------------------------------------------
+# Back matter terminates the final section (real corpus failure modes)
+# ---------------------------------------------------------------------------
+# A Gothenburg PhD dissertation ends its last bibliography with the
+# department's list of previous theses in the series. It reads exactly like a
+# bibliography, so only the header tells the two apart.
+GOTHENBURG_BACK_MATTER = (
+    "## Previous doctoral theses in the Department of Economics, Gothenburg\n\n"
+    "Ostman, Hugo (1911), Norrlands ekonomiska utveckling\n\n"
+    "Moritz, Marcus (1911), Den svenska tobaksindustrien\n"
+)
+
+
+def test_last_section_stops_at_previous_theses_back_matter() -> None:
+    text = CHAPTER_1 + REFS_1 + GOTHENBURG_BACK_MATTER
+    body, sections = split_reference_sections(text)
+    assert sections == [REFS_1]
+    assert "Norrlands ekonomiska utveckling" in body
+
+
+def test_last_section_stops_at_appendix() -> None:
+    trailing = "## APPENDIX\n\nSurvey instrument.\n"
+    text = CHAPTER_1 + REFS_1 + trailing
+    _body, sections = split_reference_sections(text)
+    assert sections == [REFS_1]
+
+
+def test_last_section_stops_at_supporting_online_material() -> None:
+    trailing = "## Supporting Online Material\n\nMaterials and Methods.\n"
+    text = CHAPTER_1 + REFS_1 + trailing
+    _body, sections = split_reference_sections(text)
+    assert sections == [REFS_1]
+
+
+def test_unrecognized_trailing_header_still_runs_to_end_of_file() -> None:
+    """Fail closed: a running page head inside a bibliography must not truncate it.
+
+    ``## 94 ECONOMIA, Spring 2009`` sits mid-list in a real source paper, with
+    ten more references after it.
+    """
+    running_head = "## 94 ECONOMIA, Spring 2009\n\n- Kim, O., 1984. The Free Rider Problem.\n"
+    text = CHAPTER_1 + REFS_1 + running_head
+    _body, sections = split_reference_sections(text)
+    assert sections == [REFS_1 + running_head]
+
+
+def test_back_matter_subheader_does_not_terminate_section() -> None:
+    """Level still rules: a deeper header never ends a section."""
+    refs = "## References\n\n- Smith, J., 2019. A paper.\n\n### Notes\n\n- Jones, A., 2020.\n"
+    _body, sections = split_reference_sections(CHAPTER_1 + refs)
+    assert sections == [refs]
+
+
+def test_back_matter_ends_a_non_final_section_too() -> None:
+    text = CHAPTER_1 + REFS_1 + "## Acknowledgments\n\nThanks.\n\n" + CHAPTER_2 + REFS_2
+    _body, sections = split_reference_sections(text)
+    assert sections[0] == REFS_1

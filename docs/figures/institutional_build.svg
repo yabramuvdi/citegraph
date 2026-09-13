@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1680 620" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <title>From one hand-collected spreadsheet to four tidy tables: institutions resolve to ROR ids, people to citegraph author ids, departments to fields, with guarded row-level corrections</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1680" height="620" fill="#ffffff"/>
+
+  <!-- ============ STAGE 1: the spreadsheet ============ -->
+  <rect x="60" y="240" width="150" height="110" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <g stroke="#e2e8f0" stroke-width="1">
+    <line x1="60" y1="268" x2="210" y2="268"/>
+    <line x1="60" y1="296" x2="210" y2="296"/>
+    <line x1="60" y1="324" x2="210" y2="324"/>
+    <line x1="110" y1="240" x2="110" y2="350"/>
+    <line x1="160" y1="240" x2="160" y2="350"/>
+  </g>
+  <circle cx="60" cy="240" r="14" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="60" y="244.5" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">1</text>
+  <text x="135" y="372" text-anchor="middle" font-size="13" font-weight="600" fill="#1e293b">base_institucional.xlsx</text>
+  <text x="135" y="390" text-anchor="middle" font-size="11" fill="#64748b">59 authors &#215; 23 fields</text>
+  <text x="135" y="406" text-anchor="middle" font-size="11" fill="#64748b">hand-typed</text>
+  <rect x="75" y="418" width="120" height="22" rx="11" fill="#e2e8f0"/>
+  <text x="135" y="433" text-anchor="middle" font-size="11" fill="#334155">never modified</text>
+
+  <line x1="210" y1="295" x2="258" y2="295" stroke="#475569" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- ============ STAGE 2: crosswalks ============ -->
+  <rect x="270" y="150" width="470" height="380" rx="12" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <circle cx="270" cy="150" r="14" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="270" y="154.5" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">2</text>
+  <text x="505" y="183" text-anchor="middle" font-size="16" font-weight="bold" fill="#1e293b">Resolve against crosswalks</text>
+
+  <rect x="300" y="200" width="410" height="68" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.25"/>
+  <text x="320" y="222" font-size="13" font-weight="600" fill="#1e293b">Institutions &#8594; ROR id</text>
+  <text x="320" y="240" font-size="10.5" fill="#64748b">97 raw strings &#8594; 85 institutions;</text>
+  <text x="320" y="256" font-size="10.5" fill="#64748b">the recorded country is cross-checked</text>
+
+  <rect x="300" y="282" width="410" height="68" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.25"/>
+  <text x="320" y="304" font-size="13" font-weight="600" fill="#1e293b">People &#8594; author_id</text>
+  <text x="320" y="322" font-size="10.5" fill="#64748b">108 names (authors and advisors);</text>
+  <text x="320" y="338" font-size="10.5" fill="#64748b">70 matched to a citegraph author</text>
+
+  <rect x="300" y="364" width="410" height="54" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.25"/>
+  <text x="320" y="386" font-size="13" font-weight="600" fill="#1e293b">Departments &#8594; fields</text>
+  <text x="320" y="404" font-size="10.5" fill="#64748b">31 department strings, made countable</text>
+
+  <rect x="300" y="432" width="410" height="68" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.25"/>
+  <text x="320" y="454" font-size="13" font-weight="600" fill="#1e293b">corrections.csv</text>
+  <text x="320" y="472" font-size="10.5" fill="#64748b">row-level fixes, each guarded by the</text>
+  <text x="320" y="488" font-size="10.5" fill="#64748b">old_value it expects</text>
+
+  <!-- ============ fan out into the four tables ============ -->
+  <g fill="none" stroke="#475569" stroke-width="1.8">
+    <path d="M740,340 H770 Q778,340 778,332 V209 Q778,201 786,201 H806" marker-end="url(#arr)"/>
+    <path d="M740,340 H770 Q778,340 778,332 V307 Q778,299 786,299 H806" marker-end="url(#arr)"/>
+    <path d="M740,340 H770 Q778,340 778,348 V389 Q778,397 786,397 H806" marker-end="url(#arr)"/>
+    <path d="M740,340 H770 Q778,340 778,348 V487 Q778,495 786,495 H806" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- ============ STAGE 3: four tidy tables ============ -->
+  <text x="1025" y="140" text-anchor="middle" font-size="10" letter-spacing="0.8" fill="#94a3b8">OUT/ &#8212; FOUR TIDY TABLES</text>
+
+  <rect x="810" y="160" width="430" height="82" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="832" y="186" font-size="13" font-weight="600" fill="#1e293b">base_institucional_clean.csv</text>
+  <text x="832" y="206" font-size="10.5" fill="#64748b">59 rows &#183; one per author</text>
+  <text x="832" y="222" font-size="10.5" fill="#64748b">the familiar wide shape, cleaned</text>
+  <circle cx="810" cy="160" r="14" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="810" y="164.5" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">3</text>
+
+  <rect x="810" y="258" width="430" height="82" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="832" y="284" font-size="13" font-weight="600" fill="#1e293b">career_positions.csv</text>
+  <text x="832" y="304" font-size="10.5" fill="#64748b">139 rows &#183; one per (author, position)</text>
+  <text x="832" y="320" font-size="10.5" fill="#64748b">tidy; this is the one to aggregate over</text>
+
+  <rect x="810" y="356" width="430" height="82" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="832" y="382" font-size="13" font-weight="600" fill="#1e293b">supervision.csv</text>
+  <text x="832" y="402" font-size="10.5" fill="#64748b">62 rows &#183; advisor &#8594; advisee</text>
+  <text x="832" y="418" font-size="10.5" fill="#64748b">PhD ties only; all high-confidence</text>
+
+  <rect x="810" y="454" width="430" height="82" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="832" y="480" font-size="13" font-weight="600" fill="#1e293b">review_flags.csv</text>
+  <text x="832" y="500" font-size="10.5" fill="#64748b">18 rows &#183; every change made on evidence,</text>
+  <text x="832" y="516" font-size="10.5" fill="#64748b">and everything still unresolved</text>
+
+  <!-- ============ two decisions worth knowing ============ -->
+  <rect x="1280" y="160" width="340" height="206" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.25"/>
+  <text x="1302" y="188" font-size="13" font-weight="600" fill="#1e293b">Missing is three-valued</text>
+  <text x="1302" y="212" font-size="10.5" fill="#64748b">The spreadsheet used &#8220;No&#8221; (genuinely</text>
+  <text x="1302" y="228" font-size="10.5" fill="#64748b">none), &#8220;Not found&#8221; (unknown) and blanks</text>
+  <text x="1302" y="244" font-size="10.5" fill="#64748b">interchangeably. They are kept apart, so</text>
+  <text x="1302" y="260" font-size="10.5" fill="#64748b">a rate uses the known cases as its</text>
+  <text x="1302" y="276" font-size="10.5" fill="#64748b">denominator.</text>
+  <rect x="1302" y="292" width="86" height="22" rx="11" fill="#e2e8f0"/>
+  <text x="1345" y="307" text-anchor="middle" font-size="10.5" fill="#334155">present 18</text>
+  <rect x="1396" y="292" width="70" height="22" rx="11" fill="#e2e8f0"/>
+  <text x="1431" y="307" text-anchor="middle" font-size="10.5" fill="#334155">none 33</text>
+  <rect x="1474" y="292" width="86" height="22" rx="11" fill="#e2e8f0"/>
+  <text x="1517" y="307" text-anchor="middle" font-size="10.5" fill="#334155">unknown 8</text>
+  <text x="1302" y="344" font-size="11" font-weight="600" fill="#1e293b">postdoc rate = 18 / 51, not 18 / 59</text>
+
+  <rect x="1280" y="392" width="340" height="170" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.25"/>
+  <text x="1302" y="420" font-size="13" font-weight="600" fill="#1e293b">Why ROR, not the string</text>
+  <text x="1302" y="444" font-size="10.5" fill="#64748b">Several institutions share a name across</text>
+  <text x="1302" y="460" font-size="10.5" fill="#64748b">countries. A first pass matched</text>
+  <text x="1302" y="476" font-size="10.5" fill="#64748b">&#8220;Northwestern University&#8221; to the</text>
+  <text x="1302" y="492" font-size="10.5" fill="#64748b">Philippine university of that name on a</text>
+  <text x="1302" y="508" font-size="10.5" fill="#64748b">perfect string score; cross-checking the</text>
+  <text x="1302" y="524" font-size="10.5" fill="#64748b">recorded country prevents it.</text>
+
+  <text x="840" y="596" text-anchor="middle" font-size="11.5" fill="#64748b">All three scripts are re-runnable: crosswalk rows already present are preserved and only new raw strings appended, so hand edits survive.</text>
+</svg>

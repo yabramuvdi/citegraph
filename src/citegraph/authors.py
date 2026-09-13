@@ -989,6 +989,7 @@ def normalize_authors(
     aliases: dict[str, str] | None = None,
     constraints: list[dict] | None = None,
     audit: list[dict] | None = None,
+    identity_state: dict | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[dict]]:
     """Cluster authors across the corpus.
 
@@ -1127,9 +1128,58 @@ def normalize_authors(
                     "clusters in this surname block"
                 )
 
+    identity_changes = []
+    if identity_state is not None:
+        from citegraph.identity import occurrence_key, reconcile, resolve_redirect
+
+        def memberships():
+            return {c.id: {occurrence_key(o.record_id, o.position, o.parsed.raw)
+                           for o in c.occurrences} for c in clusters}
+
+        mapping, algorithm, changes = reconcile(memberships(), identity_state.get('algorithm'))
+        for c in clusters:
+            c.id = mapping[c.id]
+        identity_changes.extend(changes)
+        for source in aliases:
+            resolve_redirect(source, aliases)  # reject cycles before resolving history
+        provisional, _, _ = reconcile(memberships(), identity_state.get('published'))
+        public_to_algorithm = {public: internal for internal, public in provisional.items()}
+        previous_bindings = identity_state.get('alias_bindings', {})
+        bindings, migrated_aliases = {}, {}
+        for source, target in aliases.items():
+            bound = previous_bindings.get(source, {})
+            if bound.get('target') == target:
+                left, right = bound['source_id'], bound['target_id']
+            else:
+                left = public_to_algorithm.get(source, source)
+                right = public_to_algorithm.get(target, target)
+            left = resolve_redirect(left, algorithm['redirects'])
+            right = resolve_redirect(right, algorithm['redirects'])
+            bindings[source] = {'target': target, 'source_id': left, 'target_id': right}
+            if left == right:
+                if left not in {c.id for c in clusters}:
+                    raise ValueError(f'Stale author aliases: {source}; identity requires review')
+                continue
+            if left in migrated_aliases and migrated_aliases[left] != right:
+                raise ValueError(f'Author alias conflict after identity migration: {source}')
+            migrated_aliases[left] = right
+        aliases = migrated_aliases
+
     # Apply user-curated aliases: merge cluster B into cluster A.
     if aliases:
         clusters = _apply_aliases(clusters, aliases)
+
+    if identity_state is not None:
+        # The surviving alias target may have a different public ID after an
+        # earlier split. Prefer that ID when several published groups merge.
+        for c in clusters:
+            c.id = provisional[c.id]
+        mapping, published, changes = reconcile(memberships(), identity_state.get('published'))
+        for c in clusters:
+            c.id = mapping[c.id]
+        identity_changes.extend(changes)
+        identity_state.update(schema_version=1, algorithm=algorithm, published=published,
+                              alias_bindings=bindings)
 
     authors_df = _clusters_to_authors_df(
         clusters, works=works, citation_edges=citation_edges
@@ -1147,6 +1197,8 @@ def normalize_authors(
         for c in clusters
         if c.review_reason
     ]
+    review.extend({'author_id': entry['old_id'], 'reason': 'identity_split', **entry}
+                  for entry in identity_changes if entry['decision'] == 'identity_split')
 
     author_by_occurrence = {(row.record_id, row.position): row.author_id
                             for row in citations_df.itertuples(index=False)}
@@ -1190,6 +1242,7 @@ def normalize_authors(
                 review.append(finding)
                 resolution_audit.append(finding)
     if audit is not None:
+        audit.extend(identity_changes)
         audit.extend(attachment_audit)
         audit.extend(resolution_audit)
         audit.extend({"decision": "manual_override", **row} for row in constraints or [])

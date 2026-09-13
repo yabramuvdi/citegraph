@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -31,7 +32,15 @@ from tenacity import (
 if TYPE_CHECKING:
     from citegraph.io import OutLayout
 
-from citegraph.io import metadata_fingerprint, parse_authors_list, write_json
+from citegraph.io import (
+    fingerprint as content_fingerprint,
+)
+from citegraph.io import (
+    metadata_fingerprint,
+    parse_authors_list,
+    unverified_collision_ids,
+    write_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -439,7 +448,162 @@ def _scalar_str(value: Any) -> str:
 
 
 def _write_cache(cache_path: Path, data: dict, input_fingerprint: str) -> None:
-    write_json(cache_path, {"schema_version": 2, "input_fingerprint": input_fingerprint, "result": data})
+    write_json(cache_path, {"schema_version": 2, "input_fingerprint": input_fingerprint,
+                           "result_fingerprint": content_fingerprint(data), "result": data})
+
+
+_FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _valid_result(result: Any, *, strict: bool) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if not strict:
+        if not {'doi', 'enrichment_source'} <= result.keys():
+            return False
+        result = _with_cache_diagnostics(result)
+    status = result.get("enrichment_status")
+    if strict and status not in {"matched", "miss"}:
+        return False
+    source = result.get("enrichment_source")
+    reason = result.get("enrichment_miss_reason")
+    if strict and status == "matched" and not {
+        "doi", "Title", "Authors", "Authors_List", "OpenAlex_Authors",
+        "Journal", "Year", "enrichment_source", "enrichment_status",
+        "enrichment_miss_reason",
+    }.issubset(result):
+        return False
+    if status == "matched" and (source not in {"crossref", "openalex"} or reason is not None):
+        return False
+    if status == "miss" and (source is not None or not isinstance(reason, str)):
+        return False
+    if "doi" in result and result["doi"] is not None and not isinstance(result["doi"], str):
+        return False
+    for key in ("Title", "Authors", "Journal"):
+        if key in result and not isinstance(result[key], str):
+            return False
+    if "Authors_List" in result and (
+        not isinstance(result["Authors_List"], list)
+        or any(not isinstance(author, str) for author in result["Authors_List"])
+    ):
+        return False
+    if "Year" in result and result["Year"] is not None and (
+        isinstance(result["Year"], bool) or not isinstance(result["Year"], int)
+    ):
+        return False
+    for key in ("enrichment_title_score", "enrichment_adjusted_score"):
+        value = result.get(key)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            return False
+    candidate = result.get("enrichment_candidate_title")
+    if candidate is not None and not isinstance(candidate, str):
+        return False
+    year_match = result.get("enrichment_year_match")
+    if year_match is not None and not isinstance(year_match, bool):
+        return False
+    year_delta = result.get("enrichment_year_delta")
+    if year_delta is not None and (
+        isinstance(year_delta, bool) or not isinstance(year_delta, int) or year_delta < 0
+    ):
+        return False
+    authors = result.get("OpenAlex_Authors")
+    if authors is not None and (
+        not isinstance(authors, list)
+        or any(
+            not isinstance(author, dict)
+            or not isinstance(author.get("display_name"), str)
+            or any(
+                author.get(key) is not None and not isinstance(author.get(key), str)
+                for key in ("family", "given", "openalex_id", "orcid")
+            )
+            for author in authors
+        )
+    ):
+        return False
+    return True
+
+
+def _read_cache_index(
+    layout: OutLayout,
+) -> tuple[dict[str, tuple[str, dict]], dict[str, list[dict]], dict[str, dict]]:
+    """Read each enrichment cache once and index validated envelopes."""
+    by_id: dict[str, tuple[str, dict]] = {}
+    by_fingerprint: dict[str, list[dict]] = {}
+    legacy_by_id: dict[str, dict] = {}
+    if not layout.enrichment_dir.is_dir():
+        return by_id, by_fingerprint, legacy_by_id
+    for path in layout.enrichment_dir.glob("*.json"):
+        try:
+            cached = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            logger.warning("Ignoring malformed enrichment cache %s: %s", path.name, exc)
+            continue
+        if not isinstance(cached, dict):
+            logger.warning("Ignoring malformed enrichment cache %s", path.name)
+            continue
+        if cached.get("schema_version") == 2:
+            fingerprint = cached.get("input_fingerprint")
+            result = cached.get("result")
+            if (
+                not isinstance(fingerprint, str)
+                or _FINGERPRINT_RE.fullmatch(fingerprint) is None
+                or not _valid_result(result, strict=True)
+                or ('result_fingerprint' in cached
+                    and cached['result_fingerprint'] != content_fingerprint(result))
+            ):
+                logger.warning("Ignoring malformed enrichment cache %s", path.name)
+                continue
+            if result.get("enrichment_miss_reason") == "http_error":
+                continue
+            by_id[path.stem] = (fingerprint, result)
+            by_fingerprint.setdefault(fingerprint, []).append(result)
+        elif (
+            'schema_version' not in cached and _valid_result(cached, strict=False)
+            and cached.get("enrichment_miss_reason") != "http_error"
+        ):
+            legacy_by_id[path.stem] = cached
+        else:
+            logger.warning("Ignoring malformed enrichment cache %s", path.name)
+    return by_id, by_fingerprint, legacy_by_id
+
+
+def _same_result(results: list[dict]) -> dict | None:
+    if not results:
+        return None
+    serialized = {json.dumps(result, sort_keys=True, ensure_ascii=False) for result in results}
+    return results[0] if len(serialized) == 1 else None
+
+
+def load_cached_enrichments(
+    works: pd.DataFrame,
+    layout: OutLayout,
+    *,
+    verified_only: bool = True,
+) -> pd.DataFrame:
+    """Load independently validated cache hits for the current works, offline."""
+    by_id, by_fingerprint, legacy_by_id = _read_cache_index(layout)
+    collisions = set() if verified_only else unverified_collision_ids(layout)
+    rows: dict[Any, dict] = {}
+    for work_id, row in works.iterrows():
+        work_id_str = str(work_id)
+        fingerprint = metadata_fingerprint(row.to_dict())
+        exact = by_id.get(work_id_str)
+        result = exact[1] if exact is not None and exact[0] == fingerprint else None
+        if result is None:
+            result = _same_result(by_fingerprint.get(fingerprint, []))
+        if result is None and not verified_only and work_id_str not in collisions:
+            result = legacy_by_id.get(work_id_str)
+            if result is None and work_id_str.startswith("w-"):
+                result = legacy_by_id.get(f"r-{work_id_str[2:]}")
+        if result is not None:
+            rows[work_id] = _apply_enrichment_result(row.to_dict(), result)
+    cached = pd.DataFrame.from_dict(rows, orient="index")
+    cached.index.name = works.index.name
+    return cached
 
 
 def _apply_enrichment_result(row: dict, result: dict) -> dict:
@@ -488,12 +652,14 @@ def _enrich_one(
     cfg: EnrichConfig,
     client: Any,
     enrichment_dir: Path | None,
+    *,
+    read_cache: bool = True,
 ) -> dict:
     """Resolve one reference row, using the per-ref cache when available."""
     row_dict = row.to_dict()
     input_fingerprint = metadata_fingerprint(row_dict)
 
-    if enrichment_dir is not None:
+    if enrichment_dir is not None and read_cache:
         cache_path = enrichment_dir / f"{ref_id}.json"
         if not cache_path.exists() and ref_id.startswith("w-"):
             # Pre-works-model corpora cached under the legacy r- prefix;
@@ -512,6 +678,8 @@ def _enrich_one(
                     if not isinstance(result, dict):
                         raise TypeError("expected a result object")
                     valid = cached.get("input_fingerprint") == input_fingerprint
+                    if 'result_fingerprint' in cached:
+                        valid = valid and cached['result_fingerprint'] == content_fingerprint(result)
                     cached = result
                 else:
                     # Path is derived from OutLayout, including for direct cache callers.
@@ -649,26 +817,34 @@ def enrich_works(
     (legacy ``r-``-prefixed cache files are honored for ``w-`` ids).
     """
     cfg = cfg or EnrichConfig()
-    httpx = _try_import_httpx()
     enrichment_dir = layout.enrichment_dir if layout is not None else None
 
-    results: dict[Any, dict] = {}
-    with httpx.Client() as client:
-        with ThreadPoolExecutor(max_workers=cfg.max_workers) as pool:
-            futures = {
-                pool.submit(
-                    _enrich_one,
-                    str(idx),
-                    row,
-                    cfg,
-                    client,
-                    enrichment_dir,
-                ): idx
-                for idx, row in df.iterrows()
-            }
-            for fut in as_completed(futures):
-                idx = futures[fut]
-                results[idx] = fut.result()
+    cached = (
+        load_cached_enrichments(df, layout, verified_only=False)
+        if layout is not None
+        else pd.DataFrame()
+    )
+    results: dict[Any, dict] = cached.to_dict(orient="index")
+    pending = [(idx, row) for idx, row in df.iterrows() if idx not in results]
+    if pending:
+        httpx = _try_import_httpx()
+        with httpx.Client() as client:
+            with ThreadPoolExecutor(max_workers=cfg.max_workers) as pool:
+                futures = {
+                    pool.submit(
+                        _enrich_one,
+                        str(idx),
+                        row,
+                        cfg,
+                        client,
+                        enrichment_dir,
+                        read_cache=False,
+                    ): idx
+                    for idx, row in pending
+                }
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    results[idx] = fut.result()
 
     enriched_rows = [results[idx] for idx in df.index]
     enriched = pd.DataFrame(enriched_rows)

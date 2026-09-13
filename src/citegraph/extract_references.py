@@ -41,9 +41,56 @@ _REF_HEADER_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Any markdown header, capturing its level — used to find where a non-final
+# Any markdown header, capturing its level — used to find where a
 # references section ends.
 _ANY_HEADER_RE = re.compile(r"^(\#{1,6})\s", re.MULTILINE)
+
+# Back matter that follows a bibliography and must not be read as part of it.
+# Deliberately a *stop list* rather than "any header ends the section": the
+# splitter has to fail closed, because headers that interrupt a real reference
+# list are common — running page heads ("## 94 ECONOMIA, Spring 2009",
+# "## A. Pfaff et al.") and repeated article titles both appear mid-list in
+# scanned sources, and truncating there silently drops references. An
+# unrecognised header therefore keeps the historical run-to-end-of-file
+# behaviour. The keyword must *lead* the title (after optional numbering), so
+# "## Appendix A: Instructions" matches while "## References to Prior Work"
+# does not.
+_BACKMATTER_KEYWORD = (
+    r"(?:appendi(?:x|ces)"
+    r"|supp(?:lementary|orting)\s+(?:online\s+)?(?:material|information|data|methods?)s?"
+    r"|acknowledge?ments?"
+    r"|author\s+contributions?"
+    r"|authors?\s+(?:and|&)\s+a\S*ffiliations?"
+    r"|author\s+information"
+    r"|about\s+the\s+authors?"
+    r"|(?:end|foot)notes?"
+    r"|notes?"
+    r"|biograph(?:y|ical\s+\S+)"
+    r"|curriculum\s+vitae"
+    r"|(?:figures?|tables?)\s+(?:and|&)\s+(?:tables?|figures?)"
+    r"|index"
+    r"|notice\s+of\s+correction"
+    r"|(?:previous\s+)?(?:doctoral\s+)?the(?:sis|ses)\s+(?:in|published|publicerade)"
+    r"|previous\s+doctoral\s+theses"
+    r"|publications?"
+    r"|awards?"
+    r"|dissemination"
+    r"|data\s+availability"
+    r"|funding"
+    r"|(?:conflicts?|competing)\s+(?:of\s+)?interests?"
+    r"|declarations?)"
+)
+_BACKMATTER_HEADER_RE = re.compile(
+    rf"^\#{{1,6}}\s+(?:[\dIVXA-Z]+[.):]?\s+)?{_BACKMATTER_KEYWORD}\b",
+    re.IGNORECASE,
+)
+
+
+def _is_backmatter_header(content: str, start: int) -> bool:
+    """Whether the markdown header beginning at ``start`` opens back matter."""
+    line_end = content.find("\n", start)
+    line = content[start:] if line_end == -1 else content[start:line_end]
+    return bool(_BACKMATTER_HEADER_RE.match(line))
 
 
 def split_reference_sections(content: str) -> tuple[str, list[str]]:
@@ -52,10 +99,14 @@ def split_reference_sections(content: str) -> tuple[str, list[str]]:
     Multi-chapter documents (PhD theses, edited volumes) carry one references
     section per chapter; every :data:`_REF_HEADER_RE` match starts a section.
     A non-final section ends at the next header of the same or higher level
-    (sub-headers like ``### Books`` inside a bibliography don't terminate it);
-    the final section runs to end-of-file, so single-bibliography papers
-    behave exactly as they always have. ``body`` is everything outside the
-    sections. No match returns ``(content, [])``.
+    (sub-headers like ``### Books`` inside a bibliography don't terminate it).
+    The final section runs to end-of-file *unless* a same-or-higher-level
+    header opens recognised back matter (:data:`_BACKMATTER_HEADER_RE`) —
+    appendices, supporting information, a department's list of previous
+    doctoral theses — which the extractor would otherwise read as references.
+    Anything unrecognised keeps the run-to-end-of-file behaviour, so a running
+    page head interrupting a reference list never truncates it. ``body`` is
+    everything outside the sections. No match returns ``(content, [])``.
     """
     matches = list(_REF_HEADER_RE.finditer(content))
     if not matches:
@@ -70,12 +121,17 @@ def split_reference_sections(content: str) -> tuple[str, list[str]]:
             continue  # nested inside the previous section; already captured
         body_parts.append(content[cursor:start])
         end = len(content)
-        if i < len(matches) - 1:
-            level = len(re.match(r"\#+", match.group(0)).group(0))
-            for header in _ANY_HEADER_RE.finditer(content, match.end()):
-                if len(header.group(1)) <= level:
-                    end = header.start()
-                    break
+        level = len(re.match(r"\#+", match.group(0)).group(0))
+        is_final = i == len(matches) - 1
+        for header in _ANY_HEADER_RE.finditer(content, match.end()):
+            if len(header.group(1)) > level:
+                continue
+            # A non-final section ends at the next section of any kind; the
+            # final one only at back matter, so unknown headers fail closed.
+            if is_final and not _is_backmatter_header(content, header.start()):
+                continue
+            end = header.start()
+            break
         sections.append(content[start:end])
         cursor = end
     body_parts.append(content[cursor:])

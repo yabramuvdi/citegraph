@@ -7,7 +7,27 @@ from pathlib import Path
 
 import pandas as pd
 
-from citegraph.io import frame_fingerprint, write_json
+from citegraph.io import OutLayout, fingerprint, frame_fingerprint, read_json, write_json
+
+
+def _redirects(path: Path) -> dict:
+    registry = OutLayout(Path(path).parent).work_identity_json
+    return read_json(registry).get('redirects', {}) if registry.exists() else {}
+
+
+def _occurrence_evidence(rows: list[dict], works: pd.DataFrame) -> dict[str, str]:
+    from citegraph.authors import _row_authors
+
+    evidence = {}
+    for row in rows:
+        for side in ('left', 'right'):
+            wid, position = str(row[f'{side}_record_id']), int(row[f'{side}_position'])
+            work = works.loc[wid]
+            evidence[json.dumps([wid, position])] = fingerprint({
+                'raw_author': _row_authors(work)[position],
+                'Title': work.get('Title'), 'Year': work.get('Year'),
+            })
+    return evidence
 
 
 def validate_constraints(rows: list[dict], coordinates: set[tuple[str, int]]) -> list[dict]:
@@ -44,22 +64,45 @@ def load_author_constraints(path: Path, *, works: pd.DataFrame, metadata_path: P
         if reader.fieldnames != required:
             raise ValueError(f'Author override columns must be {required}; got {reader.fieldnames}')
         rows = list(reader)
+    from citegraph.identity import resolve_redirect
+
+    redirects = _redirects(path)
+    for row in rows:
+        for side in ('left', 'right'):
+            row[f'{side}_record_id'] = resolve_redirect(row[f'{side}_record_id'], redirects)
     current = frame_fingerprint(works.rename_axis('id'))
-    if metadata_path.exists():
-        binding = json.loads(metadata_path.read_text())
-        if binding.get('works_fingerprint') != current:
-            raise ValueError(f'Author override snapshot changed to {current}; affected rows: {rows}. '
-                             f'Review these occurrences and explicitly rebind by removing {metadata_path}.')
     coordinates = {(o.record_id, o.position) for o in _collect_occurrences(
         works=works, enriched_works=None)}
-    return validate_constraints(rows, coordinates)
+    rows = validate_constraints(rows, coordinates)
+    if metadata_path.exists():
+        binding = json.loads(metadata_path.read_text())
+        if binding.get('schema_version') == 2:
+            stored = binding.get('occurrences')
+            if not isinstance(stored, dict):
+                raise ValueError('Invalid author override occurrence binding; restore metadata')
+            previous = {}
+            for key, value in stored.items():
+                wid, position = json.loads(key)
+                key = json.dumps([resolve_redirect(wid, redirects), position])
+                if key in previous and previous[key] != value:
+                    raise ValueError(f'Author override occurrence became ambiguous: {key}')
+                previous[key] = value
+            changed = [key for key, value in _occurrence_evidence(rows, works).items()
+                       if key in previous and previous[key] != value]
+            if changed:
+                raise ValueError(f'Author override snapshot changed at occurrences: {changed}. '
+                                 f'Review and explicitly rebind by removing {metadata_path}.')
+        elif binding.get('schema_version') != 1 or binding.get('works_fingerprint') != current:
+            raise ValueError(f'Author override snapshot changed to {current}; affected rows: {rows}. '
+                             f'Review these occurrences and explicitly rebind by removing {metadata_path}.')
+    return rows
 
 
 def bind_author_constraints(path: Path, *, works: pd.DataFrame, metadata_path: Path) -> None:
     """Bind only after the caller successfully validates normalization and aliases."""
     if Path(path).exists():
-        load_author_constraints(path, works=works, metadata_path=metadata_path)
-        write_json(metadata_path, {'schema_version': 1,
+        rows = load_author_constraints(path, works=works, metadata_path=metadata_path)
+        write_json(metadata_path, {'schema_version': 2, 'occurrences': _occurrence_evidence(rows, works),
                                    'works_fingerprint': frame_fingerprint(works.rename_axis('id'))})
 
 

@@ -66,7 +66,7 @@ def test_override_snapshot_includes_unnamed_work_ids(tmp_path):
     from citegraph.author_overrides import bind_author_constraints, load_author_constraints
     path, meta = tmp_path / 'overrides.csv', tmp_path / 'meta.json'
     pd.DataFrame([correction('merge', 'w-1', 'w-2')]).to_csv(path, index=False)
-    frame = works(['Smith, John'] * 2)
+    frame = works(['Smith, John', 'Smith, Jane'])
     bind_author_constraints(path, works=frame, metadata_path=meta)
     frame.index = ['w-2', 'w-1']
     with pytest.raises(ValueError, match='snapshot'):

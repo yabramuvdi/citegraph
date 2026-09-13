@@ -329,12 +329,76 @@ merge can override name evidence but cannot override conflicting ORCIDs or an
 explicit separation. Contradictions, invalid positions, and stale legacy alias
 targets or cycles fail with a diagnostic rather than silently changing membership.
 
-The first successful validation binds corrections to the works snapshot in
-`author_overrides_meta.json`. If that snapshot changes, review every referenced
-occurrence against the new works table. Only after that review, remove the binding
-file and rerun authors to bind the reviewed correction file. Keep the old binding
-and corrections in your research archive. Existing `author_aliases.csv` files
-remain supported, but cannot express a split and are subject to conflict checks.
+The first successful validation binds corrections to the referenced author
+occurrences in `author_overrides_meta.json`. Adding unrelated works does not
+invalidate these corrections. Changing a referenced author's spelling, position,
+work title, or year requires review of the affected occurrences. After that
+review, archive and remove the binding file and rerun authors. Old whole-snapshot
+bindings are upgraded during deduplication when the previous reviewed works table
+still matches; otherwise they require a one-time review. Existing
+`author_aliases.csv` files remain supported, but cannot express a split and are
+subject to conflict checks.
+
+### Add papers and rerun
+
+Use the same output directory and the same processing settings:
+
+```bash
+citegraph run "$PDF_DIR" --out "$OUT_DIR" --recursive --ocr-auto \
+  --enrich --enrich-contact "$CONTACT_EMAIL" --yes
+```
+
+Conversion and Gemini extraction reuse unchanged per-paper results. Enrichment
+reuses unchanged per-work results, including when the work ID changes but the
+original lookup metadata is identical. A new bibliography can introduce many new
+works that genuinely need enrichment; existing works do not need another lookup.
+Transient provider failures remain retryable. Deduplication, author clustering,
+and their metrics are rebuilt locally. Rerun analysis notebooks to update figures.
+
+New conversion records bind the PDF content, markdown content, and OCR setting.
+Identical renamed PDFs can reuse an existing conversion; replaced PDFs are
+detected. Automatic OCR remembers completed attempts even if the resulting text
+is still poor. Use explicit overwrite when deliberately retrying that conversion.
+After `convert`, `input_manifest.json` selects the current markdown inputs for
+separate `metadata`, `references`, and `estimate` commands. Removed or renamed
+inputs remain cached but no longer appear as active papers. Without a manifest,
+legacy markdown-only directories retain the directory-scan behavior.
+
+New extraction cache sidecars bind input/output content, model, response schema,
+prompt, and metadata input limit. The estimator uses the same validity checks as
+execution. Valid legacy same-stem caches are retained without a bulk refresh;
+their old processing settings cannot be verified retrospectively. Cross-filename
+reuse requires matching recorded provenance. Changes to cached output invalidate
+its recorded integrity; preserve hand-edited originals before refreshing caches.
+
+Enrichment provenance is checked per row. An `authors` run keeps verified evidence
+for unchanged works when other works are new or stale. If `enriched_works.csv` is
+missing, it can load verified v2 per-work caches without provider calls. A modified
+table row is excluded without discarding valid siblings. Legacy table provenance
+retains its conservative whole-table check until the next enrichment run.
+
+`work_identity.json` and `author_identity.json` preserve existing slug IDs across
+unambiguous continuations, including source promotion and fuller author names.
+They also reserve retired IDs. Confirmed merges record `redirects`; applications
+joining annotations can follow these redirects, or use
+`citegraph.identity.resolve_redirect(identifier, redirects)`. Splits retire the
+old identity and record `identity_split` events with successor IDs rather than
+copying annotations onto an arbitrary child. Author splits also appear in
+`author_review.json`. Clustering still uses current evidence: persistent IDs do
+not force scientifically unsupported merges.
+
+Legacy assignments are adopted against the previous works table before dedup
+replaces it, when their recorded occurrences validate. Alias endpoints are then
+bound to these identities so a fuller display name does not require editing the
+alias CSV. Unverifiable history, changed occurrences, and conflicts require
+targeted review; the library does not infer old decisions from similar names.
+Retain both identity registries with the output directory and its corrections.
+Deleting them discards continuity history. Existing historical audits remain
+unchanged; new audits describe the new run and fingerprint its identity state.
+
+Generated CSVs are individually atomic checkpoints. This release does not make
+the entire output directory transactional: consume a completed run, and resume a
+failed run before regenerating downstream institutional tables or figures.
 
 ### Rebuild an existing corpus in a copy
 

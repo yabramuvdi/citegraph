@@ -38,6 +38,38 @@ class OutLayout:
     out_dir: Path
 
     @property
+    def conversion_cache_json(self) -> Path:
+        return self.out_dir / "conversion_cache.json"
+
+    @property
+    def input_manifest_json(self) -> Path:
+        return self.out_dir / "input_manifest.json"
+
+    def markdown_inputs(self) -> list[Path]:
+        """Select active inputs while retaining removed/renamed caches on disk."""
+        if not self.input_manifest_json.exists():
+            return sorted(self.markdown_dir.glob('*.md'))
+        saved = read_json(self.input_manifest_json)
+        names = saved.get('markdown_names') if isinstance(saved, dict) else None
+        if (not isinstance(names, list) or saved.get('schema_version') != 1
+                or any(not isinstance(name, str) or Path(name).name != name
+                       or not name.endswith('.md') for name in names)
+                or len(set(names)) != len(names)):
+            raise ValueError('Invalid input_manifest.json; rerun `citegraph convert`')
+        paths = [self.markdown_dir / name for name in names]
+        if any(not path.is_file() for path in paths):
+            raise ValueError('An active markdown input is missing; rerun `citegraph convert`')
+        return paths
+
+    @property
+    def work_identity_json(self) -> Path:
+        return self.out_dir / "work_identity.json"
+
+    @property
+    def author_identity_json(self) -> Path:
+        return self.out_dir / "author_identity.json"
+
+    @property
     def enrichment_provenance_json(self) -> Path:
         return self.out_dir / "enrichment_provenance.json"
 
@@ -210,15 +242,67 @@ def cache_input_fingerprint(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def cache_is_current(path: Path, input_path: Path) -> bool:
-    """Accept legacy caches without sidecars; validate new caches by input hash."""
+def _cache_provenance(path: Path) -> dict[str, Any] | None:
     sidecar = path.with_suffix(path.suffix + ".sha256")
-    return not sidecar.exists() or sidecar.read_text(encoding="ascii").strip() == cache_input_fingerprint(input_path)
+    if not sidecar.exists():
+        return None
+    try:
+        data = read_json(sidecar)
+    except (json.JSONDecodeError, UnicodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("version", 1) != 1:
+        return None
+    input_hash = data.get("input_sha256")
+    output_hash = data.get("output_sha256")
+    if not isinstance(input_hash, str) or not isinstance(output_hash, str):
+        return None
+    return data
 
 
-def write_cache_fingerprint(path: Path, input_path: Path) -> None:
-    path.with_suffix(path.suffix + ".sha256").write_text(
-        cache_input_fingerprint(input_path), encoding="ascii"
+def cache_is_current(
+    path: Path, input_path: Path, *, recipe: dict[str, Any] | None = None
+) -> bool:
+    """Accept legacy caches; validate new caches by input and output hashes."""
+    if not path.exists():
+        return False
+    sidecar = path.with_suffix(path.suffix + ".sha256")
+    if not sidecar.exists():
+        return True
+    provenance = _cache_provenance(path)
+    if provenance is not None:
+        return (
+            provenance["input_sha256"] == cache_input_fingerprint(input_path)
+            and provenance["output_sha256"] == cache_input_fingerprint(path)
+            and (
+                recipe is None
+                or "recipe" not in provenance
+                or provenance["recipe"] == recipe
+            )
+        )
+    try:
+        return (
+            sidecar.read_text(encoding="ascii").strip()
+            == cache_input_fingerprint(input_path)
+        )
+    except (UnicodeError, OSError):
+        return False
+
+
+def write_cache_fingerprint(
+    path: Path, input_path: Path, *, recipe: dict[str, Any] | None = None
+) -> None:
+    provenance: dict[str, Any] = {
+        "version": 1,
+        "input_sha256": cache_input_fingerprint(input_path),
+        "output_sha256": cache_input_fingerprint(path),
+    }
+    if recipe is not None:
+        provenance["recipe"] = recipe
+    write_json(
+        path.with_suffix(path.suffix + ".sha256"),
+        provenance,
     )
 
 
@@ -232,17 +316,56 @@ def read_pydantic_cache(
     schema: type[BaseModel],
     *,
     many: bool = False,
+    recipe: dict[str, Any] | None = None,
 ) -> BaseModel | list[BaseModel] | None:
     """Return a current, valid cache or ``None`` when it must be refreshed."""
-    if not path.exists() or not cache_is_current(path, input_path):
-        return None
-    try:
-        data = read_json(path)
-        if many:
-            return [schema.model_validate(item) for item in data] if isinstance(data, list) else None
-        return schema.model_validate(data)
-    except (json.JSONDecodeError, UnicodeError, TypeError, ValidationError):
-        return None
+    def validated(cache_path: Path) -> tuple[dict | list, BaseModel | list[BaseModel]] | None:
+        try:
+            data = read_json(cache_path)
+            if many:
+                value = (
+                    [schema.model_validate(item) for item in data]
+                    if isinstance(data, list)
+                    else None
+                )
+            else:
+                value = schema.model_validate(data)
+            return (data, value) if value is not None else None
+        except (json.JSONDecodeError, UnicodeError, OSError, TypeError, ValidationError):
+            return None
+
+    if path.exists() and cache_is_current(path, input_path, recipe=recipe):
+        result = validated(path)
+        if result is not None:
+            if _cache_provenance(path) is None:
+                write_cache_fingerprint(path, input_path)
+            return result[1]
+
+    input_hash = cache_input_fingerprint(input_path)
+    # ponytail: this is O(n²) when every file misses; add a per-directory index
+    # if extraction caches grow beyond the current corpus scale.
+    for sibling in sorted(path.parent.glob("*.json")):
+        if sibling == path:
+            continue
+        provenance = _cache_provenance(sibling)
+        if (
+            provenance is None
+            or provenance["input_sha256"] != input_hash
+            or (recipe is not None and provenance.get("recipe") != recipe)
+        ):
+            continue
+        try:
+            if provenance["output_sha256"] != cache_input_fingerprint(sibling):
+                continue
+        except OSError:
+            continue
+        result = validated(sibling)
+        if result is None:
+            continue
+        write_json(path, result[0])
+        write_cache_fingerprint(path, input_path, recipe=provenance.get('recipe'))
+        return result[1]
+    return None
 
 
 def write_pydantic(path: Path, obj: BaseModel) -> None:
@@ -381,11 +504,12 @@ def artifact_fingerprint(path: Path) -> str | None:
 
 
 # Fixed names also constrain report reads: audit contents never select arbitrary paths.
-WORK_AUDIT_INPUTS = {"sources.csv", "citations_raw.csv"}
+WORK_AUDIT_INPUTS = {"sources.csv", "citations_raw.csv", "work_identity.json"}
 WORK_AUDIT_OUTPUTS = {"works.csv", "citation_graph.csv"}
 AUTHOR_AUDIT_INPUTS = {
     "works.csv", "citation_graph.csv", "enriched_works.csv", "enrichment_provenance.json",
     "source_ids.json", "work_id_collisions.json", "author_aliases.csv", "author_overrides.csv", "author_overrides_meta.json",
+    "work_identity.json", "author_identity.json",
 }
 AUTHOR_AUDIT_OUTPUTS = {"authors.csv", "author_citations.csv", "author_review.json"}
 

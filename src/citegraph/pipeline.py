@@ -38,6 +38,13 @@ from citegraph.dedup import DedupConfig, canonicalize_works
 from citegraph.enrich import EnrichConfig
 from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_to_record
 from citegraph.extract_references import extract_references_from_markdown
+from citegraph.identity import (
+    reconcile,
+    remap_author_registry,
+    seed_author_registry,
+    seed_work_registry,
+    work_groups,
+)
 from citegraph.ids import assign_source_ids
 from citegraph.io import (
     AUTHOR_AUDIT_INPUTS,
@@ -47,6 +54,7 @@ from citegraph.io import (
     WORK_COLUMNS,
     OutLayout,
     artifact_fingerprint,
+    fingerprint,
     frame_fingerprint,
     metadata_fingerprint,
     parse_openalex_authors,
@@ -87,6 +95,19 @@ _count_failures = count_failures
 
 class StageNotReadyError(RuntimeError):
     """Raised when a stage is invoked but its upstream artifact is missing."""
+
+
+def extraction_recipe(model: str, *, references: bool = False) -> dict:
+    """Shared cache contract for execution and estimates; bump version for slicer changes."""
+    from citegraph import extract_metadata, extract_references
+
+    module = extract_references if references else extract_metadata
+    schema = Reference if references else PaperMetadata
+    return {
+        'version': 1, 'model': model, 'schema': schema.model_json_schema(),
+        'prompt': module._build_prompt(''), 'system_instruction': module.SYSTEM_INSTRUCTION,
+        'max_input_chars': None if references else extract_metadata.DEFAULT_METADATA_INPUT_CHARS,
+    }
 
 
 @dataclass
@@ -183,7 +204,7 @@ class Pipeline:
     # ------------------------------------------------------------------
     def _load_markdown_paths(self) -> list[Path]:
         md_dir = self.layout.markdown_dir
-        paths = sorted(md_dir.glob("*.md"))
+        paths = self.layout.markdown_inputs()
         if not paths:
             raise StageNotReadyError(
                 f"No markdown files found in {md_dir}. "
@@ -232,6 +253,9 @@ class Pipeline:
             ocr=self.ocr,
         )
         check_conversion_quality(paths, self.layout, ocr_attempted=bool(self.ocr))
+        write_json(self.layout.input_manifest_json, {
+            'schema_version': 1, 'markdown_names': [path.name for path in paths],
+        })
         return paths
 
     # ------------------------------------------------------------------
@@ -243,15 +267,17 @@ class Pipeline:
         if markdown_paths is None:
             markdown_paths = self._load_markdown_paths()
 
+        recipe = extraction_recipe(self.model)
+
         def _process_one(md: Path) -> tuple[dict | None, PaperFailure | None]:
             cache = self.layout.metadata_dir / f"{md.stem}.json"
             try:
-                meta = read_pydantic_cache(cache, md, PaperMetadata)
+                meta = read_pydantic_cache(cache, md, PaperMetadata, recipe=recipe)
                 if meta is None:
                     logger.info("Extracting metadata from %s", md.name)
                     meta = extract_metadata_from_markdown(md, client=self.client)
                     write_pydantic(cache, meta)
-                    write_cache_fingerprint(cache, md)
+                    write_cache_fingerprint(cache, md, recipe=recipe)
                 else:
                     logger.debug("Loading metadata from cache: %s", cache.name)
                 return metadata_to_record(meta, source_file=md.name), None
@@ -364,15 +390,17 @@ class Pipeline:
                 continue
             valid_items.append((idx, md, citing_id))
 
+        recipe = extraction_recipe(self.model, references=True)
+
         def _process_one(md: Path, citing_id: str) -> tuple[list[dict], PaperFailure | None]:
             cache = self.layout.references_dir / f"{md.stem}.json"
             try:
-                refs = read_pydantic_cache(cache, md, Reference, many=True)
+                refs = read_pydantic_cache(cache, md, Reference, many=True, recipe=recipe)
                 if refs is None:
                     logger.info("Extracting references from %s", md.name)
                     refs = extract_references_from_markdown(md, client=self.client)
                     write_pydantic_list(cache, refs)
-                    write_cache_fingerprint(cache, md)
+                    write_cache_fingerprint(cache, md, recipe=recipe)
                 else:
                     logger.debug("Loaded %d cached references for %s", len(refs), md.name)
                 rows = []
@@ -464,6 +492,8 @@ class Pipeline:
         if sources.empty:
             raise StageNotReadyError("No successful source metadata. Run `citegraph metadata` first.")
 
+        self._migrate_author_identity()
+
         if citations_raw.empty:
             citations_raw = pd.DataFrame(
                 columns=["Title", "Authors", "Authors_List", "Journal", "Year", "citing_id"]
@@ -475,6 +505,27 @@ class Pipeline:
             self.dedup_config,
             show_progress=self.show_progress,
         )
+        previous = None
+        if self.layout.work_identity_json.exists():
+            previous = read_json(self.layout.work_identity_json)
+        elif self.layout.works_csv.exists():
+            previous = seed_work_registry(self._load_works())
+        mapping, identity, changes = reconcile(work_groups(works, sources, citations_raw, stats), previous)
+        works = works.rename(index=mapping)
+        graph = graph.replace({'citing_id': mapping, 'cited_id': mapping})
+        for key in ('source_cluster_ids', 'citation_cluster_ids'):
+            stats[key] = [mapping[cid] for cid in stats[key]]
+        for decision in stats['decisions']:
+            if decision.get('representative_id') in mapping:
+                decision['representative_id'] = mapping[decision['representative_id']]
+        # Upgrade old snapshot bindings while the reviewed works still exist.
+        if self.layout.works_csv.exists() and self.layout.author_overrides_meta_json.exists():
+            binding = read_json(self.layout.author_overrides_meta_json)
+            old_works = self._load_works()
+            if binding.get('schema_version') == 1 and binding.get('works_fingerprint') == frame_fingerprint(old_works):
+                bind_author_constraints(self.layout.author_overrides_csv, works=old_works,
+                                        metadata_path=self.layout.author_overrides_meta_json)
+        write_json(self.layout.work_identity_json, identity)
         self._canonicalize_stats = stats
         collision_ids = unverified_collision_ids(self.layout)
         for collision in stats["id_collisions"]:
@@ -486,16 +537,18 @@ class Pipeline:
         write_csv(self.layout.graph_csv, graph)
         write_json(self.layout.canonicalization_audit_json, {
             "schema_version": 2,
-            "algorithm_version": "canonicalize-2",
+            "algorithm_version": "canonicalize-3",
             "config": self.dedup_config.__dict__,
             "input_fingerprints": {"sources.csv": frame_fingerprint(sources),
-                                   "citations_raw.csv": frame_fingerprint(citations_raw)},
+                                   "citations_raw.csv": frame_fingerprint(citations_raw),
+                                   "work_identity.json": artifact_fingerprint(self.layout.work_identity_json)},
             "output_fingerprints": {"works.csv": frame_fingerprint(works),
                                     "citation_graph.csv": frame_fingerprint(graph)},
             "source_cluster_ids": [str(x) for x in stats["source_cluster_ids"]],
             "citation_cluster_ids": [str(x) for x in stats["citation_cluster_ids"]],
             "decisions": stats["decisions"],
             "id_collisions": stats["id_collisions"],
+            "identity_changes": changes,
         })
         logger.info(
             "Wrote %s (%d works) and %s (%d edges); %d self-loop(s) dropped, "
@@ -512,6 +565,101 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Stage 4b: corpus-wide author normalization (after dedup)
     # ------------------------------------------------------------------
+    def _migrate_author_identity(self) -> None:
+        """Adopt saved assignments and bind aliases before replacing old works."""
+        if self.layout.author_identity_json.exists() or not self.layout.works_csv.exists():
+            return
+        state = {}
+        try:
+            previous = self._load_works()
+            aliases = load_aliases(self.layout.author_aliases_csv)
+            if self.layout.authors_csv.exists() and self.layout.author_citations_csv.exists():
+                prior = seed_author_registry(
+                    pd.read_csv(self.layout.authors_csv, index_col='id'),
+                    pd.read_csv(self.layout.author_citations_csv), works=previous)
+                state['published'] = prior
+                if not aliases:
+                    state['algorithm'] = prior
+            elif not aliases:
+                return
+            enriched, _ = self._author_enrichment(previous)
+            normalize_authors(
+                works=previous, enriched_works=enriched, cfg=self.author_config,
+                aliases=aliases,
+                constraints=load_author_constraints(
+                    self.layout.author_overrides_csv, works=previous,
+                    metadata_path=self.layout.author_overrides_meta_json),
+                identity_state=state,
+            )
+        except ValueError as exc:
+            # A newly edited correction may refer to new works. Validate it
+            # against the new corpus normally; do not guess its old membership.
+            logger.warning("Legacy author identities could not be bound to previous works: %s", exc)
+            return
+        write_json(self.layout.author_identity_json, state)
+        logger.info('Adopted author identity observations from previous works and assignments; historical audits unchanged')
+
+    def _author_enrichment(self, works: pd.DataFrame) -> tuple[pd.DataFrame | None, str]:
+        enriched: pd.DataFrame | None = None
+        enrichment_status = "unavailable"
+        if self.layout.enriched_works_csv.exists():
+            enriched = pd.read_csv(self.layout.enriched_works_csv, index_col="id")
+            enrichment_status = "unverified"
+            # ``OpenAlex_Authors`` round-trips as a string in CSV; turn it
+            # back into a list of dicts so the normalizer sees structured
+            # data. Bad rows are silently dropped to keep the stage resilient.
+            if "OpenAlex_Authors" in enriched.columns:
+                def _parse(val: object) -> object:
+                    return parse_openalex_authors(val)
+                enriched["OpenAlex_Authors"] = enriched["OpenAlex_Authors"].map(_parse)
+        else:
+            from citegraph.enrich import load_cached_enrichments
+
+            enriched = load_cached_enrichments(works, self.layout)
+            enrichment_status = "cached_verified" if not enriched.empty else "unavailable"
+            if enriched.empty:
+                enriched = None
+            if self.layout.enrichment_cache_count() and enriched is None:
+                logger.warning(
+                    "%d cached enrichment result(s) exist in %s but "
+                    "enriched_works.csv is missing — the enrich stage was "
+                    "interrupted before its final write. Run `citegraph enrich` "
+                    "before `citegraph authors` so OpenAlex/ORCID ids anchor "
+                    "author clustering.",
+                    self.layout.enrichment_cache_count(),
+                    self.layout.enrichment_dir,
+                )
+
+        if enriched is not None and self.layout.enriched_works_csv.exists():
+            if self.layout.enrichment_provenance_json.exists():
+                provenance = read_json(self.layout.enrichment_provenance_json)
+                if provenance.get("schema_version") == 2:
+                    rows = provenance.get("rows", {})
+                    valid_ids = [wid for wid, row in works.iterrows()
+                                 if wid in enriched.index and wid in rows
+                                 and rows[wid].get("input_fingerprint") == metadata_fingerprint(row.to_dict())
+                                 and rows[wid].get("output_fingerprint") == fingerprint(enriched.loc[wid].to_dict())]
+                    enriched = enriched.loc[valid_ids]
+                    enrichment_status = "current" if len(valid_ids) == len(works) else "partial_verified"
+                    if enrichment_status != "current":
+                        logger.warning("Using verified enrichment for %d/%d works; run `citegraph enrich` to refresh the rest",
+                                       len(valid_ids), len(works))
+                elif (provenance.get("works_fingerprint") != frame_fingerprint(works)
+                        or provenance.get("enriched_fingerprint") != frame_fingerprint(enriched)):
+                    logger.warning("Enrichment is stale for these works; run `citegraph enrich` before using external author IDs")
+                    enriched = None
+                    enrichment_status = "stale_ignored"
+                else:
+                    enrichment_status = "current"
+            else:
+                collisions = unverified_collision_ids(self.layout)
+                if collisions & set(enriched.index):
+                    logger.warning("Unverified enrichment for colliding IDs ignored; run `citegraph enrich`")
+                    enriched = enriched.drop(index=list(collisions), errors="ignore")
+                    enrichment_status = "unverified_collisions_ignored"
+
+        return enriched, enrichment_status
+
     def normalize_authors(
         self,
         works: pd.DataFrame | None = None,
@@ -538,49 +686,32 @@ class Pipeline:
             self.layout.author_overrides_csv, works=works,
             metadata_path=self.layout.author_overrides_meta_json,
         )
-        enriched: pd.DataFrame | None = None
-        enrichment_status = "unavailable"
-        if self.layout.enriched_works_csv.exists():
-            enriched = pd.read_csv(self.layout.enriched_works_csv, index_col="id")
-            enrichment_status = "unverified"
-            # ``OpenAlex_Authors`` round-trips as a string in CSV; turn it
-            # back into a list of dicts so the normalizer sees structured
-            # data. Bad rows are silently dropped to keep the stage resilient.
-            if "OpenAlex_Authors" in enriched.columns:
-                def _parse(val: object) -> object:
-                    return parse_openalex_authors(val)
-                enriched["OpenAlex_Authors"] = enriched["OpenAlex_Authors"].map(_parse)
-        else:
-            n_cached = self.layout.enrichment_cache_count()
-            if n_cached:
-                logger.warning(
-                    "%d cached enrichment result(s) exist in %s but "
-                    "enriched_works.csv is missing — the enrich stage was "
-                    "interrupted before its final write. Run `citegraph enrich` "
-                    "before `citegraph authors` so OpenAlex/ORCID ids anchor "
-                    "author clustering.",
-                    n_cached,
-                    self.layout.enrichment_dir,
-                )
-
-        if enriched is not None:
-            if self.layout.enrichment_provenance_json.exists():
-                provenance = read_json(self.layout.enrichment_provenance_json)
-                if (provenance.get("works_fingerprint") != frame_fingerprint(works)
-                        or provenance.get("enriched_fingerprint") != frame_fingerprint(enriched)):
-                    logger.warning("Enrichment is stale for these works; run `citegraph enrich` before using external author IDs")
-                    enriched = None
-                    enrichment_status = "stale_ignored"
-                else:
-                    enrichment_status = "current"
-            else:
-                collisions = unverified_collision_ids(self.layout)
-                if collisions & set(enriched.index):
-                    logger.warning("Unverified enrichment for colliding IDs ignored; run `citegraph enrich`")
-                    enriched = enriched.drop(index=list(collisions), errors="ignore")
-                    enrichment_status = "unverified_collisions_ignored"
+        enriched, enrichment_status = self._author_enrichment(works)
 
         aliases = load_aliases(self.layout.author_aliases_csv)
+
+        identity = {}
+        if self.layout.author_identity_json.exists():
+            identity = read_json(self.layout.author_identity_json)
+            if (not isinstance(identity, dict) or identity.get('schema_version') != 1
+                    or not {'algorithm', 'published'} <= identity.keys()):
+                raise ValueError('Invalid author identity registry; restore its last valid copy')
+        elif self.layout.authors_csv.exists() and self.layout.author_citations_csv.exists():
+            # Seed only from a saved, untampered assignment audit. Legacy outputs
+            # without this evidence remain unverified rather than guessed.
+            if self.layout.author_resolution_audit_json.exists():
+                previous_audit = read_json(self.layout.author_resolution_audit_json)
+                expected = previous_audit.get('output_fingerprints', {})
+                if expected and all(expected.get(name) == artifact_fingerprint(self.layout.out_dir / name)
+                                    for name in AUTHOR_AUDIT_OUTPUTS):
+                    prior = seed_author_registry(
+                        pd.read_csv(self.layout.authors_csv, index_col='id'),
+                        pd.read_csv(self.layout.author_citations_csv))
+                    identity['published'] = prior
+                    if not aliases:
+                        identity['algorithm'] = prior
+        if self.layout.work_identity_json.exists():
+            identity = remap_author_registry(identity, read_json(self.layout.work_identity_json)['redirects'])
 
         resolution_audit: list[dict] = []
         authors_df, citations_df, review = normalize_authors(
@@ -591,6 +722,7 @@ class Pipeline:
             aliases=aliases,
             audit=resolution_audit,
             constraints=constraints,
+            identity_state=identity,
         )
 
         # No binding or generated author artifacts change until all constraints
@@ -599,6 +731,7 @@ class Pipeline:
             self.layout.author_overrides_csv, works=works,
             metadata_path=self.layout.author_overrides_meta_json,
         )
+        write_json(self.layout.author_identity_json, identity)
         input_fingerprints = {
             name: artifact_fingerprint(self.layout.out_dir / name)
             for name in sorted(AUTHOR_AUDIT_INPUTS)
@@ -610,7 +743,7 @@ class Pipeline:
         write_author_review(self.layout.author_review_json, review)
         write_json(self.layout.author_resolution_audit_json, {
             "schema_version": 2,
-            "algorithm_version": "authors-2",
+            "algorithm_version": "authors-3",
             "config": self.author_config.__dict__,
             "input_fingerprints": input_fingerprints,
             "output_fingerprints": {
@@ -647,9 +780,15 @@ class Pipeline:
 
         enriched = enrich_works(works, cfg=self.enrich_config, layout=self.layout)
         write_csv(self.layout.enriched_works_csv, enriched, index=True)
+        persisted = pd.read_csv(self.layout.enriched_works_csv, index_col='id')
         write_json(self.layout.enrichment_provenance_json, {
-            "schema_version": 1, "works_fingerprint": frame_fingerprint(works),
-            "enriched_fingerprint": frame_fingerprint(enriched)})
+            "schema_version": 2, "works_fingerprint": frame_fingerprint(works),
+            "enriched_fingerprint": frame_fingerprint(persisted),
+            "rows": {str(wid): {
+                "input_fingerprint": metadata_fingerprint(works.loc[wid].to_dict()),
+                "output_fingerprint": fingerprint(row.to_dict()),
+            } for wid, row in persisted.iterrows()},
+        })
         logger.info("Wrote enriched %s", self.layout.enriched_works_csv)
         return enriched
 

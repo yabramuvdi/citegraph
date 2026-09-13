@@ -197,9 +197,9 @@ def estimate_extraction_cost(
     Raises :class:`~citegraph.pipeline.StageNotReadyError` when no markdown
     files are found (stage 1 must run first).
     """
-    from citegraph.pipeline import StageNotReadyError
+    from citegraph.pipeline import StageNotReadyError, extraction_recipe
 
-    md_paths = sorted(layout.markdown_dir.glob("*.md")) if layout.markdown_dir.exists() else []
+    md_paths = layout.markdown_inputs()
     if not md_paths:
         raise StageNotReadyError(
             f"No markdown files found in {layout.markdown_dir}. "
@@ -207,11 +207,14 @@ def estimate_extraction_cost(
         )
 
     file_estimates: list[FileEstimate] = []
+    metadata_recipe = extraction_recipe(model)
+    metadata_recipe['max_input_chars'] = max_input_chars_metadata
+    references_recipe = extraction_recipe(model, references=True)
     for md in md_paths:
         metadata_cache = layout.metadata_dir / f"{md.stem}.json"
         references_cache = layout.references_dir / f"{md.stem}.json"
-        meta_cached = read_pydantic_cache(metadata_cache, md, PaperMetadata) is not None
-        refs_cached = read_pydantic_cache(references_cache, md, Reference, many=True) is not None
+        meta_cached = read_pydantic_cache(metadata_cache, md, PaperMetadata, recipe=metadata_recipe) is not None
+        refs_cached = read_pydantic_cache(references_cache, md, Reference, many=True, recipe=references_recipe) is not None
 
         if meta_cached and refs_cached:
             file_estimates.append(
