@@ -272,53 +272,115 @@ or jupytext pairing.
 
 ## W4 — Core-paper annotations
 
-Design approved 2026-09-13; unbuilt. `identity.py` has landed, which unblocks
-the join-key decision.
+Design approved 2026-09-13. **Reframed 2026-09-13 after yabra clarified the
+intent**, which changes the emphasis below.
+
+### What this actually is
+
+Not "preserve `core_papers.xlsx`". The goal is a **durable annotation surface**:
+a spreadsheet in which Maria *or an AI agent* records manual metadata about the
+core papers, which joins cleanly onto everything the extraction pipeline
+produces. `core_papers.xlsx` is a **legacy source we import from once**; after
+that it goes to `Archive/` the way `core_authors.xlsx` did, and the generated
+file is the working surface. Its shape is ours to design.
+
+Two consequences:
+
+- The round-trip is the *point*, not a convenience. Generate → a human or agent
+  fills it → import → validate → join. The xlsx is a first-class editing
+  surface.
+- Because an agent may be the one filling it, the columns must be **declared**.
+  A human tolerates an ambiguous column; an agent will invent values for it.
+
+### Schema: declared columns validated, undeclared columns carried
+
+`out_dir/annotation_schema.csv` declares each annotation column:
+
+```csv
+column,type,allowed,description
+is_lfe,enum,"Sí|No|Unclear",Is this a lab-in-field experiment?
+is_lfe_evidence,text,,Quote or page supporting the is_lfe verdict
+cites_ostrom,enum,"Sí|No",Does the bibliography cite Ostrom?
+funding_source,text,,Funder as stated in the paper
+notes,text,,Free-form reviewer notes
+```
+
+Declared columns are validated on import — an agent writing `Maybe` into an
+enum fails loudly. **Undeclared columns are carried over untouched**, so Maria
+can add a question mid-review without a code change. The schema doubles as the
+agent's instructions: it is the prompt, not just a constraint.
+
+### Split the verdict from its evidence
+
+Measured on the real sheet, and this is the finding that most affects the
+schema. The existing columns conflate a coded value with the prose justifying
+it, so they cannot be analysed as variables:
+
+| Column | Distinct values in 93 rows | What they actually are |
+| ------ | -------------------------- | ---------------------- |
+| `Is it a LFE?` | **23** | mostly multi-sentence quotes, not a verdict |
+| `¿Cita a Ostrom?` | **52** | mostly quoted passages with page numbers |
+| `¿Habla de bienes comunes?` | **43** | same |
+| `Use of qualitative methods` | 12 | verdicts mixed with three "unknown" sentinels |
+| `Type of publication` | 6 | 4 real categories plus case noise (`paper`, `Book chapter`/`book chapter`) |
+| `Tema` | 12 | topic, but `Book chapter` and `PhD dissertation` have leaked in from publication type |
+
+So every judgement column becomes **two**: `<name>` (enum, the verdict) and
+`<name>_evidence` (text, the quote). The import splits the legacy column by
+reading a leading `Sí`/`No` where one exists and parking the remainder as
+evidence, flagging anything it cannot split for review rather than guessing.
+
+### Missing values: one convention, stated once
+
+The legacy sheet carries `Not found`, `Completar`, `To verify`, `Verificar en la
+entrevista`, `No mention` and blank in the same columns. Apply the rule the
+institutional pipeline already settled on and that `status_of` implements: **only
+an explicit `No` means "did not happen"; everything else missing is missing.**
+Do not invent a second convention here.
 
 ### Join key
 
 Key on the persistent work `id`, resolved through `identity.py`'s redirect table
 (`resolve_redirect`), with `source_file` kept as a human-readable column and as
-the bootstrap key for the existing sheet. Retired/split ids surface as an
-explicit error rather than silently transferring an annotation to an arbitrary
-child — the registry already records that distinction.
+the bootstrap key for the legacy sheet. Retired/split ids surface as an explicit
+error rather than silently transferring an annotation to an arbitrary child —
+the registry already records that distinction.
 
 ### Components
 
 - `citegraph annotate --out ./out` writes `out_dir/work_annotations.csv`: one row
-  per ring-0 work, generated columns `id, source_file, Title, Authors, Year,
-  Journal`, and every researcher-typed column carried over by `id`. Re-runnable
-  and append-only, like the `institutional/make_*` scripts.
-- `load_annotations(out_dir)` validates against `works.csv`, fails loudly on
-  unknown ids, and returns a frame indexed by work id ready to `.join()` onto
-  `g.core`.
+  per ring-0 work (93 today), generated columns `id, source_file, Title, Authors,
+  Year, Journal_Canonical`, plus every annotation column. Re-runnable and
+  append-only, like the `institutional/make_*` scripts — a regeneration must
+  never drop a column or a value a human typed.
+- `load_annotations(out_dir)` validates ids against `works.csv` and values
+  against the schema, fails loudly on both, and returns a frame indexed by work
+  id ready to `.join()` onto `g.core`.
 - **CSV in `out_dir` is authoritative.** Diffable, no openpyxl dependency,
-  consistent with `author_aliases.csv`.
-- `--xlsx <path>` exports to a **new** workbook and imports from one.
-
-### Constraint found while planning
-
-`core_papers.xlsx` has **8 sheets**, not 1: `LFEs_COL` (93 rows, the annotation
-data) plus `temas`, `experimentalistas`, `repetidos`, `MANUALS`, `LFE otros
-países`, `Isaaza`, `Los que no son LFE`. The importer must read only the named
-sheet, and the exporter must never write back into `core_papers.xlsx` — a naive
-round-trip would destroy seven sheets of Maria's work. This is the strongest
-argument for CSV-authoritative.
+  consistent with `author_aliases.csv` and `journal_aliases.csv`.
+- `--xlsx <path>` exports to and imports from a workbook. Never write into
+  `core_papers.xlsx` itself; it has 8 sheets and only `LFEs_COL` (93 rows) is
+  annotation data.
 
 ### One-time crosswalk
 
 `crosswalk_papers.csv`, same shape as `crosswalk_people.csv`: fuzzy-match
-`Título` → core titles with a `needs_review` flag. Measured previously: 63
-exact, 22 ≥ 90, 3 ≥ 80, 4 below, before normalising case and HTML entities
-(`Leaders' Distributional &amp; Efficiency Effects`). Realistically ~5 need
-Maria's eye, notably "Capital social y territorio" and the Villegas thesis,
-whose sheet row names a chapter rather than the dissertation.
+`Título` → core titles with a `needs_review` flag. Measured: 63 exact, 22 ≥ 90,
+3 ≥ 80, 4 below, before normalising case and HTML entities (`Leaders'
+Distributional &amp; Efficiency Effects`). Realistically ~5 need Maria's eye,
+notably "Capital social y territorio" and the Villegas thesis, whose sheet row
+names a chapter rather than the dissertation. Note the sheet's headers carry
+trailing non-breaking spaces (`Título\xa0`, `Año\xa0`, `Link\xa0`); strip them
+on read.
 
 ### Tests
 
-Template generation for a synthetic ring-0 frame, carry-over of researcher
-columns across a regeneration, unknown-id failure, redirect resolution for a
-merged work, xlsx round-trip preserving unrelated sheets, and a CLI smoke test.
+Template generation for a synthetic ring-0 frame; carry-over of both declared
+and undeclared columns across a regeneration; enum violation rejected with the
+offending value named; unknown-id failure; redirect resolution for a merged
+work; retired id raising rather than reassigning; xlsx round-trip; verdict/
+evidence split on a legacy value; missing-value sentinels not mistaken for `No`;
+CLI smoke test.
 
 ---
 
