@@ -500,6 +500,10 @@ def artifact_fingerprint(path: Path) -> str | None:
             return frame_fingerprint(pd.read_csv(path))
         except pd.errors.EmptyDataError:
             return frame_fingerprint(pd.DataFrame())
+        except pd.errors.ParserError:
+            # Hand-curated CSVs may contain comment lines with commas. Hash
+            # the bytes rather than making those comments invalid to pandas.
+            return hashlib.sha256(path.read_bytes()).hexdigest()
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 

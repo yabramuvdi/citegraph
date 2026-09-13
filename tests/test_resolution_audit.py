@@ -5,6 +5,7 @@ import pytest
 
 from citegraph.dedup import DedupConfig
 from citegraph.html_report import build_report_html, collect_report_data
+from citegraph.io import artifact_fingerprint
 from tests.test_reliability_pipeline import setup_cached
 
 
@@ -69,6 +70,14 @@ def test_corrupt_audit_is_a_finding_not_a_report_crash(tmp_path):
     data = collect_report_data(tmp_path)
     assert data["dedup"]["audit_status"] == "invalid"
     assert any(e["path"].endswith("canonicalization_audit.json") for e in data["errors"])
+
+
+def test_commented_alias_csv_can_be_fingerprinted(tmp_path):
+    path = tmp_path / "author_aliases.csv"
+    path.write_text("# note, with a comma\ncluster_id,canonical_id\na,b\n")
+    before = artifact_fingerprint(path)
+    path.write_text("# changed note, with a comma\ncluster_id,canonical_id\na,b\n")
+    assert before != artifact_fingerprint(path)
 
 
 @pytest.mark.parametrize("filename", ["authors.csv", "author_citations.csv", "author_aliases.csv", "author_overrides.csv"])
