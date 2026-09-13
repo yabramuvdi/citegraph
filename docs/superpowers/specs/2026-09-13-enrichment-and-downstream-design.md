@@ -164,15 +164,23 @@ wrong record does not announce itself.
 
 ### Targeted re-crawl
 
-Delete the enrichment cache entries for the **419 OpenAlex-sourced works** and
-re-run `citegraph enrich`. CrossRef produced zero disjoint matches, so the 2,230
-CrossRef entries are left alone. Re-running `authors` afterwards is required
-because the OpenAlex/ORCID evidence changes.
+**Corrected after implementation — only the 29 vetoed works need re-crawling,
+not 419, and the 628 misses need none at all.** The veto only *removes*
+candidates; it adds no bonus term. That makes the blast radius provable:
 
-Optionally, a second pass over the 628 current misses: the fall-through rule can
-rescue a miss whose correct candidate was outranked. ~1,000 OpenAlex searches at
-10 credits each is roughly a full day's budget on a keyed account, so this is a
-separate decision, taken after the first pass lands.
+- A currently-matched work whose winner is **not** vetoed: the winner still has
+  the maximum adjusted score among all candidates, so `max(eligible)` returns it
+  unchanged. Re-crawling is a no-op.
+- A currently-matched work whose winner **is** vetoed: the result changes. These
+  are exactly the 29.
+- A currently-missed work: every candidate scored below the threshold, and
+  fall-through can only select a *lower*-scoring candidate. A miss cannot become
+  a match. The planned second pass over the 628 misses would find nothing.
+
+So: delete the 29 vetoed cache entries, re-run `citegraph enrich`, then re-run
+`authors` because the OpenAlex/ORCID evidence changes. ~29 OpenAlex searches at
+10 credits is negligible against the daily budget, where the original plan's 419
+plus 628 would have consumed most of a day's allowance for no gain.
 
 ### Flagged, not in scope
 
