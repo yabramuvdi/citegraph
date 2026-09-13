@@ -880,3 +880,51 @@ def test_normalize_record_unescapes_openalex_entities():
     assert rec["Title"] == "Group Processes & Intergroup Relations"
     assert rec["Journal"] == "Nature & Science"
     assert rec["Authors_List"] == ["R & B"]
+
+
+def test_cached_result_with_html_entities_is_repaired_on_read(tmp_path):
+    """Caches written before the unescape fix must not need a re-crawl.
+
+    The entity lives in the provider payload, so _normalize_record only
+    cleans freshly fetched records; every already-cached corpus would keep
+    "Journal of Economic Behavior &amp; Organization" forever.
+    """
+    from citegraph.enrich import _apply_enrichment_result
+
+    cached = {
+        "doi": "10.0/x",
+        "Title": "Communication, Commitment &amp; Trust",
+        "Authors": "R &amp; B",
+        "Authors_List": ["R &amp; B"],
+        "OpenAlex_Authors": [{"display_name": "R &amp; B", "family": "B &amp; Co",
+                              "given": "R", "openalex_id": None, "orcid": None}],
+        "Journal": "Journal of Economic Behavior &amp; Organization",
+        "Year": 2004,
+        "enrichment_source": "crossref",
+        "enrichment_status": "matched",
+        "enrichment_miss_reason": None,
+    }
+    out = _apply_enrichment_result({"Title": "t", "Authors": "a"}, cached)
+    assert out["Journal"] == "Journal of Economic Behavior & Organization"
+    assert out["Title"] == "Communication, Commitment & Trust"
+    assert out["Authors_List"] == ["R & B"]
+    assert out["Authors"] == "R & B"
+    assert out["OpenAlex_Authors"][0]["display_name"] == "R & B"
+    assert out["OpenAlex_Authors"][0]["family"] == "B & Co"
+
+
+def test_repair_leaves_an_already_clean_record_untouched():
+    """The repair runs on every read, so it must be stable under repetition."""
+    from citegraph.enrich import _apply_enrichment_result
+
+    cached = {
+        "doi": "10.0/x", "Title": "Fish & Chips", "Authors": "Böhm & Søn",
+        "Authors_List": ["Böhm & Søn"], "OpenAlex_Authors": [], "Journal": "J&K",
+        "Year": 2004, "enrichment_source": "crossref",
+        "enrichment_status": "matched", "enrichment_miss_reason": None,
+    }
+    once = _apply_enrichment_result({}, cached)
+    assert once["Title"] == "Fish & Chips"
+    assert once["Journal"] == "J&K"
+    assert once["Authors_List"] == ["Böhm & Søn"]
+    assert _apply_enrichment_result({}, once)["Title"] == "Fish & Chips"

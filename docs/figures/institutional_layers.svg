@@ -85,7 +85,7 @@
   <circle cx="340" cy="300" r="13" fill="#ffffff" stroke="#1e293b" stroke-width="1.8"/>
   <g font-size="11" fill="#64748b" text-anchor="middle">
     <text x="340" y="256">advisors are often outside</text>
-    <text x="340" y="272">the 59 (49 of 62 ties)</text>
+    <text x="340" y="272">the 58 (49 of 62 ties)</text>
   </g>
 
   <g fill="#2563eb">
@@ -113,13 +113,13 @@
   <line x1="1352" y1="391" x2="1392" y2="391" stroke="#64748b" stroke-width="2" marker-end="url(#arr)"/>
   <text x="1404" y="395" font-size="10.5" fill="#334155">PhD &#183; 62 ties, all high-confidence</text>
   <circle cx="1362" cy="417" r="9" fill="#ffffff" stroke="#1e293b" stroke-width="1.8"/>
-  <text x="1404" y="421" font-size="10.5" fill="#334155">advisor outside the 59 (49 of 62)</text>
+  <text x="1404" y="421" font-size="10.5" fill="#334155">advisor outside the 58 (49 of 62)</text>
   <line x1="1352" y1="439" x2="1600" y2="439" stroke="#e2e8f0" stroke-width="1"/>
   <text x="1352" y="459" font-size="10.5" fill="#64748b">Postdoc and visiting appointments are</text>
   <text x="1352" y="475" font-size="10.5" fill="#64748b">kept as career positions but are not</text>
   <text x="1352" y="491" font-size="10.5" fill="#64748b">modelled as supervision ties.</text>
   <text x="1352" y="515" font-size="10.5" fill="#64748b">Each position resolves to a ROR id.</text>
 
-  <text x="840" y="550" text-anchor="middle" font-size="11.5" fill="#64748b">52 of the 553 authors in the co-citation network have a career record; 7 more have one but are cited too rarely to be nodes. C has two advisors: 14 of 44 doctorates are co-supervised.</text>
+  <text x="840" y="550" text-anchor="middle" font-size="11.5" fill="#64748b">51 of the 564 authors in the co-citation network have a career record; 7 more have one but are cited too rarely to be nodes. C has two advisors: 14 of 44 doctorates are co-supervised.</text>
   <text x="840" y="568" text-anchor="middle" font-size="11.5" fill="#64748b">Both layers describe the same people, so every join runs on author_id.</text>
 </svg>

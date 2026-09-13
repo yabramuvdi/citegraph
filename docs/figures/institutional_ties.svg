@@ -27,9 +27,9 @@
   <circle cx="280" cy="170" r="22" fill="#ffffff" stroke="#1e293b" stroke-width="2"/>
   <circle cx="560" cy="170" r="22" fill="#2563eb"/>
   <text x="280" y="212" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">advisor</text>
-  <text x="280" y="230" text-anchor="middle" font-size="10.5" fill="#64748b">often outside the 59</text>
+  <text x="280" y="230" text-anchor="middle" font-size="10.5" fill="#64748b">often outside the 58</text>
   <text x="560" y="212" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">advisee</text>
-  <text x="560" y="230" text-anchor="middle" font-size="10.5" fill="#64748b">always one of the 59</text>
+  <text x="560" y="230" text-anchor="middle" font-size="10.5" fill="#64748b">always one of the 58</text>
 
   <rect x="100" y="266" width="640" height="246" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.25"/>
   <text x="122" y="294" font-size="12.5" font-weight="bold" fill="#1e293b">supervision.csv &#8212; one row per tie</text>
@@ -41,7 +41,7 @@
     <text x="122" y="408">year_start / year_end</text>
     <text x="122" y="434">confidence</text>
     <text x="122" y="460">evidence</text>
-    <text x="122" y="486">advisor_in_corpus</text>
+    <text x="122" y="486">advisor_in_frame</text>
   </g>
   <g font-size="11" fill="#64748b">
     <text x="300" y="330">the two people, resolved to author_id where known</text>
@@ -50,7 +50,7 @@
     <text x="300" y="408">when</text>
     <text x="300" y="434">high 62 &#8212; every tie</text>
     <text x="300" y="460">the source that establishes the tie</text>
-    <text x="300" y="486">false for 42 of 62 ties</text>
+    <text x="300" y="486">true for 13 of 62 ties</text>
   </g>
 
   <text x="420" y="556" text-anchor="middle" font-size="11.5" fill="#64748b">Parking the postdoc layer removed every uncertain tie: all 62 that remain are high-confidence.</text>
@@ -67,12 +67,12 @@
   <text x="1014" y="198" font-size="11.5" font-weight="600" fill="#ffffff">44 of 56 doctorates &#183; 79%</text>
 
   <text x="1000" y="236" font-size="12" font-weight="600" fill="#1e293b">Postdoc</text>
-  <rect x="1000" y="246" width="220" height="34" fill="#e2e8f0"/>
-  <text x="1234" y="268" font-size="11.5" font-weight="600" fill="#1e293b">22 positions recorded, no ties modelled</text>
+  <rect x="1000" y="246" width="230" height="34" fill="#e2e8f0"/>
+  <text x="1244" y="268" font-size="11.5" font-weight="600" fill="#1e293b">23 positions recorded, no ties modelled</text>
 
   <text x="1000" y="306" font-size="12" font-weight="600" fill="#1e293b">Visiting</text>
-  <rect x="1000" y="316" width="30" height="34" fill="#e2e8f0"/>
-  <text x="1044" y="338" font-size="11.5" font-weight="600" fill="#1e293b">3 positions recorded, no ties modelled</text>
+  <rect x="1000" y="316" width="20" height="34" fill="#e2e8f0"/>
+  <text x="1034" y="338" font-size="11.5" font-weight="600" fill="#1e293b">2 positions recorded, no ties modelled</text>
 
   <text x="1000" y="378" font-size="10" fill="#94a3b8">Bar length is proportional to recorded positions, so the three levels are comparable in size as well as in coverage.</text>
 

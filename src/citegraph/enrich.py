@@ -515,6 +515,33 @@ def _unescape(value: str | None) -> str | None:
     return html.unescape(value) if isinstance(value, str) else value
 
 
+def _repair_html_entities(result: dict) -> dict:
+    """Unescape provider entities on every read, including cache hits.
+
+    :func:`_normalize_record` cleans freshly fetched records, but the entity
+    arrived inside the provider payload, so every corpus cached before that
+    fix would keep "Journal of Economic Behavior &amp; Organization" as its
+    canonical journal until the work was re-crawled. Repairing on read costs
+    nothing and needs no lookups. Unescaping is stable under repetition for
+    real bibliographic text, which never contains a doubly-escaped entity.
+    """
+    out = dict(result)
+    for key in ("Title", "Journal", "Authors"):
+        if key in out:
+            out[key] = _unescape(out[key])
+    authors = out.get("Authors_List")
+    if isinstance(authors, list):
+        out["Authors_List"] = [_unescape(a) for a in authors]
+    provider = out.get("OpenAlex_Authors")
+    if isinstance(provider, list):
+        out["OpenAlex_Authors"] = [
+            {k: _unescape(v) if k in {"display_name", "family", "given"} else v
+             for k, v in obj.items()} if isinstance(obj, dict) else obj
+            for obj in provider
+        ]
+    return out
+
+
 def _scalar_str(value: Any) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return ""
@@ -687,6 +714,7 @@ def load_cached_enrichments(
 
 def _apply_enrichment_result(row: dict, result: dict) -> dict:
     """Apply the same non-destructive policy on cache hits and fresh matches."""
+    result = _repair_html_entities(result)
     out = dict(row)
     bibliographic = {"Title", "Authors", "Authors_List", "Journal", "Year"}
     for key, value in _with_cache_diagnostics(result).items():
