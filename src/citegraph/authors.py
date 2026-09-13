@@ -43,6 +43,7 @@ after clustering so the user can fix anything the algorithm gets wrong.
 from __future__ import annotations
 
 import ast
+import csv
 import logging
 import re
 import unicodedata
@@ -1091,6 +1092,7 @@ def normalize_authors(
     citation_edges: pd.DataFrame | None = None,
     cfg: AuthorClusterConfig | None = None,
     aliases: dict[str, str] | None = None,
+    external_ids: dict[str, dict[str, str | None]] | None = None,
     constraints: list[dict] | None = None,
     audit: list[dict] | None = None,
     identity_state: dict | None = None,
@@ -1331,6 +1333,9 @@ def normalize_authors(
         identity_changes.extend(changes)
         identity_state.update(schema_version=1, algorithm=algorithm, published=published,
                               alias_bindings=bindings)
+
+    if external_ids:
+        _apply_external_ids(clusters, external_ids)
 
     authors_df = _clusters_to_authors_df(
         clusters, works=works, citation_edges=citation_edges
@@ -1884,6 +1889,82 @@ def _clusters_to_citations_df(clusters: list[AuthorCluster]) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows, columns=AUTHOR_CITATION_COLUMNS)
+
+
+def _apply_external_ids(
+    clusters: list[AuthorCluster],
+    external_ids: dict[str, dict[str, str | None]],
+) -> None:
+    """Stamp hand-curated identifiers onto canonical authors, in place.
+
+    Applied *after* identity reconciliation, because the file keys on the
+    published ``a-`` id the user actually sees. A curated value wins over
+    whatever the provider supplied: someone who opened the provider record
+    and checked is better evidence than a name match that failed.
+
+    This deliberately does not merge anything. ``author_aliases.csv`` decides
+    who is the same person; letting an identifier also force merges would put
+    two curated files in charge of the same question.
+    """
+    by_id = {c.id: c for c in clusters}
+    stale = sorted(set(external_ids) - set(by_id))
+    if stale:
+        raise ValueError(
+            f'Stale author external ids: {stale}; review against current authors.csv'
+        )
+    claimed: dict[tuple[str, str], str] = {}
+    for author_id, ids in external_ids.items():
+        for field_name in ("openalex_id", "orcid"):
+            value = ids.get(field_name)
+            if not value:
+                continue
+            owner = claimed.get((field_name, value))
+            if owner is not None and owner != author_id:
+                raise ValueError(
+                    f'External {field_name} {value} claimed by both {owner} and '
+                    f'{author_id}; one identifier cannot name two authors'
+                )
+            claimed[field_name, value] = author_id
+            setattr(by_id[author_id], field_name, value)
+
+
+def load_external_ids(path: Path | str | None) -> dict[str, dict[str, str | None]]:
+    """Load ``author_id,openalex_id,orcid`` overrides keyed by author id.
+
+    Missing path or file returns ``{}``. Blank identifier cells mean "leave
+    this one alone", so a row can set only an ORCID; a row that sets neither
+    is a mistake and raises rather than being silently ignored. Any further
+    columns (a ``note`` explaining the override) are read and discarded.
+    """
+    if path is None:
+        return {}
+    p = Path(path)
+    if not p.exists():
+        return {}
+    out: dict[str, dict[str, str | None]] = {}
+    with p.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(_strip_comments(handle)))
+    for row in rows:
+        author_id = (row.get("author_id") or "").strip()
+        if not author_id:
+            continue
+        openalex_id = (row.get("openalex_id") or "").strip() or None
+        orcid = (row.get("orcid") or "").strip() or None
+        if not openalex_id and not orcid:
+            raise ValueError(
+                f'Author external id row for {author_id} sets no identifier; '
+                'give an openalex_id or an orcid, or delete the row'
+            )
+        if author_id in out:
+            raise ValueError(f'Duplicate author external id row for {author_id}')
+        out[author_id] = {"openalex_id": openalex_id, "orcid": orcid}
+    return out
+
+
+def _strip_comments(lines):
+    for line in lines:
+        if not line.lstrip().startswith("#"):
+            yield line
 
 
 def load_aliases(path: Path | str | None) -> dict[str, str]:

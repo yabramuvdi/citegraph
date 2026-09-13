@@ -32,7 +32,12 @@ import pandas as pd
 
 from citegraph._progress import iter_with_progress
 from citegraph.author_overrides import bind_author_constraints, load_author_constraints
-from citegraph.authors import AuthorClusterConfig, load_aliases, normalize_authors
+from citegraph.authors import (
+    AuthorClusterConfig,
+    load_aliases,
+    load_external_ids,
+    normalize_authors,
+)
 from citegraph.config import get_settings
 from citegraph.dedup import DedupConfig, canonicalize_works
 from citegraph.enrich import EnrichConfig
@@ -574,6 +579,7 @@ class Pipeline:
         try:
             previous = self._load_works()
             aliases = load_aliases(self.layout.author_aliases_csv)
+            external_ids = load_external_ids(self.layout.author_external_ids_csv)
             if self.layout.authors_csv.exists() and self.layout.author_citations_csv.exists():
                 # Older releases split comma-bearing author strings differently,
                 # so a few stored occurrences no longer describe the works table.
@@ -601,6 +607,7 @@ class Pipeline:
             normalize_authors(
                 works=previous, enriched_works=enriched, cfg=self.author_config,
                 aliases=aliases,
+            external_ids=external_ids,
                 constraints=load_author_constraints(
                     self.layout.author_overrides_csv, works=previous,
                     metadata_path=self.layout.author_overrides_meta_json),
@@ -704,6 +711,7 @@ class Pipeline:
         enriched, enrichment_status = self._author_enrichment(works)
 
         aliases = load_aliases(self.layout.author_aliases_csv)
+        external_ids = load_external_ids(self.layout.author_external_ids_csv)
 
         identity = {}
         if self.layout.author_identity_json.exists():
@@ -735,6 +743,7 @@ class Pipeline:
             citation_edges=graph,
             cfg=self.author_config,
             aliases=aliases,
+            external_ids=external_ids,
             audit=resolution_audit,
             constraints=constraints,
             identity_state=identity,

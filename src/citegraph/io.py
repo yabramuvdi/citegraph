@@ -166,6 +166,10 @@ class OutLayout:
         return self.out_dir / "journal_aliases.csv"
 
     @property
+    def author_external_ids_csv(self) -> Path:
+        return self.out_dir / "author_external_ids.csv"
+
+    @property
     def author_overrides_csv(self) -> Path:
         return self.out_dir / "author_overrides.csv"
 
@@ -516,7 +520,7 @@ WORK_AUDIT_INPUTS = {"sources.csv", "citations_raw.csv", "work_identity.json"}
 WORK_AUDIT_OUTPUTS = {"works.csv", "citation_graph.csv"}
 AUTHOR_AUDIT_INPUTS = {
     "works.csv", "citation_graph.csv", "enriched_works.csv", "enrichment_provenance.json",
-    "source_ids.json", "work_id_collisions.json", "author_aliases.csv", "journal_aliases.csv", "author_overrides.csv", "author_overrides_meta.json",
+    "source_ids.json", "work_id_collisions.json", "author_aliases.csv", "journal_aliases.csv", "author_external_ids.csv", "author_overrides.csv", "author_overrides_meta.json",
     "work_identity.json", "author_identity.json",
 }
 AUTHOR_AUDIT_OUTPUTS = {"authors.csv", "author_citations.csv", "author_review.json"}
