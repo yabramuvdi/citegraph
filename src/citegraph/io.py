@@ -202,6 +202,10 @@ class OutLayout:
         return self.out_dir / "conversion_warnings.json"
 
     @property
+    def journal_alias_warnings_json(self) -> Path:
+        return self.out_dir / "journal_alias_warnings.json"
+
+    @property
     def artifact_manifest_json(self) -> Path:
         return self.out_dir / "artifact_manifest.json"
 

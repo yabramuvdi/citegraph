@@ -118,6 +118,25 @@ def _warn_conversion_quality(layout: OutLayout, *, ocr_attempted: bool) -> None:
     typer.secho(f"  {layout.conversion_warnings_json}", fg=typer.colors.YELLOW)
 
 
+def _warn_unused_journal_aliases(layout: OutLayout) -> None:
+    """Echo a yellow warning for curated journal aliases that folded nothing.
+
+    Only reachable when enrichment is configured but has not run yet: once
+    every vocabulary is on the table a dead row raises instead.
+    """
+    from citegraph.reports import count_journal_alias_warnings
+
+    n = count_journal_alias_warnings(layout.journal_alias_warnings_json)
+    if not n:
+        return
+    typer.secho(
+        f"{n} journal alias(es) fold nothing yet; run `citegraph enrich` and "
+        "re-check before trusting a journal rollup. See:",
+        fg=typer.colors.YELLOW,
+    )
+    typer.secho(f"  {layout.journal_alias_warnings_json}", fg=typer.colors.YELLOW)
+
+
 def _resolve_ocr_mode(ocr: bool, ocr_auto: bool) -> OCRMode:
     """Map the two mutually-exclusive CLI flags to the Pipeline ``ocr`` value."""
     if ocr and ocr_auto:
@@ -279,6 +298,7 @@ def run(
     )
     layout = pipeline.layout
     _warn_conversion_quality(layout, ocr_attempted=bool(ocr_mode))
+    _warn_unused_journal_aliases(layout)
     if layout.papers_no_references_json.exists():
         import json as _json
         entries = _json.loads(layout.papers_no_references_json.read_text(encoding="utf-8"))
@@ -503,6 +523,7 @@ def dedup(
         f"Canonicalized into {len(works)} works ({n_core} core, "
         f"{len(graph)} edges). Wrote {layout.works_csv} and {layout.graph_csv}."
     )
+    _warn_unused_journal_aliases(layout)
     _next_step_hint(
         f"Inspect works.csv. Optionally `citegraph enrich --out {out}` for DOI lookup."
     )

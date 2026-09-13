@@ -143,6 +143,13 @@ def count_no_references(path: Path) -> int:
     return len(read_json(path))
 
 
+def count_journal_alias_warnings(path: Path) -> int:
+    """Curated journal aliases that folded nothing; 0 if the file doesn't exist."""
+    if not path.exists():
+        return 0
+    return len(read_json(path).get("unused_aliases", []))
+
+
 def check_conversion_quality(
     paths: list[Path], layout: OutLayout, *, ocr_attempted: bool = False
 ) -> None:

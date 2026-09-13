@@ -27,7 +27,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -96,15 +96,9 @@ def canonicalize_journals(
 
     alias_by_key = {journal_key(raw): canonical for raw, canonical in (aliases or {}).items()}
     if strict:
-        unused = sorted(
-            raw for raw in (aliases or {}) if journal_key(raw) not in counts
-        )
+        unused = unused_aliases(aliases, observed)
         if unused:
-            raise ValueError(
-                "Journal aliases match no journal in this corpus: "
-                + ", ".join(repr(u) for u in unused)
-                + ". Fix the spelling or delete the row."
-            )
+            raise ValueError(unused_alias_message(unused))
 
     display: dict[str, str] = {}
     for key, spellings in counts.items():
@@ -119,6 +113,33 @@ def canonicalize_journals(
         (str(n).strip() if journal_key(n) else ""): display.get(journal_key(n), "")
         for n in names
     }
+
+
+def unused_aliases(
+    aliases: Mapping[str, str] | None, *vocabularies: Iterable[object]
+) -> list[str]:
+    """Curated rows whose folded key appears in none of ``vocabularies``.
+
+    A corpus spells its journals twice — once as the bibliography extracted
+    them, once as the provider reports them — and a row is only dead if it
+    matches *neither*. Ask this against every vocabulary the corpus has rather
+    than against one fold, or a row is rejected for the very thing it does:
+    an alias expanding "Ecol. Econ." matches nothing among provider titles
+    precisely because the provider already says "Ecological Economics".
+    """
+    known: set[str] = set()
+    for names in vocabularies:
+        known.update(key for key in (journal_key(n) for n in names) if key)
+    return sorted(raw for raw in (aliases or {}) if journal_key(raw) not in known)
+
+
+def unused_alias_message(unused: Sequence[str]) -> str:
+    """The one wording for a dead curated row, shared by every caller."""
+    return (
+        "Journal aliases match no journal in this corpus: "
+        + ", ".join(repr(u) for u in unused)
+        + ". Fix the spelling or delete the row."
+    )
 
 
 def load_journal_aliases(path: Path | str | None) -> dict[str, str]:
