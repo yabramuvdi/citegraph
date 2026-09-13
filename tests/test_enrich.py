@@ -848,3 +848,35 @@ def test_enrichment_summary_breaks_down_by_ring(tmp_path):
         "0": {"n": 1, "n_matched": 0},
         "1": {"n": 1, "n_matched": 0},
     }
+
+
+def test_normalize_record_unescapes_html_entities():
+    """CrossRef returns container titles with raw HTML entities.
+
+    80 works in one corpus carried "Journal of Economic Behavior &amp;
+    Organization" as their canonical journal name.
+    """
+    item = {
+        "title": ["Communication, Commitment &amp; Trust"],
+        "author": [{"given": "A", "family": "Smith &amp; Co"}],
+        "container-title": ["Journal of Economic Behavior &amp; Organization"],
+        "issued": {"date-parts": [[2004]]},
+        "DOI": "10.0/x",
+    }
+    rec = _normalize_record(item, "crossref")
+    assert rec["Journal"] == "Journal of Economic Behavior & Organization"
+    assert rec["Title"] == "Communication, Commitment & Trust"
+    assert rec["Authors_List"] == ["A Smith & Co"]
+
+
+def test_normalize_record_unescapes_openalex_entities():
+    item = {
+        "title": "Group Processes &amp; Intergroup Relations",
+        "authorships": [{"author": {"display_name": "R &amp; B"}}],
+        "primary_location": {"source": {"display_name": "Nature &amp; Science"}},
+        "publication_year": 2010,
+    }
+    rec = _normalize_record(item, "openalex")
+    assert rec["Title"] == "Group Processes & Intergroup Relations"
+    assert rec["Journal"] == "Nature & Science"
+    assert rec["Authors_List"] == ["R & B"]

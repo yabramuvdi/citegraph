@@ -11,6 +11,7 @@ the :class:`citegraph.Pipeline` when ``enrich=True``.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import math
@@ -487,6 +488,17 @@ def _normalize_record(item: dict, source: str) -> dict:
         if isinstance(doi, str) and doi.startswith("https://doi.org/"):
             doi = doi[len("https://doi.org/"):]
 
+    # Both providers return raw HTML entities in free-text fields, so the
+    # canonical journal for one corpus read "Journal of Economic Behavior
+    # &amp; Organization" on 80 works. Unescape at the source rather than in
+    # each consumer.
+    title = _unescape(title)
+    journal = _unescape(journal)
+    for obj in author_objs:
+        for field_name in ("display_name", "family", "given"):
+            obj[field_name] = _unescape(obj[field_name])
+    authors = [a["display_name"] for a in author_objs if a["display_name"]]
+
     return {
         "doi": doi,
         "Title": title,
@@ -497,6 +509,10 @@ def _normalize_record(item: dict, source: str) -> dict:
         "Year": int(year) if year else None,
         "enrichment_source": source,
     }
+
+
+def _unescape(value: str | None) -> str | None:
+    return html.unescape(value) if isinstance(value, str) else value
 
 
 def _scalar_str(value: Any) -> str:

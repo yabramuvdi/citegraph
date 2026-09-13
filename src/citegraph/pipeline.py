@@ -533,6 +533,7 @@ class Pipeline:
         write_json(self.layout.work_id_collisions_json, {
             "schema_version": 1, "collision_ids": sorted(collision_ids),
         })
+        works = self._with_canonical_journals(works)
         write_csv(self.layout.works_csv, works, index=True)
         write_csv(self.layout.graph_csv, graph)
         write_json(self.layout.canonicalization_audit_json, {
@@ -785,6 +786,20 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Stage 5: optional enrichment
     # ------------------------------------------------------------------
+    def _with_canonical_journals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Attach ``Journal_Canonical`` using ``journal_aliases.csv`` if present.
+
+        Computed twice on purpose: ``works.csv`` folds the extracted names so
+        the column exists even without enrichment, and ``enriched_works.csv``
+        folds the provider container titles, which are the better basis. Each
+        artifact is canonical for its own consumers, the same way ``Journal``
+        already is.
+        """
+        from citegraph.journals import add_canonical_journals, load_journal_aliases
+
+        aliases = load_journal_aliases(self.layout.journal_aliases_csv)
+        return add_canonical_journals(df, aliases, strict=bool(aliases))
+
     def maybe_enrich(self, works: pd.DataFrame | None = None) -> pd.DataFrame:
         if works is None:
             works = self._load_works()
@@ -793,6 +808,7 @@ class Pipeline:
         from citegraph.enrich import enrich_works
 
         enriched = enrich_works(works, cfg=self.enrich_config, layout=self.layout)
+        enriched = self._with_canonical_journals(enriched)
         write_csv(self.layout.enriched_works_csv, enriched, index=True)
         persisted = pd.read_csv(self.layout.enriched_works_csv, index_col='id')
         write_json(self.layout.enrichment_provenance_json, {
