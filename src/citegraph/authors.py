@@ -157,6 +157,22 @@ def _strip_diacritics(text: str) -> str:
     )
 
 
+# Providers spell hyphenated names with typographic dashes: OpenAlex returns
+# "Villegas‐Palacio" (U+2010 HYPHEN), not an ASCII "-". They are the same
+# character to a reader and must be the same to the normaliser, or one person
+# gets two blocking keys and no provider id ever attaches. The soft hyphen is an
+# invisible line-break hint, so it is deleted rather than turned into a hyphen.
+_UNICODE_DASHES = str.maketrans({
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+    "\u2014": "-", "\u2015": "-", "\u2212": "-", "\u00ad": "",
+})
+
+
+def _fold_dashes(text: str) -> str:
+    """Map typographic dashes onto the ASCII hyphen the parser understands."""
+    return text.translate(_UNICODE_DASHES)
+
+
 def _norm_surname(surname: str) -> str:
     """Lowercase + diacritic-strip + drop non-alphabetic characters.
 
@@ -164,7 +180,7 @@ def _norm_surname(surname: str) -> str:
     compared by full normalised form. The blocking step uses this as the
     bucket key, so it MUST be deterministic across runs.
     """
-    s = _strip_diacritics(surname).lower().strip()
+    s = _strip_diacritics(_fold_dashes(surname)).lower().strip()
     # Hyphens are spelling variance, not structure: 'Casas-Casas' and
     # 'Casas Casas' must produce the same blocking key.
     s = s.replace("-", " ")
@@ -269,7 +285,10 @@ def parse_author(
     """
     if not isinstance(raw, str):
         return None
-    s = raw.strip()
+    # Fold dashes before anything inspects the string: the compound-surname
+    # checks test for a literal "-", so a typographic one would read as an
+    # unhyphenated name. ``raw`` keeps the original spelling for display.
+    s = _fold_dashes(raw).strip()
     if not s:
         return None
 
@@ -1252,7 +1271,13 @@ def normalize_authors(
     for entry in attachment_audit:
         entry["author_id"] = author_by_occurrence.get((entry["record_id"], entry["position"]))
         if entry["decision"] in {"ambiguous", "conflict"}:
-            review.append({**entry, "reason": "enrichment_" + entry["decision"]})
+            # A provider author nobody claimed is the mirror image of a
+            # conflict, not a cluster to review: it has no position and no
+            # author_id, so filing it as one inflates the backlog with rows
+            # that cannot be acted on.
+            review.append({**entry, "reason": "enrichment_provider_author_unused"
+                           if entry.get("detail") == "unassigned_provider_author"
+                           else "enrichment_" + entry["decision"]})
     resolution_audit: list[dict] = []
     for cluster in clusters:
         identifiers = {"openalex_ids": sorted({o.openalex_id for o in cluster.occurrences if o.openalex_id}),

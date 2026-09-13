@@ -1412,3 +1412,59 @@ def test_alias_merge_keeps_the_target_identity_not_the_fragment():
     row = authors_df.loc["a-casas-casas-andres"]
     assert row["n_works"] == 3
     assert row["display_name"] == "Andrés Casas-Casas"
+
+
+def test_typographic_hyphen_normalizes_like_an_ascii_one():
+    """OpenAlex writes hyphenated names with U+2010, not ASCII '-'.
+
+    The normaliser dropped it instead of treating it as a hyphen, so
+    'Villegas‐Palacio' keyed as 'villegaspalacio' while the extracted
+    'Villegas-Palacio' keyed as 'villegas palacio' — two blocking keys for one
+    person, and every provider id attachment for a compound Hispanic surname
+    failed on it.
+    """
+    assert parse_author("Clara Villegas‐Palacio").surname_norm == "villegas palacio"
+    assert parse_author("Pascual‑Ezama, David").surname_norm == "pascual ezama"
+    assert parse_author("Sergio Villamayor–Tomás").surname_norm == "villamayor tomas"
+
+
+def test_provider_id_attaches_across_a_typographic_hyphen():
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Clara Villegas-Palacio"], "Year": 2015},
+    ])
+    enriched = pd.DataFrame([
+        {"id": "r-1", "OpenAlex_Authors": [{"display_name": "Clara Villegas‐Palacio",
+                                            "family": None, "given": None,
+                                            "openalex_id": "A5001", "orcid": None}]},
+    ]).set_index("id")
+
+    authors_df, _, _ = normalize_authors(works=refs, enriched_works=enriched)
+
+    assert len(authors_df) == 1
+    assert authors_df.iloc[0]["openalex_id"] == "A5001"
+
+
+def test_unused_provider_authors_get_their_own_review_reason():
+    """Provider-side rows are the mirror of a conflict, not a cluster to review.
+
+    They carry no position and no author_id, so filing them as
+    `enrichment_conflict` triples the apparent review backlog with rows nobody
+    can act on.
+    """
+    refs = _refs([
+        {"id": "r-1", "Title": "T1", "Authors_List": ["Ada Lovelace"], "Year": 2015},
+    ])
+    enriched = pd.DataFrame([
+        {"id": "r-1", "OpenAlex_Authors": [{"display_name": "Grace Hopper", "family": "Hopper",
+                                            "given": "Grace", "openalex_id": "A1", "orcid": None}]},
+    ]).set_index("id")
+
+    _, _, review = normalize_authors(works=refs, enriched_works=enriched)
+
+    reasons = {r["reason"] for r in review if r["reason"].startswith("enrichment_")}
+    assert "enrichment_conflict" in reasons
+    assert "enrichment_provider_author_unused" in reasons
+    unused = [r for r in review if r["reason"] == "enrichment_provider_author_unused"]
+    assert all(r.get("position") is None for r in unused)
+    conflicts = [r for r in review if r["reason"] == "enrichment_conflict"]
+    assert all(r.get("position") is not None for r in conflicts)
