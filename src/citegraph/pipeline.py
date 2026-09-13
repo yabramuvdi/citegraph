@@ -20,6 +20,7 @@ easy as::
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,7 @@ from citegraph.reports import (
     count_author_review,
     count_conversion_warnings,
     count_failures,
+    count_journal_alias_warnings,
     count_no_references,
     count_source_duplicates,
     detect_source_duplicates,
@@ -96,6 +98,19 @@ logger = logging.getLogger(__name__)
 # Backwards-compatible private alias for older tests / callers that reached
 # into pipeline.py before report helpers were split out.
 _count_failures = count_failures
+
+
+def _read_journal_column(path: Path) -> list[object]:
+    """The ``Journal`` column of a stage CSV, or nothing if it can't be read.
+
+    Only ever used to widen the vocabulary a curated alias is checked against,
+    so a missing column or a corrupt artifact must degrade to "no extra names"
+    rather than turn a curation check into a crash.
+    """
+    try:
+        return pd.read_csv(path, usecols=["Journal"])["Journal"].tolist()
+    except (OSError, ValueError, pd.errors.ParserError):
+        return []
 
 
 class StageNotReadyError(RuntimeError):
@@ -795,7 +810,9 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Stage 5: optional enrichment
     # ------------------------------------------------------------------
-    def _with_canonical_journals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _with_canonical_journals(
+        self, df: pd.DataFrame, *, also_seen: Iterable[object] | None = None
+    ) -> pd.DataFrame:
         """Attach ``Journal_Canonical`` using ``journal_aliases.csv`` if present.
 
         Computed twice on purpose: ``works.csv`` folds the extracted names so
@@ -803,11 +820,69 @@ class Pipeline:
         folds the provider container titles, which are the better basis. Each
         artifact is canonical for its own consumers, the same way ``Journal``
         already is.
+
+        ``also_seen`` carries the *other* fold's journal names, so a curated
+        row is judged against the corpus's whole vocabulary rather than the one
+        frame in hand — see :meth:`_check_journal_aliases`.
         """
         from citegraph.journals import add_canonical_journals, load_journal_aliases
 
         aliases = load_journal_aliases(self.layout.journal_aliases_csv)
-        return add_canonical_journals(df, aliases, strict=bool(aliases))
+        if aliases:
+            self._check_journal_aliases(df, aliases, also_seen)
+        return add_canonical_journals(df, aliases, strict=False)
+
+    def _check_journal_aliases(
+        self,
+        df: pd.DataFrame,
+        aliases: Mapping[str, str],
+        also_seen: Iterable[object] | None,
+    ) -> None:
+        """Report curated journal aliases that fold nothing anywhere.
+
+        A row is dead only if it matches *neither* fold, so both are checked
+        together: an alias expanding "Ecol. Econ." matches nothing among
+        provider titles precisely because the provider already reports
+        "Ecological Economics", and rejecting it there would punish it for
+        working. Dead rows always land in ``journal_alias_warnings.json``.
+
+        Whether that also raises depends on whether the corpus can still grow a
+        vocabulary. With enrichment configured but not yet run, the provider
+        names are still to come and a row matching nothing *yet* may be
+        perfectly good, so the sidecar is the whole report. Once every
+        vocabulary is on the table — enrichment done, or never happening — a
+        dead row is provably dead and stops the stage, which is where a typo
+        surfaces.
+        """
+        from citegraph.journals import unused_alias_message, unused_aliases
+
+        vocabularies = [df["Journal"] if "Journal" in df.columns else []]
+        # The caller passes the other fold when it has it (stage 5 holds both
+        # frames). Stage 4 does not, so fall back to the enriched artifact from
+        # an earlier run — a different file from the one it is about to write.
+        provider_names_on_disk = self.layout.enriched_works_csv.exists()
+        if also_seen is not None:
+            vocabularies.append(also_seen)
+        elif provider_names_on_disk:
+            vocabularies.append(_read_journal_column(self.layout.enriched_works_csv))
+
+        unused = unused_aliases(aliases, *vocabularies)
+        path = self.layout.journal_alias_warnings_json
+        if not unused:
+            path.unlink(missing_ok=True)
+            return
+
+        write_json(path, {"schema_version": 1, "unused_aliases": unused})
+        vocabulary_is_complete = (
+            also_seen is not None or provider_names_on_disk or not self.enrich
+        )
+        if vocabulary_is_complete:
+            raise ValueError(unused_alias_message(unused))
+        logger.warning(
+            "%d journal alias(es) fold nothing yet; enrichment has not run. See %s",
+            len(unused),
+            path,
+        )
 
     def maybe_enrich(self, works: pd.DataFrame | None = None) -> pd.DataFrame:
         if works is None:
@@ -817,7 +892,9 @@ class Pipeline:
         from citegraph.enrich import enrich_works
 
         enriched = enrich_works(works, cfg=self.enrich_config, layout=self.layout)
-        enriched = self._with_canonical_journals(enriched)
+        enriched = self._with_canonical_journals(
+            enriched, also_seen=works["Journal"] if "Journal" in works.columns else []
+        )
         write_csv(self.layout.enriched_works_csv, enriched, index=True)
         persisted = pd.read_csv(self.layout.enriched_works_csv, index_col='id')
         write_json(self.layout.enrichment_provenance_json, {
@@ -883,6 +960,9 @@ class Pipeline:
             "n_source_duplicates": count_source_duplicates(self.layout.source_duplicates_json),
             "n_papers_no_references": count_no_references(self.layout.papers_no_references_json),
             "n_conversion_warnings": count_conversion_warnings(self.layout.conversion_warnings_json),
+            "n_journal_alias_warnings": count_journal_alias_warnings(
+                self.layout.journal_alias_warnings_json
+            ),
             "model": self.model,
             "enrich": self.enrich,
             "dedup_config": self.dedup_config.__dict__,
