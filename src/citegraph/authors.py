@@ -483,6 +483,91 @@ def _is_corporate_author(s: str) -> bool:
     return len(tokens) >= 3 or tokens[0] in _CORPORATE_WORDS
 
 
+# Below this length a token is too short to absorb a typo without pairing
+# unrelated people ("Lee"/"Loe"), so it must match exactly.
+_AGREEMENT_FUZZ_MIN_LEN = 5
+
+# Providers spell apostrophes typographically ("D’Adda") where
+# bibliographies use ASCII ("D'Adda"); both must fold to one token, the same
+# way :func:`_fold_dashes` handles the unicode dashes OpenAlex emits. The
+# OCR-spaced form ("Ca ' rdenas") folds here too.
+_APOSTROPHES = ("'", "’", "‘", "ʼ", "´", "`")
+
+
+def author_list_agreement(
+    extracted: list[str],
+    provider: list[str],
+    *,
+    fuzz_threshold: float = 85.0,
+) -> bool | None:
+    """Do two author lists name any of the same people?
+
+    ``True`` when at least one name pairs, ``False`` when both sides carry
+    usable person names and none pair, ``None`` to abstain.
+
+    Comparison is over order-free name tokens rather than
+    :attr:`ParsedAuthor.surname_norm`, because the surname path needs the
+    corpus-wide compound-surname lexicon and that does not exist yet when
+    enrichment runs. Without it every comma-less provider name collapses to
+    its last token, so "Moros, L." and "Lina Moros Canon" stop matching.
+    Tokens pair on equality, or on ``fuzz_threshold`` similarity when long
+    enough to survive it, which is what lets a bibliography's
+    "Hirschmann, A." reach the provider's "Albert O. Hirschman".
+
+    Abstains whenever either side names an institution, since a provider
+    record for a corporate-authored report legitimately lists the human
+    chapter authors instead ("IFPRI" -> "Fredrick O. Wanyama").
+    """
+    left = _agreement_tokens(extracted)
+    right = _agreement_tokens(provider)
+    if left is None or right is None:
+        return None
+    for a in left:
+        for b in right:
+            if a == b:
+                return True
+            if (
+                len(a) >= _AGREEMENT_FUZZ_MIN_LEN
+                and len(b) >= _AGREEMENT_FUZZ_MIN_LEN
+                and fuzz.ratio(a, b) >= fuzz_threshold
+            ):
+                return True
+    return False
+
+
+def _is_acronym_author(s: str) -> bool:
+    """True for a bare all-caps acronym ("IFPRI", "UNFCCC", "IPCC").
+
+    :func:`_is_corporate_author` needs two tokens to fire, so acronyms slip
+    past it. They are institutions all the same.
+    """
+    stripped = s.strip()
+    return (
+        len(stripped) >= 3
+        and stripped.isupper()
+        and stripped.isalpha()
+        and " " not in stripped
+    )
+
+
+def _agreement_tokens(names: list[str]) -> set[str] | None:
+    """Order-free name tokens, or ``None`` when there is nothing to compare."""
+    tokens: set[str] = set()
+    for raw in names:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        if _is_corporate_author(raw) or _is_acronym_author(raw):
+            return None
+        cleaned = _strip_diacritics(_fold_dashes(raw))
+        for apostrophe in _APOSTROPHES:
+            cleaned = cleaned.replace(apostrophe, "")
+        for token in re.split(r"[^A-Za-z]+", cleaned):
+            lowered = token.lower()
+            if len(token) > 2 and lowered not in _PARTICLES:
+                tokens.add(lowered)
+    return tokens or None
+
+
 def _tokenize_given(given_str: str) -> list[str]:
     """Split a given-name string into tokens, preserving 'J.-C.' as one."""
     if not given_str:

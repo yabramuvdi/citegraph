@@ -32,6 +32,7 @@ from tenacity import (
 if TYPE_CHECKING:
     from citegraph.io import OutLayout
 
+from citegraph.authors import author_list_agreement
 from citegraph.io import (
     fingerprint as content_fingerprint,
 )
@@ -66,6 +67,9 @@ class EnrichConfig:
     rows: int = 3
     max_workers: int = 8
     year_mismatch_penalty: float = 8.0
+    # Similarity at which two name tokens count as the same person,
+    # absorbing extraction typos ("Hirschmann" / "Hirschman").
+    author_name_fuzz: float = 85.0
     retry_attempts: int = 3
     retry_wait_s: float = 0.25
 
@@ -84,6 +88,7 @@ _DIAGNOSTIC_COLUMNS = {
     "enrichment_candidate_title": None,
     "enrichment_year_match": None,
     "enrichment_year_delta": None,
+    "enrichment_author_agreement": None,
 }
 
 
@@ -115,7 +120,7 @@ def _try_import_httpx():
 
 def _crossref_lookup(
     title: str,
-    authors: str,
+    authors: list[str],
     year: int | None,
     cfg: EnrichConfig,
     client: Any,
@@ -125,7 +130,7 @@ def _crossref_lookup(
 
 def _crossref_lookup_report(
     title: str,
-    authors: str,
+    authors: list[str],
     year: int | None,
     cfg: EnrichConfig,
     client: Any,
@@ -137,7 +142,7 @@ def _crossref_lookup_report(
         "rows": cfg.rows,
     }
     if authors:
-        params["query.author"] = authors
+        params["query.author"] = ", ".join(authors)
     try:
         payload = _request_json(
             client,
@@ -150,16 +155,17 @@ def _crossref_lookup_report(
         return _LookupReport(miss_reason="http_error")
 
     items = payload.get("message", {}).get("items", [])
-    return _best_match_report(items, title, year, cfg, source="crossref")
+    return _best_match_report(items, title, year, cfg, source="crossref", authors=authors)
 
 
 def _openalex_lookup(
     title: str,
+    authors: list[str],
     year: int | None,
     cfg: EnrichConfig,
     client: Any,
 ) -> dict | None:
-    return _openalex_lookup_report(title, year, cfg, client).match
+    return _openalex_lookup_report(title, authors, year, cfg, client).match
 
 
 def _strip_openalex_wildcards(title: str) -> str:
@@ -179,6 +185,7 @@ def _strip_openalex_wildcards(title: str) -> str:
 
 def _openalex_lookup_report(
     title: str,
+    authors: list[str],
     year: int | None,
     cfg: EnrichConfig,
     client: Any,
@@ -208,7 +215,7 @@ def _openalex_lookup_report(
         return _LookupReport(miss_reason="http_error")
 
     items = payload.get("results", [])
-    return _best_match_report(items, title, year, cfg, source="openalex")
+    return _best_match_report(items, title, year, cfg, source="openalex", authors=authors)
 
 
 def _request_json(
@@ -265,6 +272,31 @@ def _best_match(
     return _best_match_report(items, title, year, cfg, source=source).match
 
 
+_AGREEMENT_LABELS = {True: "match", False: "mismatch", None: "unknown"}
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    item: dict
+    title: str
+    score: float
+    adjusted: float
+    year_match: bool | None
+    year_delta: int | None
+    agreement: bool | None
+
+    @property
+    def diagnostics(self) -> dict[str, Any]:
+        return {
+            "enrichment_title_score": float(self.score),
+            "enrichment_adjusted_score": float(self.adjusted),
+            "enrichment_candidate_title": self.title,
+            "enrichment_year_match": self.year_match,
+            "enrichment_year_delta": self.year_delta,
+            "enrichment_author_agreement": _AGREEMENT_LABELS[self.agreement],
+        }
+
+
 def _best_match_report(
     items: list[dict],
     title: str,
@@ -272,48 +304,74 @@ def _best_match_report(
     cfg: EnrichConfig,
     *,
     source: str,
+    authors: list[str] | None = None,
 ) -> _LookupReport:
-    best: tuple[float, float, dict | None, str, bool | None, int | None] = (
-        0.0,
-        0.0,
-        None,
-        "",
-        None,
-        None,
-    )
+    """Pick the best provider record for one work.
+
+    Author agreement is a *veto* on candidate eligibility, not a term in the
+    score: the title still decides acceptance, so author evidence can never
+    push a weak title over the threshold. A provider record whose authors are
+    a different set of people is almost always a book review or a chapter
+    filed under the reviewed work's title, and accepting it overwrites
+    ``Journal`` and ``Year`` as well as the author identifiers.
+    """
+    scored: list[_Candidate] = []
     for item in items:
         cand_title = _candidate_title(item, source)
         if not cand_title:
             continue
         score = ratio(title.lower(), cand_title.lower())
-        cand_year = _candidate_year(item, source)
-        year_match, year_delta = _year_comparison(year, cand_year)
-        adjusted = score - (cfg.year_mismatch_penalty if year_delta else 0.0)
-        if adjusted > best[0]:
-            best = (adjusted, score, item, cand_title, year_match, year_delta)
-    adjusted, score, item, cand_title, year_match, year_delta = best
-    if item is None:
+        year_match, year_delta = _year_comparison(year, _candidate_year(item, source))
+        scored.append(
+            _Candidate(
+                item=item,
+                title=cand_title,
+                score=score,
+                adjusted=score - (cfg.year_mismatch_penalty if year_delta else 0.0),
+                year_match=year_match,
+                year_delta=year_delta,
+                agreement=author_list_agreement(
+                    list(authors or []),
+                    _candidate_authors(item, source),
+                    fuzz_threshold=cfg.author_name_fuzz,
+                ),
+            )
+        )
+    if not scored:
         return _LookupReport(miss_reason=f"no_{source}_candidates")
-    diagnostics = {
-        "enrichment_title_score": float(score),
-        "enrichment_adjusted_score": float(adjusted),
-        "enrichment_candidate_title": cand_title,
-        "enrichment_year_match": year_match,
-        "enrichment_year_delta": year_delta,
-    }
-    if adjusted < cfg.title_match_threshold:
+
+    eligible = [c for c in scored if c.agreement is not False]
+    best = max(eligible or scored, key=lambda c: c.adjusted)
+    diagnostics = best.diagnostics
+    if not eligible:
+        return _LookupReport(miss_reason="author_mismatch", diagnostics=diagnostics)
+    if best.adjusted < cfg.title_match_threshold:
         reason = (
             "year_mismatch"
-            if score >= cfg.title_match_threshold and year_delta
+            if best.score >= cfg.title_match_threshold and best.year_delta
             else "below_title_threshold"
         )
         return _LookupReport(miss_reason=reason, diagnostics=diagnostics)
 
-    match = _normalize_record(item, source)
+    match = _normalize_record(best.item, source)
     match["enrichment_status"] = "matched"
     match["enrichment_miss_reason"] = None
     match.update(diagnostics)
     return _LookupReport(match=match)
+
+
+def _candidate_authors(item: dict, source: str) -> list[str]:
+    if source == "crossref":
+        return [
+            " ".join(filter(None, [a.get("given"), a.get("family")]))
+            for a in item.get("author", [])
+        ]
+    if source == "openalex":
+        return [
+            (a.get("author") or {}).get("display_name", "")
+            for a in item.get("authorships", [])
+        ]
+    return []
 
 
 def _candidate_title(item: dict, source: str) -> str:
@@ -489,6 +547,11 @@ def _valid_result(result: Any, *, strict: bool) -> bool:
         return False
     if "Year" in result and result["Year"] is not None and (
         isinstance(result["Year"], bool) or not isinstance(result["Year"], int)
+    ):
+        return False
+    agreement = result.get("enrichment_author_agreement")
+    if agreement is not None and (
+        not isinstance(agreement, str) or agreement not in _AGREEMENT_LABELS.values()
     ):
         return False
     for key in ("enrichment_title_score", "enrichment_adjusted_score"):
@@ -697,7 +760,9 @@ def _enrich_one(
 
     # NaN is truthy and str()s to "nan", which would be sent as a real query.
     title = _scalar_str(row.get("Title"))
-    authors = _scalar_str(row.get("Authors"))
+    authors = parse_authors_list(row.get("Authors_List")) or [
+        a.strip() for a in _scalar_str(row.get("Authors")).split(",") if a.strip()
+    ]
     try:
         year = int(row.get("Year")) if row.get("Year") else None
     except (TypeError, ValueError):
@@ -707,7 +772,7 @@ def _enrich_one(
     openalex = _LookupReport()
     match = crossref.match
     if match is None:
-        openalex = _openalex_lookup_report(title, year, cfg, client)
+        openalex = _openalex_lookup_report(title, authors, year, cfg, client)
         match = openalex.match
 
     if match:
@@ -722,7 +787,8 @@ def _enrich_one(
 
 def _select_miss_report(*reports: _LookupReport) -> _LookupReport:
     priority = {
-        "http_error": 4,
+        "http_error": 5,
+        "author_mismatch": 4,
         "year_mismatch": 3,
         "below_title_threshold": 2,
         "no_crossref_candidates": 1,
@@ -764,6 +830,7 @@ def _write_enrichment_sidecars(
         "enrichment_candidate_title",
         "enrichment_year_match",
         "enrichment_year_delta",
+        "enrichment_author_agreement",
     ]
     misses_out = misses[[c for c in miss_columns if c in misses.columns]].copy()
     if enriched.index.name == "id":

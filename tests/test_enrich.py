@@ -146,7 +146,7 @@ def test_best_match_rejects_exact_title_when_year_penalty_drops_score():
 def test_crossref_happy_path():
     client = MagicMock()
     client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
-    result = _crossref_lookup("Attention Is All You Need", "Vaswani", 2017, _CFG, client)
+    result = _crossref_lookup("Attention Is All You Need", ["Vaswani"], 2017, _CFG, client)
     assert result is not None
     assert result["doi"] == "10.48550/arxiv.1706.03762"
 
@@ -154,20 +154,20 @@ def test_crossref_happy_path():
 def test_crossref_score_below_threshold():
     client = MagicMock()
     client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
-    result = _crossref_lookup("Totally Unrelated Work on Bananas", "", None, _CFG, client)
+    result = _crossref_lookup("Totally Unrelated Work on Bananas", [], None, _CFG, client)
     assert result is None
 
 
 def test_crossref_http_error():
     client = MagicMock()
     client.get.side_effect = Exception("connection refused")
-    result = _crossref_lookup("Attention Is All You Need", "", None, _CFG, client)
+    result = _crossref_lookup("Attention Is All You Need", [], None, _CFG, client)
     assert result is None
 
 
 def test_crossref_empty_title_returns_none():
     client = MagicMock()
-    result = _crossref_lookup("", "Author", 2020, _CFG, client)
+    result = _crossref_lookup("", ["Author"], 2020, _CFG, client)
     assert result is None
     client.get.assert_not_called()
 
@@ -180,7 +180,7 @@ def test_crossref_retries_transient_503_before_matching():
     client = MagicMock()
     client.get.side_effect = [transient, success]
 
-    result = _crossref_lookup("Attention Is All You Need", "Vaswani", 2017, cfg, client)
+    result = _crossref_lookup("Attention Is All You Need", ["Vaswani"], 2017, cfg, client)
 
     assert result is not None
     assert result["doi"] == "10.48550/arxiv.1706.03762"
@@ -194,7 +194,7 @@ def test_crossref_retries_transient_503_before_matching():
 def test_openalex_happy_path():
     client = MagicMock()
     client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
-    result = _openalex_lookup("Attention Is All You Need", 2017, _CFG, client)
+    result = _openalex_lookup("Attention Is All You Need", [], 2017, _CFG, client)
     assert result is not None
     assert result["doi"] == "10.48550/arxiv.1706.03762"
     assert result["enrichment_source"] == "openalex"
@@ -203,13 +203,13 @@ def test_openalex_happy_path():
 def test_openalex_http_error():
     client = MagicMock()
     client.get.side_effect = Exception("timeout")
-    result = _openalex_lookup("Some Title", None, _CFG, client)
+    result = _openalex_lookup("Some Title", [], None, _CFG, client)
     assert result is None
 
 
 def test_openalex_empty_title_returns_none():
     client = MagicMock()
-    result = _openalex_lookup("", None, _CFG, client)
+    result = _openalex_lookup("", [], None, _CFG, client)
     assert result is None
     client.get.assert_not_called()
 
@@ -219,7 +219,7 @@ def test_openalex_sends_mailto_param_for_polite_pool():
     client = MagicMock()
     client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
     cfg = EnrichConfig(title_match_threshold=90.0, contact_email="who@example.org")
-    _openalex_lookup("Attention Is All You Need", 2017, cfg, client)
+    _openalex_lookup("Attention Is All You Need", [], 2017, cfg, client)
     params = client.get.call_args.kwargs["params"]
     assert params["mailto"] == "who@example.org"
 
@@ -227,7 +227,7 @@ def test_openalex_sends_mailto_param_for_polite_pool():
 def test_openalex_omits_mailto_when_no_contact_email():
     client = MagicMock()
     client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
-    _openalex_lookup("Attention Is All You Need", 2017, _CFG, client)
+    _openalex_lookup("Attention Is All You Need", [], 2017, _CFG, client)
     params = client.get.call_args.kwargs["params"]
     assert "mailto" not in params
 
@@ -237,7 +237,7 @@ def test_openalex_sends_api_key_param():
     client = MagicMock()
     client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
     cfg = EnrichConfig(title_match_threshold=90.0, openalex_api_key="sk-test-123")
-    _openalex_lookup("Attention Is All You Need", 2017, cfg, client)
+    _openalex_lookup("Attention Is All You Need", [], 2017, cfg, client)
     params = client.get.call_args.kwargs["params"]
     assert params["api_key"] == "sk-test-123"
 
@@ -245,7 +245,7 @@ def test_openalex_sends_api_key_param():
 def test_openalex_omits_api_key_when_unset():
     client = MagicMock()
     client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
-    _openalex_lookup("Attention Is All You Need", 2017, _CFG, client)
+    _openalex_lookup("Attention Is All You Need", [], 2017, _CFG, client)
     params = client.get.call_args.kwargs["params"]
     assert "api_key" not in params
 
@@ -261,6 +261,7 @@ def test_openalex_strips_wildcard_chars_from_search():
     client.get.return_value = _mock_openalex_response([_OPENALEX_ITEM])
     _openalex_lookup(
         "Halting Degradation: Is There a Role for Rural Communities?",
+        [],
         1993,
         _CFG,
         client,
@@ -274,7 +275,7 @@ def test_openalex_strips_wildcard_chars_from_search():
 def test_openalex_wildcard_only_title_is_not_sent_as_empty_search():
     """A title that is nothing but wildcards must miss, not query for ''."""
     client = MagicMock()
-    report = _openalex_lookup_report("???", None, _CFG, client)
+    report = _openalex_lookup_report("???", [], None, _CFG, client)
     assert report.match is None
     assert report.miss_reason == "empty_title"
     client.get.assert_not_called()
@@ -284,7 +285,7 @@ def test_crossref_keeps_question_marks_in_title_query():
     """Only OpenAlex needs the stripping; CrossRef handles ? fine."""
     client = MagicMock()
     client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
-    _crossref_lookup("Is There a Role?", "Ostrom", 1993, _CFG, client)
+    _crossref_lookup("Is There a Role?", ["Ostrom"], 1993, _CFG, client)
     assert client.get.call_args.kwargs["params"]["query.title"] == "Is There a Role?"
 
 
@@ -293,7 +294,7 @@ def test_crossref_never_sends_openalex_api_key():
     client = MagicMock()
     client.get.return_value = _mock_crossref_response([_CROSSREF_ITEM])
     cfg = EnrichConfig(title_match_threshold=90.0, openalex_api_key="sk-test-123")
-    _crossref_lookup("Attention Is All You Need", "Ashish Vaswani", 2017, cfg, client)
+    _crossref_lookup("Attention Is All You Need", ["Ashish Vaswani"], 2017, cfg, client)
     params = client.get.call_args.kwargs["params"]
     assert "api_key" not in params
 

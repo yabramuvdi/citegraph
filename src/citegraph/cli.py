@@ -76,6 +76,7 @@ def _enrich_config(
     retry_wait: float,
     max_workers: int,
     openalex_api_key: str = "",
+    author_name_fuzz: float = 85.0,
 ) -> EnrichConfig:
     if not openalex_api_key:
         openalex_api_key = get_settings().openalex_api_key or ""
@@ -88,6 +89,7 @@ def _enrich_config(
         retry_attempts=retry_attempts,
         retry_wait_s=retry_wait,
         max_workers=max_workers,
+        author_name_fuzz=author_name_fuzz,
     )
 
 
@@ -156,6 +158,12 @@ def run(
         8.0,
         "--enrich-year-penalty",
         help="Score penalty applied when input and candidate years differ.",
+    ),
+    enrich_author_fuzz: float = typer.Option(
+        85.0,
+        "--enrich-author-fuzz",
+        help="Similarity at which two author names count as the same person. "
+             "A candidate sharing no author with the extracted record is rejected.",
     ),
     enrich_retry_attempts: int = typer.Option(
         3,
@@ -229,6 +237,7 @@ def run(
         enrich_retry_wait,
         enrich_max_workers,
         openalex_api_key,
+        enrich_author_fuzz,
     )
     ocr_mode = _resolve_ocr_mode(ocr, ocr_auto)
     pipeline = Pipeline(
@@ -510,6 +519,12 @@ def enrich(
         "--enrich-year-penalty",
         help="Score penalty applied when input and candidate years differ.",
     ),
+    enrich_author_fuzz: float = typer.Option(
+        85.0,
+        "--enrich-author-fuzz",
+        help="Similarity at which two author names count as the same person. "
+             "A candidate sharing no author with the extracted record is rejected.",
+    ),
     enrich_retry_attempts: int = typer.Option(
         3,
         "--enrich-retry-attempts",
@@ -546,6 +561,7 @@ def enrich(
         enrich_retry_wait,
         enrich_max_workers,
         openalex_api_key,
+        enrich_author_fuzz,
     )
     pipeline = Pipeline(pdf_dir=None, out_dir=out, enrich=True, enrich_config=ecfg)
 
