@@ -99,6 +99,43 @@ When `authors.csv` and `author_citations.csv` exist in `out_dir`, `from_out_dir`
 
 `author_cocitation_network(min_papers=3, citing_ids=None)` is the one method that *builds* a network for analysis rather than exporting one. It returns the weighted, undirected author co-citation projection (White & Griffith 1981): two authors are joined when the same bibliography cites both, and `weight` counts how many bibliographies do. It exists because the work-level graph is one hop deep — only PDF-backed works have outgoing edges, so betweenness/closeness/PageRank over `to_networkx()` would measure the sampling design, not the literature. The projection is a real one-mode network where Freeman/Bonacich centralities are defined. A citing work that cites several works by one author contributes one mention and never a self-loop; `min_papers` prunes the once-cited tail; `citing_ids` restricts the citing side, which is how the self-citation robustness variant is built. Nodes are added in sorted order so seeded layouts are reproducible — don't "simplify" that away. **That guarantee stops at the graph this method returns**: `Graph.subgraph(nodes)` keeps its node filter in a *set*, so any subgraph or `.copy()` of it is ordered by string hashing and therefore varies with `PYTHONHASHSEED` between processes. `nx.spring_layout` seeds initial positions *by node index*, so a fixed `seed=` on a subgraph still redraws differently on every run — this is exactly how the paper 4 ego-network figure became non-reproducible while claiming a fixed seed in its own caption. Anything that draws a *subset* of this network must re-establish the order itself (`add_nodes_from(sorted(...))`, and `add_edges_from(sorted(...))` for paint order); the same trap applies to `sorted(components, key=len)`, whose stable sort leaves same-size components in hash order unless the key carries a name tiebreak. Verify by executing the notebook twice in separate processes and comparing the PNGs byte for byte. Used by section 6 of [examples/paper4_figures.ipynb](examples/paper4_figures.ipynb), which computes the centralities themselves in the notebook so the measure choices stay visible for a methods section.
 
+### Figure styling lives in one module
+
+[plotting.py](src/citegraph/plotting.py) is the single definition of the
+economics-journal figure conventions, and **every** manuscript figure goes
+through it — both paper 4 notebooks (`examples/paper4_figures.ipynb` over
+`citegraph_out/`, `examples/paper4_institutional_figures.ipynb` over
+`institutional/out/`) import the same helpers so the two figure sets share one
+visual language by construction. Rules and rationale: the `styling-econ-figures`
+skill in `.claude/skills/`.
+
+Draw bars with `bar(ax, …)` / `barh(ax, …)`, **never `ax.bar` / `ax.barh`**.
+Matplotlib takes an unspecified bar colour from the property cycle, whose first
+entry under `econ_style()` is `INK` — so a bare `ax.bar` comes out *solid black*
+however `patch.facecolor` is set, and no rcParam can express "black lines, gray
+bars". That gap is exactly how the two notebooks drifted apart: one passed
+`color=GRAYS[1]` on every call, the other trusted the documented default and
+printed black bars, and a third figure invented `GRAYS[2]`. The helpers apply
+`BAR_FILL` with a black edge; an explicit `color=` still wins, for stacked or
+multi-series bars.
+
+Network figures have their own shared vocabulary, so a node-link diagram and a
+bar chart read as one family: `network_axes` strips the chrome, `draw_node`
+carries membership in its *fill and nothing else* (`NODE_FILL` inside the
+population described, `NODE_OPEN` outside it, `focus=True` for the one node a
+figure is built around — never a bold label on top of that), `node_legend` names
+those fills, `hairline` / `arrow_props` draw connectors, and `separator_rule`
+divides bands. `hairline` pins a solid line because `econ_style`'s property
+cycle carries *line styles*, so a bare `ax.plot` silently comes out dashed on
+the second call.
+
+`save_figure` writes PDF + PNG + `<stem>.caption.md` **and** a black-and-white
+proof under `<figures>/gray/`, so the "legible without colour" check leaves
+evidence on disk for both corpora without either notebook remembering to ask.
+`show_caption` renders the same caption block in the notebook, so display and
+sidecar cannot drift. Both notebooks are gitignored; regenerating them is
+documented in the paper 4 figure-regeneration notes.
+
 ### Per-paper failure isolation and warning files
 
 Both per-paper extraction loops (`Pipeline.extract_paper_metadata` and `Pipeline.extract_paper_references`) wrap the per-paper body in `try/except Exception`. A single bad PDF — or one Gemini error after retries are exhausted — is recorded as a `PaperFailure` row and the loop continues with the rest. Failures are persisted as JSONL via `_write_failures` to `out_dir/metadata_failures.jsonl` / `references_failures.jsonl`; the file is *removed* when there are no failures so `path.exists()` <=> failures occurred. The cache is never written for a failed paper, so re-runs naturally retry it.

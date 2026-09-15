@@ -45,22 +45,36 @@ Sourced conventions and the rationale for each rule: `references/conventions.md`
 5. **Annual series by default.** Plot time at the yearly resolution; bin into
    five-year periods only when the user asks. If a share is plotted per year,
    the notes say denominators are small and point to the companion counts figure.
-6. **Marks.** Bars: gray fill with black edge (the rc does this), width 0.7–0.8,
-   baseline at zero, `integer_ticks` / `percent_ticks`. Two or more series:
-   `GRAYS` + `HATCHES` and a frameless legend. `value_labels` only where the
-   exact number matters (a short ranking, five-year totals); never on a dense
-   annual series, never bold, never inside a bar.
+6. **Marks.** Bars: call `bar(ax, …)` / `barh(ax, …)`, **never `ax.bar`**.
+   Matplotlib takes an unspecified bar colour from the property cycle, whose
+   first entry is ink, so a bare `ax.bar` comes out solid black no matter what
+   `patch.facecolor` says — no rcParam can express "black lines, gray bars".
+   The helpers apply `BAR_FILL` with a black edge and `BAR_WIDTH`; an explicit
+   `color=` still wins, for stacked or multi-series bars. Baseline at zero,
+   `integer_ticks` / `percent_ticks`. Two or more series: `GRAYS` + `HATCHES`
+   and a frameless legend. `value_labels` only where the exact number matters
+   (a short ranking, five-year totals); never on a dense annual series, never
+   bold, never inside a bar.
 7. **Benchmarks** as `reference_line(ax, value, label="All periods: 66%")` —
    dashed black hairline with a small ink label at its right end. If any bar or
    value label sits near the line at the right edge, pass `in_legend=True` and
    call `ax.legend()` instead of nudging text or adding white halos.
-8. **Tick labels stay horizontal.** Dense years: a tick every 4–5 years.
-   Five-year periods: two-line labels (`"1995–\n1999"`) or abbreviated
-   (`"1995–99"`). Rotation is the last resort, not the first.
+8. **Tick labels stay horizontal.** Dense years: `year_ticks(ax, first, last)`
+   thins to a tick every 4–5 years and pads the limits. Five-year periods:
+   two-line labels (`"1995–\n1999"`) or abbreviated (`"1995–99"`). Rotation is
+   the last resort, not the first.
+
+8b. **Networks.** `network_axes(ax)` strips the chrome; `draw_node` carries
+   membership in its *fill* and nothing else — `NODE_FILL` for a node inside the
+   population described, `NODE_OPEN` for one outside it, `focus=True` for the
+   single node a figure is built around. Connectors are `hairline` /
+   `arrow_props`, band separators `separator_rule`. Never bold a focus label:
+   the fill already distinguishes it.
 9. **Save and caption.** `save_figure(fig, stem, caption=…, notes=…, source=…,
-   number=n)` writes PDF + PNG + `<stem>.caption.md`. In a notebook, show
-   `Markdown(caption_markdown(...))` directly under the figure.
-10. **Look at it.** Open the PNG. Run `grayscale_preview(png)` and confirm every
+   number=n)` writes PDF + PNG + `<stem>.caption.md`, plus a B&W proof to
+   `<stem.parent>/gray/`. In a notebook, call `show_caption(...)` directly under
+   the figure — same code as the sidecar, so the two cannot drift.
+10. **Look at it.** Open the PNG, then open its `gray/` proof and confirm every
    series is still distinguishable. Check: nothing bold, no clipped text, no
    rotated tick labels where thinning ticks would do, text ≥ 7 pt at final size.
 
@@ -70,18 +84,26 @@ Sourced conventions and the rationale for each rule: `references/conventions.md`
 |---|---|
 | Style block / global | `econ_style()` · `use_econ_style()` |
 | Size at print width | `figure_size("text" \| "journal" \| "column", ratio=…)` |
+| **Bars** | **`bar(ax, …)` · `barh(ax, …)` — never `ax.bar`/`ax.barh`** |
+| Year axis | `year_ticks(ax, first_year, last_year)` |
 | Panel heading | `panel_title(ax, "A", "Title")` → "Panel A. Title" |
 | Count / percent axes | `integer_ticks(ax, "y")` · `percent_ticks(ax, "y", xmax=100)` |
 | Overall-mean line | `reference_line(ax, value, label=…)`; `in_legend=True` when bars crowd the label |
 | Sparse bar labels | `value_labels(ax, bars, fmt="{:,.0f}")` |
 | Series encodings | `GRAYS`, `HATCHES`, `LINESTYLES`, `MARKERS`, `OKABE_ITO` |
-| Save + caption | `save_figure(...)` · `caption_markdown(...)` |
-| B&W check | `grayscale_preview(png_path)` |
+| Network marks | `network_axes(ax)` · `draw_node(...)` · `node_legend(...)` · `hairline(...)` · `arrow_props()` |
+| Band separator | `separator_rule(ax, y)` |
+| Save + caption | `save_figure(...)` · `show_caption(...)` · `caption_markdown(...)` |
+| B&W check | the `gray/` proof `save_figure` writes · `grayscale_preview(png_path)` |
 
 ## Common mistakes
 
 | Seen in unguided output | Journal convention |
 |---|---|
+| `ax.bar(...)` — solid black bars | `bar(ax, ...)`; the property cycle, not `patch.facecolor`, decides a bare bar's fill |
+| A figure inventing its own gray (`GRAYS[2]` here, black there) | One `BAR_FILL` across the corpus; shades vary only *within* a stacked series |
+| Bold label on the focus node of a network | The ink fill already distinguishes it; nothing is bold |
+| Re-deriving `show_caption` / `year_ticks` per notebook | Import them; one definition or they drift |
 | Bold, left-aligned "A. Title" or a big `suptitle` | Normal-weight "Panel A. Title", centred; figure title lives in the caption |
 | Navy/teal/green bars, red reference line, coloured annotation text | Gray fills with black edges; black dashed reference line; all text in ink |
 | Dashboard hero number ("66.3%" in 38 pt) | A proper panel: stacked counts or a share bar with an overall-share line |
