@@ -363,3 +363,103 @@ def test_draw_node_can_hang_its_label_on_the_left() -> None:
 
     with pytest.raises(ValueError, match="label_side"):
         plotting.draw_node(ax, 0, 0, "x", label_side="above")
+
+
+# ----------------------------------------------------------------------
+# Box nodes and flow bands
+# ----------------------------------------------------------------------
+
+
+def test_box_node_fill_carries_membership_exactly_as_draw_node_does() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    inside = plotting.box_node(ax, 0, 0, ["Inside"], width=10, height=4, inside=True)
+    outside = plotting.box_node(ax, 0, 5, ["Outside"], width=10, height=4, inside=False)
+    focus = plotting.box_node(ax, 0, 10, ["Focus"], width=10, height=4, focus=True)
+
+    assert to_hex(inside.get_facecolor()) == plotting.NODE_FILL.lower()
+    assert to_hex(outside.get_facecolor()) == to_hex(plotting.NODE_OPEN)
+    assert to_hex(focus.get_facecolor()) == plotting.INK.lower()
+    for patch in (inside, outside, focus):
+        assert to_hex(patch.get_edgecolor()) == plotting.NODE_EDGE.lower()
+    assert all(text.get_fontweight() == "normal" for text in ax.texts)
+
+
+def test_box_node_anchors_on_its_left_edge_at_the_given_size() -> None:
+    """The tree router positions a node by its left edge and centres it
+    vertically, so that is what the box has to honour."""
+    fig, ax = plt.subplots()
+    patch = plotting.box_node(ax, 100, 50, ["Name"], width=30, height=8)
+
+    assert patch.get_xy() == (100, 46.0)
+    assert patch.get_width() == 30
+    assert patch.get_height() == 8
+
+
+def test_box_node_stacks_two_lines_symmetrically_about_the_centre() -> None:
+    fig, ax = plt.subplots()
+    plotting.box_node(ax, 0, 0, ["Victoria Chick", "UCL"], width=40, height=12)
+
+    name, institution = ax.texts
+    assert name.get_position() == (20.0, 2.0)
+    assert institution.get_position() == (20.0, -2.0)
+    assert name.get_ha() == "center"
+
+
+def test_box_node_sets_the_second_line_smaller_and_grayer_than_the_name() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    plotting.box_node(ax, 0, 0, ["Name", "Institution"], width=40, height=12, fontsize=8.0)
+
+    name, institution = ax.texts
+    assert institution.get_fontsize() < name.get_fontsize()
+    assert to_hex(institution.get_color()) == plotting.GRAYS[1].lower()
+    assert to_hex(name.get_color()) == plotting.INK.lower()
+
+
+def test_box_node_on_an_ink_fill_puts_light_text_on_the_dark_box() -> None:
+    """A focus box is filled with ink, so black text on it would be invisible."""
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    plotting.box_node(ax, 0, 0, ["Name", "Institution"], width=40, height=12, focus=True)
+
+    assert to_hex(ax.texts[0].get_color()) == "#ffffff"
+
+
+def test_flow_band_closes_a_quadrilateral_between_the_two_stacks() -> None:
+    fig, ax = plt.subplots()
+    band = plotting.flow_band(ax, 0.0, 10.0, y_left=2.0, y_right=5.0, thickness=3.0)
+
+    corners = [tuple(p) for p in band.get_xy()[:4]]
+    assert corners == [(0.0, 2.0), (10.0, 5.0), (10.0, 8.0), (0.0, 5.0)]
+
+
+def test_flow_band_keeps_a_hairline_edge_so_the_lightest_fill_still_reads() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    band = plotting.flow_band(ax, 0, 1, y_left=0, y_right=0, thickness=1, fill=plotting.GRAYS[3])
+
+    assert to_hex(band.get_facecolor()) == plotting.GRAYS[3].lower()
+    assert to_hex(band.get_edgecolor()) == plotting.INK.lower()
+    assert band.get_linewidth() > 0
+
+
+def test_node_legend_draws_box_proxies_when_the_marks_are_boxes() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    legend = plotting.node_legend(ax, "In the list", "Outside it", shape="box")
+
+    fills = [to_hex(h.get_facecolor()) for h in legend.legend_handles]
+    assert fills == [plotting.NODE_FILL, to_hex(plotting.NODE_OPEN)]
+    assert legend.get_frame_on() is False
+
+
+def test_node_legend_rejects_a_shape_it_has_no_mark_for() -> None:
+    fig, ax = plt.subplots()
+    with pytest.raises(ValueError, match="shape"):
+        plotting.node_legend(ax, "In", "Out", shape="triangle")

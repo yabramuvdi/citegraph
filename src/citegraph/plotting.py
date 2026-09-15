@@ -89,6 +89,8 @@ __all__ = [
     "show_caption",
     "grayscale_preview",
     "draw_node",
+    "box_node",
+    "flow_band",
     "node_legend",
     "hairline",
     "arrow_props",
@@ -743,6 +745,118 @@ def draw_node(
     return marker
 
 
+def box_node(
+    ax: Axes,
+    x: float,
+    y: float,
+    lines: Sequence[str],
+    *,
+    width: float,
+    height: float,
+    inside: bool = True,
+    focus: bool = False,
+    fontsize: float | None = None,
+    sub_fontsize: float | None = None,
+    zorder: float = 4.0,
+    **kwargs: Any,
+) -> Any:
+    """Draw one network node as a box carrying a name and an attribute.
+
+    The box is :func:`draw_node` with room for a second fact: the first line is
+    the node's name, and any line after it is an attribute of that node — an
+    institution, a department — set smaller and in :data:`GRAYS` so it reads as
+    a subtitle rather than as a second name. The fill still carries membership
+    and nothing else, exactly as ``draw_node``: :data:`NODE_FILL` for a node in
+    the population being described, :data:`NODE_OPEN` for one outside it, ink
+    for the single node a figure is built around. On an ink fill the text flips
+    to white, since the alternative is a box with nothing legible in it.
+
+    ``x`` is the **left edge** and ``y`` the **vertical centre**, which is how a
+    tree router positions a node: it knows the column a generation starts at and
+    the row a person sits on. ``width`` and ``height`` are in data units and
+    arrive measured — this function draws a box at the size it is given and
+    never asks the renderer how wide the text is, because the layout needs those
+    widths before any axes exist.
+    """
+    from matplotlib.patches import Rectangle
+
+    facecolor = INK if focus else (NODE_FILL if inside else NODE_OPEN)
+    patch = Rectangle(
+        (x, y - height / 2),
+        width,
+        height,
+        facecolor=facecolor,
+        edgecolor=NODE_EDGE,
+        linewidth=0.7,
+        zorder=zorder,
+        **kwargs,
+    )
+    ax.add_patch(patch)
+
+    base = float(_pyplot().rcParams["font.size"]) if fontsize is None else float(fontsize)
+    sub = base - 1.1 if sub_fontsize is None else float(sub_fontsize)
+    head_color, sub_color = ("white", GRAYS[3]) if focus else (INK, GRAYS[1])
+    step = height / (len(lines) + 1)
+    for i, line in enumerate(lines):
+        ax.text(
+            x + width / 2,
+            y + height / 2 - (i + 1) * step,
+            line,
+            ha="center",
+            va="center",
+            color=head_color if i == 0 else sub_color,
+            fontsize=base if i == 0 else sub,
+            zorder=zorder + 1,
+        )
+    return patch
+
+
+def flow_band(
+    ax: Axes,
+    x0: float,
+    x1: float,
+    *,
+    y_left: float,
+    y_right: float,
+    thickness: float,
+    fill: str = BAR_FILL,
+    edgecolor: str = INK,
+    linewidth: float = 0.4,
+    zorder: float = 2.0,
+    **kwargs: Any,
+) -> Any:
+    """Draw one ribbon of a two-column flow diagram.
+
+    A quadrilateral running from ``(x0, y_left)`` to ``(x1, y_right)``, of the
+    same ``thickness`` at both ends because both ends count the same people.
+    ``y_left`` and ``y_right`` are its **lower** edge, so a caller stacks bands
+    by carrying a running offset up each column.
+
+    The edges are straight rather than curved on purpose: a ribbon's job here is
+    to be countable, and a sheaf of Béziers reads as a texture. The hairline
+    outline is what keeps the lightest fill separable from its neighbour once
+    the figure goes through the grayscale proof.
+    """
+    from matplotlib.patches import Polygon
+
+    band = Polygon(
+        [
+            (x0, y_left),
+            (x1, y_right),
+            (x1, y_right + thickness),
+            (x0, y_left + thickness),
+        ],
+        closed=True,
+        facecolor=fill,
+        edgecolor=edgecolor,
+        linewidth=linewidth,
+        zorder=zorder,
+        **kwargs,
+    )
+    ax.add_patch(band)
+    return band
+
+
 def node_legend(
     ax: Axes,
     inside_label: str,
@@ -751,31 +865,51 @@ def node_legend(
     focus_label: str | None = None,
     loc: str = "lower left",
     size: float = NODE_RADIUS * 2,
+    shape: str = "circle",
     **kwargs: Any,
 ) -> Any:
     """Frameless legend naming what a filled node means and what an open one means.
 
     Entries follow the same fill vocabulary as :func:`draw_node`, so the legend
-    cannot drift from the marks it explains.
+    cannot drift from the marks it explains. ``shape="box"`` swaps the circular
+    proxies for rectangular ones, for a figure whose nodes are
+    :func:`box_node` — a legend of circles under a diagram of boxes invites the
+    reader to hunt for a distinction that is not there.
     """
     plt = _pyplot()
+    if shape not in ("circle", "box"):
+        raise ValueError(f"shape must be 'circle' or 'box', got {shape!r}")
     entries = [(NODE_FILL, inside_label), (NODE_OPEN, outside_label)]
     if focus_label:
         entries.insert(0, (INK, focus_label))
-    handles = [
-        plt.Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            markerfacecolor=fill,
-            markeredgecolor=NODE_EDGE,
-            markeredgewidth=0.7,
-            markersize=size,
-            label=text,
-        )
-        for fill, text in entries
-    ]
+    if shape == "box":
+        handles: list[Any] = [
+            plt.Rectangle(
+                (0, 0),
+                1,
+                1,
+                facecolor=fill,
+                edgecolor=NODE_EDGE,
+                linewidth=0.7,
+                label=text,
+            )
+            for fill, text in entries
+        ]
+    else:
+        handles = [
+            plt.Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                markerfacecolor=fill,
+                markeredgecolor=NODE_EDGE,
+                markeredgewidth=0.7,
+                markersize=size,
+                label=text,
+            )
+            for fill, text in entries
+        ]
     opts: dict[str, Any] = {
         "frameon": False,
         "loc": loc,
