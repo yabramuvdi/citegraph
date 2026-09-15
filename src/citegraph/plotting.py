@@ -23,15 +23,22 @@ cheap.
 
 Typical use inside a notebook::
 
-    from citegraph.plotting import econ_style, figure_size, panel_title, save_figure
+    from citegraph.plotting import bar, econ_style, figure_size, panel_title, save_figure
 
     with econ_style():
         fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=figure_size("text", ratio=0.45))
-        ax_a.bar(years, counts)
+        bar(ax_a, years, counts)
         panel_title(ax_a, "A", "Annual counts")
         ...
         save_figure(fig, out_dir / "figures" / "trend",
                     caption="Publication trends", notes="…", source="…")
+
+Draw bars with :func:`bar` / :func:`barh` rather than ``ax.bar`` / ``ax.barh``:
+matplotlib takes an unspecified bar colour from the property cycle, whose first
+entry is ink, so a bare ``ax.bar`` comes out solid black under this style
+however ``patch.facecolor`` is set. Network figures have their own vocabulary —
+:func:`network_axes`, :func:`draw_node`, :func:`hairline` — so a node-link
+diagram and a bar chart in the same manuscript read as one family.
 """
 
 from __future__ import annotations
@@ -56,10 +63,22 @@ __all__ = [
     "MARKERS",
     "HATCHES",
     "WIDTHS",
+    "BAR_FILL",
+    "BAR_WIDTH",
+    "NODE_FILL",
+    "NODE_OPEN",
+    "NODE_EDGE",
+    "NODE_RADIUS",
+    "LABEL_OFFSET",
+    "EDGE_COLOR",
+    "RULE_COLOR",
     "econ_rc",
     "econ_style",
     "use_econ_style",
     "figure_size",
+    "bar",
+    "barh",
+    "year_ticks",
     "panel_title",
     "integer_ticks",
     "percent_ticks",
@@ -67,7 +86,14 @@ __all__ = [
     "value_labels",
     "caption_markdown",
     "save_figure",
+    "show_caption",
     "grayscale_preview",
+    "draw_node",
+    "node_legend",
+    "hairline",
+    "arrow_props",
+    "network_axes",
+    "separator_rule",
 ]
 
 # ----------------------------------------------------------------------
@@ -96,6 +122,39 @@ MARKERS: tuple[str, ...] = ("o", "s", "^", "D")
 #: Hatch patterns for distinguishing bar series without colour. The empty
 #: string is the first (solid) series.
 HATCHES: tuple[str, ...] = ("", "////", "....", "xxxx", "\\\\\\\\")
+
+#: Default bar fill. ``ax.bar`` takes its colour from the property cycle, whose
+#: first entry is :data:`INK`, so an un-styled bar comes out solid black however
+#: ``patch.facecolor`` is set — no rcParam can express "black lines, gray bars".
+#: :func:`bar` and :func:`barh` apply this fill instead; call them rather than
+#: ``ax.bar``/``ax.barh`` so every bar in the corpus reads the same.
+BAR_FILL = GRAYS[1]
+
+#: Default bar thickness (fraction of the category step).
+BAR_WIDTH = 0.72
+
+#: Network node fill for a node inside the population being described.
+NODE_FILL = GRAYS[1]
+
+#: Network node fill for a node outside it (an advisor who is not a listed
+#: author, a co-cited author below the inclusion threshold).
+NODE_OPEN = "white"
+
+#: Every network node carries this edge so the open fill still reads on white.
+NODE_EDGE = INK
+
+#: Network edges and connectors: a hairline dark enough to follow across the
+#: page but light enough not to compete with the node markers.
+EDGE_COLOR = "#555555"
+
+#: Hairline separating bands of a grouped figure (lineage blocks, tie rows).
+RULE_COLOR = "#DBDBDB"
+
+#: Network node radius in points. Markers are sized ``2 * NODE_RADIUS``.
+NODE_RADIUS = 2.5
+
+#: Gap in points between a node centre and its label.
+LABEL_OFFSET = 6.0
 
 #: Final printed widths in inches. ``text`` is a US-letter manuscript with
 #: 1-inch margins; ``journal`` approximates an AER/QJE text block; ``column``
@@ -342,6 +401,38 @@ def _axis(ax: Axes, axis: str):
     raise ValueError(f"axis must be 'x' or 'y', got {axis!r}")
 
 
+def bar(ax: Axes, x, height, *, width: float = BAR_WIDTH, **kwargs: Any) -> BarContainer:
+    """Vertical bars in the house fill: :data:`BAR_FILL` with a black edge.
+
+    Use instead of ``ax.bar``. Matplotlib takes an un-specified bar colour from
+    the property cycle, whose first entry is black, so ``ax.bar`` produces solid
+    black bars under :func:`econ_style` no matter what ``patch.facecolor`` says.
+    Passing ``color=`` here still wins, for stacked or multi-series bars.
+    """
+    kwargs.setdefault("color", BAR_FILL)
+    kwargs.setdefault("edgecolor", INK)
+    return ax.bar(x, height, width=width, **kwargs)
+
+
+def barh(ax: Axes, y, width, *, height: float = BAR_WIDTH, **kwargs: Any) -> BarContainer:
+    """Horizontal bars in the house fill. See :func:`bar`."""
+    kwargs.setdefault("color", BAR_FILL)
+    kwargs.setdefault("edgecolor", INK)
+    return ax.barh(y, width, height=height, **kwargs)
+
+
+def year_ticks(ax: Axes, first_year: int, last_year: int, *, pad: float = 0.7) -> None:
+    """Horizontal year ticks at a readable spacing, with the x-limits padded.
+
+    Every five years over a long span, every two over a short one, so a dense
+    annual series never needs rotated labels. Ticks land on round years.
+    """
+    step = 5 if last_year - first_year > 15 else 2
+    first_tick = first_year + (-first_year) % step
+    ax.set_xticks(range(first_tick, last_year + 1, step))
+    ax.set_xlim(first_year - pad, last_year + pad)
+
+
 def panel_title(ax: Axes, letter: str, title: str | None = None, **kwargs: Any):
     """Label a panel the AER way: ``Panel A. Title`` centred above the axes."""
     text = f"Panel {letter}. {title}" if title else f"Panel {letter}"
@@ -483,6 +574,7 @@ def save_figure(
     notes: str | None = None,
     source: str | None = None,
     number: int | str | None = None,
+    grayscale: bool = True,
 ) -> list[Path]:
     """Save ``fig`` as ``<stem>.<fmt>`` for each format, plus ``<stem>.caption.md``.
 
@@ -490,6 +582,11 @@ def save_figure(
     ``pdf.fonttype = 42``); PNG at ``dpi`` is for Word drafts and slides.
     The caption file keeps title, notes and source next to the artwork so the
     figure itself can stay free of in-plot titles.
+
+    ``grayscale`` (default) also writes a black-and-white proof to a ``gray/``
+    subdirectory, so the "legible without colour" check leaves evidence on disk
+    without doubling the file count in the directory handed to a coauthor. It is
+    skipped silently when Pillow is absent or no PNG was requested.
     """
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
@@ -505,7 +602,236 @@ def save_figure(
             encoding="utf-8",
         )
         written.append(caption_path)
+    if grayscale:
+        png = next((p for p in written if p.suffix == ".png"), None)
+        if png is not None:
+            gray_dir = stem.parent / "gray"
+            try:
+                gray_dir.mkdir(parents=True, exist_ok=True)
+                written.append(
+                    grayscale_preview(png, gray_dir / f"{stem.name}.gray.png")
+                )
+            except ImportError:  # Pillow not installed; the proof is optional
+                pass
     return written
+
+
+def network_axes(ax: Axes, *, equal: bool = True) -> Axes:
+    """Strip a network drawing down to its marks: no spines, ticks, or frame.
+
+    A node-link diagram has no meaningful axes, so the chrome
+    :func:`econ_style` draws for a plot is noise here. ``equal`` keeps circles
+    circular; pass ``equal=False`` when one axis carries real units (a year).
+    """
+    ax.set_axis_off()
+    if equal:
+        ax.set_aspect("equal")
+    return ax
+
+
+def hairline(
+    ax: Axes,
+    xs: Sequence[float],
+    ys: Sequence[float],
+    *,
+    color: str = EDGE_COLOR,
+    linewidth: float = 0.7,
+    zorder: float = 2.0,
+    **kwargs: Any,
+) -> Line2D:
+    """Draw one thin connector segment.
+
+    ``econ_style`` installs a property cycle that carries *line styles* as well
+    as colours, so a bare ``ax.plot`` silently comes out dashed or dotted on the
+    second call. Connectors are structure, not data, so this pins a solid line
+    and butt caps — the caps matter where segments meet at a right angle.
+    """
+    return ax.plot(
+        xs,
+        ys,
+        color=color,
+        linewidth=linewidth,
+        linestyle="-",
+        solid_capstyle="butt",
+        zorder=zorder,
+        **kwargs,
+    )[0]
+
+
+def arrow_props(
+    *,
+    color: str = EDGE_COLOR,
+    linewidth: float = 0.7,
+    mutation_scale: float = 5.0,
+    arrowstyle: str = "-|>",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """``arrowprops`` for a directed connector, matching :func:`hairline`.
+
+    ``shrinkA``/``shrinkB`` are zero because callers anchor arrows at a measured
+    label or node edge themselves; letting matplotlib shrink from the centre is
+    what runs an arrow back through its own label.
+    """
+    props: dict[str, Any] = {
+        "arrowstyle": arrowstyle,
+        "mutation_scale": mutation_scale,
+        "color": color,
+        "linewidth": linewidth,
+        "shrinkA": 0,
+        "shrinkB": 0,
+    }
+    props.update(kwargs)
+    return props
+
+
+def draw_node(
+    ax: Axes,
+    x: float,
+    y: float,
+    label: str | None = None,
+    *,
+    inside: bool = True,
+    focus: bool = False,
+    size: float = NODE_RADIUS * 2,
+    fontsize: float | str | None = None,
+    label_offset: float = LABEL_OFFSET,
+    label_side: str = "right",
+    unit: float = 1.0,
+    zorder: float = 4.0,
+    **kwargs: Any,
+) -> Line2D:
+    """Draw one network node, plus its label to the right, in the house style.
+
+    The fill carries one bit of membership and nothing else: ``inside`` (the
+    default) fills with :data:`NODE_FILL` for a node in the population being
+    described, and ``inside=False`` leaves it open (:data:`NODE_OPEN`) for one
+    outside it. ``focus=True`` fills with ink, for the single node a figure is
+    built around. Every node keeps a black edge so the open fill still reads.
+
+    ``size`` is the marker diameter in points. ``label_offset`` is the gap
+    between node centre and label, also in points; ``unit`` converts points to
+    data units when the axis carries real units (a year axis), so the label sits
+    the same distance from the marker whatever the axis scale. ``label_side``
+    flips the label to the left of the marker, for the left end of a paired row.
+
+    Labels are never bold — the focus node is already distinguished by its fill.
+    """
+    facecolor = INK if focus else (NODE_FILL if inside else NODE_OPEN)
+    marker = ax.plot(
+        [x],
+        [y],
+        marker="o",
+        markersize=size,
+        linestyle="none",
+        markerfacecolor=facecolor,
+        markeredgecolor=NODE_EDGE,
+        markeredgewidth=0.7,
+        zorder=zorder,
+        **kwargs,
+    )[0]
+    if label:
+        if label_side == "right":
+            offset, align = label_offset, "left"
+        elif label_side == "left":
+            offset, align = -label_offset, "right"
+        else:
+            raise ValueError(f"label_side must be 'left' or 'right', got {label_side!r}")
+        opts: dict[str, Any] = {"ha": align, "va": "center", "color": INK}
+        if fontsize is not None:
+            opts["fontsize"] = fontsize
+        ax.text(x + offset * unit, y, label, zorder=zorder + 1, **opts)
+    return marker
+
+
+def node_legend(
+    ax: Axes,
+    inside_label: str,
+    outside_label: str,
+    *,
+    focus_label: str | None = None,
+    loc: str = "lower left",
+    size: float = NODE_RADIUS * 2,
+    **kwargs: Any,
+) -> Any:
+    """Frameless legend naming what a filled node means and what an open one means.
+
+    Entries follow the same fill vocabulary as :func:`draw_node`, so the legend
+    cannot drift from the marks it explains.
+    """
+    plt = _pyplot()
+    entries = [(NODE_FILL, inside_label), (NODE_OPEN, outside_label)]
+    if focus_label:
+        entries.insert(0, (INK, focus_label))
+    handles = [
+        plt.Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=fill,
+            markeredgecolor=NODE_EDGE,
+            markeredgewidth=0.7,
+            markersize=size,
+            label=text,
+        )
+        for fill, text in entries
+    ]
+    opts: dict[str, Any] = {
+        "frameon": False,
+        "loc": loc,
+        "ncol": len(handles),
+        "handlelength": 1.2,
+        "borderaxespad": 0.3,
+        "columnspacing": 1.5,
+    }
+    opts.update(kwargs)
+    return ax.legend(handles=handles, **opts)
+
+
+def separator_rule(
+    ax: Axes,
+    y: float,
+    *,
+    xmin: float = 0.0,
+    xmax: float = 1.0,
+    color: str = RULE_COLOR,
+    linewidth: float = 0.6,
+    zorder: float = 0.5,
+    **kwargs: Any,
+) -> Line2D:
+    """Hairline separating one band of a grouped figure from the next.
+
+    Lighter than any data mark, drawn under everything, so it groups rows
+    without reading as a gridline.
+    """
+    return ax.axhline(
+        y,
+        xmin=xmin,
+        xmax=xmax,
+        color=color,
+        linewidth=linewidth,
+        linestyle="-",
+        zorder=zorder,
+        **kwargs,
+    )
+
+
+def show_caption(
+    caption: str,
+    *,
+    notes: str | None = None,
+    source: str | None = None,
+    number: int | str | None = None,
+) -> None:
+    """Render the caption block as Markdown under a figure in a notebook.
+
+    The display counterpart of :func:`save_figure`'s caption sidecar, so the
+    caption a reader sees in the notebook is built by the same code that writes
+    the file next to the artwork.
+    """
+    from IPython.display import Markdown, display
+
+    display(Markdown(caption_markdown(caption, notes=notes, source=source, number=number)))
 
 
 def grayscale_preview(png_path: str | Path, out_path: str | Path | None = None) -> Path:

@@ -216,8 +216,10 @@ def test_save_figure_writes_vector_raster_and_caption(tmp_path: Path) -> None:
         )
 
     names = sorted(p.name for p in written)
-    assert names == ["trend.caption.md", "trend.pdf", "trend.png"]
+    assert names == ["trend.caption.md", "trend.gray.png", "trend.pdf", "trend.png"]
     assert all(p.exists() and p.stat().st_size > 0 for p in written)
+    # The B&W proof lands in gray/, not beside the artwork handed to a coauthor.
+    assert (tmp_path / "figs" / "gray" / "trend.gray.png").exists()
     caption = (tmp_path / "figs" / "trend.caption.md").read_text(encoding="utf-8")
     assert caption.startswith("**Figure 3. Publication trends**")
     assert "*Notes:* Test notes." in caption
@@ -226,10 +228,13 @@ def test_save_figure_writes_vector_raster_and_caption(tmp_path: Path) -> None:
 def test_save_figure_without_caption_skips_caption_file(tmp_path: Path) -> None:
     fig, ax = plt.subplots()
     ax.plot([0, 1], [0, 1])
-    written = plotting.save_figure(fig, tmp_path / "plain", formats=("png",), dpi=72)
+    written = plotting.save_figure(
+        fig, tmp_path / "plain", formats=("png",), dpi=72, grayscale=False
+    )
 
     assert [p.name for p in written] == ["plain.png"]
     assert not (tmp_path / "plain.caption.md").exists()
+    assert not (tmp_path / "gray").exists()
 
 
 def test_grayscale_preview_writes_single_channel_png(tmp_path: Path) -> None:
@@ -237,9 +242,124 @@ def test_grayscale_preview_writes_single_channel_png(tmp_path: Path) -> None:
 
     fig, ax = plt.subplots()
     ax.bar([0, 1], [1, 2], color=["#0072B2", "#D55E00"])
-    (png,) = plotting.save_figure(fig, tmp_path / "color", formats=("png",), dpi=72)
+    (png,) = plotting.save_figure(
+        fig, tmp_path / "color", formats=("png",), dpi=72, grayscale=False
+    )
 
     gray = plotting.grayscale_preview(png)
     assert gray == tmp_path / "color.gray.png"
     with Image.open(gray) as img:
         assert img.mode == "L"
+
+
+# ----------------------------------------------------------------------
+# Shared marks: bars and the network vocabulary
+# ----------------------------------------------------------------------
+
+
+def test_bar_helpers_fill_gray_because_the_prop_cycle_cannot() -> None:
+    """``ax.bar`` takes its colour from the property cycle, whose first entry is
+    ink, so bare bars come out solid black under ``econ_style`` however
+    ``patch.facecolor`` is set. The helpers are the only way to get the
+    documented gray-fill-black-edge bar, which is why callers must use them."""
+    from matplotlib.colors import to_hex
+
+    with plotting.econ_style(overrides={"patch.facecolor": plotting.BAR_FILL}):
+        fig, ax = plt.subplots()
+        bare = ax.bar([0, 1], [1, 2])
+        assert to_hex(bare[0].get_facecolor()) == plotting.INK.lower()
+
+        vertical = plotting.bar(ax, [0, 1], [1, 2])
+        horizontal = plotting.barh(ax, [0, 1], [1, 2])
+
+    for container in (vertical, horizontal):
+        assert to_hex(container[0].get_facecolor()) == plotting.BAR_FILL.lower()
+        assert to_hex(container[0].get_edgecolor()) == plotting.INK.lower()
+
+
+def test_bar_helpers_let_an_explicit_colour_win() -> None:
+    """Stacked and multi-series bars pass their own shade; the default must not
+    override it."""
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    stacked = plotting.bar(ax, [0, 1], [1, 2], color=plotting.GRAYS[3], hatch="////")
+    assert to_hex(stacked[0].get_facecolor()) == plotting.GRAYS[3].lower()
+    assert stacked[0].get_hatch() == "////"
+
+
+def test_year_ticks_thin_long_spans_and_stay_horizontal() -> None:
+    fig, ax = plt.subplots()
+    plotting.year_ticks(ax, 1993, 2024)
+    ticks = list(ax.get_xticks())
+    assert ticks == [1995, 2000, 2005, 2010, 2015, 2020]
+    assert ax.get_xlim() == (1992.3, 2024.7)
+
+    fig2, ax2 = plt.subplots()
+    plotting.year_ticks(ax2, 2010, 2020)
+    assert list(ax2.get_xticks()) == [2010, 2012, 2014, 2016, 2018, 2020]
+
+
+def test_draw_node_fill_carries_membership_and_never_bolds_the_label() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    inside = plotting.draw_node(ax, 0, 0, "Inside", inside=True)
+    outside = plotting.draw_node(ax, 0, 1, "Outside", inside=False)
+    focus = plotting.draw_node(ax, 0, 2, "Focus", focus=True)
+
+    assert to_hex(inside.get_markerfacecolor()) == plotting.NODE_FILL.lower()
+    assert to_hex(outside.get_markerfacecolor()) == to_hex(plotting.NODE_OPEN)
+    assert to_hex(focus.get_markerfacecolor()) == plotting.INK.lower()
+    for marker in (inside, outside, focus):
+        assert to_hex(marker.get_markeredgecolor()) == plotting.NODE_EDGE.lower()
+    # The focus node is distinguished by fill, never by weight.
+    assert all(text.get_fontweight() == "normal" for text in ax.texts)
+
+
+def test_draw_node_offsets_its_label_in_data_units_via_unit() -> None:
+    """On a year axis one point is not one year, so the caller passes the
+    conversion and the label keeps the same visual gap at any scale."""
+    fig, ax = plt.subplots()
+    plotting.draw_node(ax, 2000, 0, "Name", label_offset=6.0, unit=0.5)
+    assert ax.texts[0].get_position() == (2003.0, 0)
+
+
+def test_node_legend_reuses_the_draw_node_fills() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    legend = plotting.node_legend(ax, "In the list", "Outside it", focus_label="Focus")
+    fills = [to_hex(h.get_markerfacecolor()) for h in legend.legend_handles]
+    assert fills == [plotting.INK, plotting.NODE_FILL, to_hex(plotting.NODE_OPEN)]
+    assert legend.get_frame_on() is False
+
+
+def test_network_axes_removes_all_chrome() -> None:
+    fig, ax = plt.subplots()
+    plotting.network_axes(ax)
+    assert not ax.axison
+    assert ax.get_aspect() == 1.0
+
+
+def test_separator_rule_is_lighter_than_any_data_mark_and_sits_underneath() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    rule = plotting.separator_rule(ax, 0.5)
+    assert to_hex(rule.get_color()) == plotting.RULE_COLOR.lower()
+    assert rule.get_zorder() < 1.0
+    assert rule.get_linestyle() == "-"
+
+
+def test_draw_node_can_hang_its_label_on_the_left() -> None:
+    """The left end of a paired row needs its label outside the pair, not
+    running back across the connector."""
+    fig, ax = plt.subplots()
+    plotting.draw_node(ax, 10, 0, "Advisor", label_side="left", label_offset=6.0)
+    text = ax.texts[0]
+    assert text.get_position() == (4.0, 0)
+    assert text.get_ha() == "right"
+
+    with pytest.raises(ValueError, match="label_side"):
+        plotting.draw_node(ax, 0, 0, "x", label_side="above")
