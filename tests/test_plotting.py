@@ -378,7 +378,7 @@ def test_box_node_fill_carries_membership_exactly_as_draw_node_does() -> None:
     outside = plotting.box_node(ax, 0, 5, ["Outside"], width=10, height=4, inside=False)
     focus = plotting.box_node(ax, 0, 10, ["Focus"], width=10, height=4, focus=True)
 
-    assert to_hex(inside.get_facecolor()) == plotting.NODE_FILL.lower()
+    assert to_hex(inside.get_facecolor()) == plotting.BOX_FILL.lower()
     assert to_hex(outside.get_facecolor()) == to_hex(plotting.NODE_OPEN)
     assert to_hex(focus.get_facecolor()) == plotting.INK.lower()
     for patch in (inside, outside, focus):
@@ -455,7 +455,7 @@ def test_node_legend_draws_box_proxies_when_the_marks_are_boxes() -> None:
     legend = plotting.node_legend(ax, "In the list", "Outside it", shape="box")
 
     fills = [to_hex(h.get_facecolor()) for h in legend.legend_handles]
-    assert fills == [plotting.NODE_FILL, to_hex(plotting.NODE_OPEN)]
+    assert fills == [plotting.BOX_FILL.lower(), to_hex(plotting.NODE_OPEN)]
     assert legend.get_frame_on() is False
 
 
@@ -463,3 +463,24 @@ def test_node_legend_rejects_a_shape_it_has_no_mark_for() -> None:
     fig, ax = plt.subplots()
     with pytest.raises(ValueError, match="shape"):
         plotting.node_legend(ax, "In", "Out", shape="triangle")
+
+
+def test_box_fill_is_light_enough_to_keep_the_text_inside_it_black() -> None:
+    """A box is a hundred times the area of a marker, so it takes the light end
+    of the ramp where NODE_FILL takes the dark one. The failure this prevents is
+    concrete: at NODE_FILL the subtitle colour and the fill were the same gray,
+    and every institution line inside a filled box was invisible."""
+    assert plotting.BOX_FILL in plotting.GRAYS
+    assert plotting.GRAYS.index(plotting.BOX_FILL) > plotting.GRAYS.index(plotting.NODE_FILL)
+
+
+def test_box_node_subtitle_stays_legible_on_both_box_fills() -> None:
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    plotting.box_node(ax, 0, 0, ["Name", "Institution"], width=40, height=12, inside=True)
+    plotting.box_node(ax, 0, 20, ["Name", "Institution"], width=40, height=12, inside=False)
+
+    inside_sub, outside_sub = ax.texts[1], ax.texts[3]
+    assert to_hex(inside_sub.get_color()) == to_hex(outside_sub.get_color())
+    assert to_hex(inside_sub.get_color()) != to_hex(plotting.BOX_FILL)

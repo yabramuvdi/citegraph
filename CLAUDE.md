@@ -129,6 +129,28 @@ divides bands. `hairline` pins a solid line because `econ_style`'s property
 cycle carries *line styles*, so a bare `ax.plot` silently comes out dashed on
 the second call.
 
+`box_node` is `draw_node` with room for a second fact — a name over an
+institution — for a lineage diagram that has to show structure and placement at
+once. It fills with **`BOX_FILL`, not `NODE_FILL`**, and the difference is not
+cosmetic: a box is orders of magnitude more area than a marker, and at
+`NODE_FILL` the subtitle gray and the fill are *the same value*, so every second
+line inside a filled box renders invisible. An area mark takes the light end of
+the ramp and keeps its text black; the black edge every node carries is what
+makes the tint read as a fill at all. `node_legend(..., shape="box")` follows the
+same fill so a diagram of boxes is not explained by a legend of circles. The
+caller measures and passes `width`/`height` — the module owns marks, the
+notebook owns measurement, because a tree layout needs text widths before any
+axes exist. `flow_band` draws one ribbon of a two-column flow as a straight-edged
+quadrilateral with a hairline outline; straight because a ribbon has to be
+countable, and outlined because that is what separates the lightest fill from
+its neighbour in the grayscale proof.
+
+A two-column flow must decide stayer-vs-mover from the **ungrouped** columns and
+carry the answer in (`flow_figure(..., same_mask=...)`). Reading it off the
+plotted columns looks equivalent and is not: once a tail is pooled, "Other" on
+the left and "Other" on the right are different sets, and a Norwegian doctorate
+now held in Switzerland gets drawn and counted as somebody who never moved.
+
 `save_figure` writes PDF + PNG + `<stem>.caption.md` **and** a black-and-white
 proof under `<figures>/gray/`, so the "legible without colour" check leaves
 evidence on disk for both corpora without either notebook remembering to ask.

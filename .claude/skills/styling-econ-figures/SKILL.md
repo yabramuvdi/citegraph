@@ -70,6 +70,18 @@ Sourced conventions and the rationale for each rule: `references/conventions.md`
    single node a figure is built around. Connectors are `hairline` /
    `arrow_props`, band separators `separator_rule`. Never bold a focus label:
    the fill already distinguishes it.
+
+8c. **Boxed nodes and flows.** A node that has to carry a second fact — a name
+   over an institution — is `box_node`, and it fills with **`BOX_FILL`, never
+   `NODE_FILL`**: a box is orders of magnitude more area than a marker, and at
+   `NODE_FILL` the subtitle gray *equals* the fill, so every second line inside a
+   filled box disappears. Match the key to the mark with
+   `node_legend(..., shape="box")`. Where the second line means one thing on one
+   fill and another on the other, say so **in the legend**, beside the fill that
+   signals it — a caption is too far away to stop the misreading. `flow_band`
+   draws one ribbon of a two-column flow; classify stayers from the *ungrouped*
+   columns, because once a tail is pooled "Other" on the left and "Other" on the
+   right are different sets and a mover gets counted as a stayer.
 9. **Save and caption.** `save_figure(fig, stem, caption=…, notes=…, source=…,
    number=n)` writes PDF + PNG + `<stem>.caption.md`, plus a B&W proof to
    `<stem.parent>/gray/`. In a notebook, call `show_caption(...)` directly under
@@ -92,6 +104,8 @@ Sourced conventions and the rationale for each rule: `references/conventions.md`
 | Sparse bar labels | `value_labels(ax, bars, fmt="{:,.0f}")` |
 | Series encodings | `GRAYS`, `HATCHES`, `LINESTYLES`, `MARKERS`, `OKABE_ITO` |
 | Network marks | `network_axes(ax)` · `draw_node(...)` · `node_legend(...)` · `hairline(...)` · `arrow_props()` |
+| Node carrying an attribute | `box_node(ax, x, y, [name, attr], width=…, height=…)` — fills `BOX_FILL`; caller measures |
+| Two-column flow | `flow_band(ax, x0, x1, y_left=…, y_right=…, thickness=…)` |
 | Band separator | `separator_rule(ax, y)` |
 | Save + caption | `save_figure(...)` · `show_caption(...)` · `caption_markdown(...)` |
 | B&W check | the `gray/` proof `save_figure` writes · `grayscale_preview(png_path)` |

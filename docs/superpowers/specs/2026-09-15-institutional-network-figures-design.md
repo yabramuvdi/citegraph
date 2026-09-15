@@ -215,3 +215,43 @@ wrong N in a manuscript caption is a real defect.
   for a later pass.
 - **A geographic map.** ROR gives country, not coordinates, without a network
   fetch this pipeline does not otherwise need.
+
+---
+
+## What the build changed (2026-09-15)
+
+Recorded after implementation, because several of these were discovered by
+drawing the figure rather than by reasoning about it.
+
+- **`BOX_FILL`, a new constant.** The spec said box fill follows `draw_node`'s
+  `NODE_FILL`. It cannot: `NODE_FILL` and the subtitle gray are both `GRAYS[1]`,
+  so the first render had an invisible institution line inside every filled box.
+  A box is an area mark and takes `GRAYS[4]`; the text stays black on both fills.
+- **The ≥5 cut needed tighter metrics, not a smaller population.** At airy box
+  spacing the 37-person tree came out **10.05 in** tall, past a letter text
+  block. Box height 2.7 type sizes, a 0.45 gap and trimmed outer margins bring it
+  to **8.72 in** with the same 37 people at 9 pt. Cutting to the three largest
+  lineages was the alternative and was not needed.
+- **The legend carries the meaning of the second line**, not just the caption.
+  The line is an affiliation on one fill and a place of supervision on the other,
+  and "Martin A. Nowak / Stockholm Univ." reads as an affiliation — which is
+  false — unless the key beside the fill says otherwise.
+- **No new elbow primitive.** The existing dendrogram router was generalised over
+  a *node shape* (drawn width, arrow gap, row height, draw function) instead, so
+  figures 5 and 8 share one crossing-free router. Figure 5's output is unchanged.
+- **`same_mask` is a separate argument to `flow_figure`.** Deriving stayer/mover
+  from the plotted columns is wrong once a tail is pooled — Other→Other spans two
+  different sets of countries. It happens to change nothing on this corpus (that
+  cell holds 4 genuine stayers), which is exactly why it needed catching by
+  argument rather than by inspection.
+- **Figure 9alt pools nothing.** Rather than the grouped data as a matrix, it is
+  the full 15 × 15 country matrix, 26 non-empty cells, largest 22. Not pooling is
+  the matrix's actual advantage over the ribbons, so the alternative now differs
+  from figure 9 in substance and not only in shape.
+- **Figure 10 abbreviates field names** for that figure only; spelled out on both
+  sides they leave the ribbons a third of the page. Figure 3 keeps the full
+  vocabulary and the caption says so.
+- **Verified:** 36 plotting tests pass, `ruff` clean, `build_clean_base.py` prints
+  `PASS` at 58 authors / 139 positions / 62 ties / 17 flags, both short-name
+  validations were probed and fire, and all **30 PNGs are byte-identical** across
+  two runs under different `PYTHONHASHSEED` values.

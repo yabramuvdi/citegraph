@@ -67,6 +67,7 @@ __all__ = [
     "BAR_WIDTH",
     "NODE_FILL",
     "NODE_OPEN",
+    "BOX_FILL",
     "NODE_EDGE",
     "NODE_RADIUS",
     "LABEL_OFFSET",
@@ -141,6 +142,14 @@ NODE_FILL = GRAYS[1]
 #: Network node fill for a node outside it (an advisor who is not a listed
 #: author, a co-cited author below the inclusion threshold).
 NODE_OPEN = "white"
+
+#: Fill for a :func:`box_node` inside the population described. A box is orders
+#: of magnitude more area than a marker, and area at :data:`NODE_FILL` leaves no
+#: room for the text printed on it — at that weight the subtitle gray and the
+#: fill are the same value and every second line inside a filled box vanishes.
+#: An area mark takes the light end of the ramp and keeps its text black; the
+#: black edge every node carries is what makes the tint read as a fill at all.
+BOX_FILL = GRAYS[4]
 
 #: Every network node carries this edge so the open fill still reads on white.
 NODE_EDGE = INK
@@ -780,7 +789,7 @@ def box_node(
     """
     from matplotlib.patches import Rectangle
 
-    facecolor = INK if focus else (NODE_FILL if inside else NODE_OPEN)
+    facecolor = INK if focus else (BOX_FILL if inside else NODE_OPEN)
     patch = Rectangle(
         (x, y - height / 2),
         width,
@@ -879,7 +888,8 @@ def node_legend(
     plt = _pyplot()
     if shape not in ("circle", "box"):
         raise ValueError(f"shape must be 'circle' or 'box', got {shape!r}")
-    entries = [(NODE_FILL, inside_label), (NODE_OPEN, outside_label)]
+    inside_fill = BOX_FILL if shape == "box" else NODE_FILL
+    entries = [(inside_fill, inside_label), (NODE_OPEN, outside_label)]
     if focus_label:
         entries.insert(0, (INK, focus_label))
     if shape == "box":
