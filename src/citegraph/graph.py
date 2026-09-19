@@ -8,6 +8,7 @@ name. Construct from a finished pipeline run::
     g = CitationGraph.from_out_dir("./out")
     g.n_core_works, g.n_works, g.n_edges
     g.core                      # your own papers (ring 0)
+    g.core["Tema"]              # a hand-curated annotation, when present
     g.top_cited(n=10)
     g.top_authors(n=10, ring=0) # most prominent authors of YOUR papers
     g.core_citations()          # who among your papers cites whom
@@ -34,11 +35,53 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from citegraph.annotations import load_annotations
 from citegraph.io import AUTHOR_CITATION_COLUMNS, AUTHOR_COLUMNS, OutLayout
 from citegraph.schemas import PipelineResult
 
 if TYPE_CHECKING:  # pragma: no cover
     import networkx as nx
+
+
+def author_mentions(
+    edges: pd.DataFrame,
+    author_citations: pd.DataFrame,
+    *,
+    min_papers: int = 1,
+    citing_ids: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    """Return the ``(citing_id, author_id)`` mentions behind a co-citation view.
+
+    One row per *bibliography that cites an author*, which is the atom both
+    :meth:`CitationGraph.author_cocitation_network` and the tie test in
+    :mod:`citegraph.cocitation_stats` are built from. A citing work that cites
+    several works by one author still contributes a single mention, so the
+    author's count is bibliographies-that-cite-them, never citations-received.
+
+    ``min_papers`` drops authors below that many citing bibliographies — the
+    same long-tail pruning the network applies — and ``citing_ids`` restricts
+    the citing side. It lives here, at module level, because two callers derive
+    different structures from the same three operations and a second
+    implementation of them would drift from this one.
+    """
+    pairs = edges[["citing_id", "cited_id"]].drop_duplicates()
+    if citing_ids is not None:
+        pairs = pairs[pairs["citing_id"].isin(set(citing_ids))]
+
+    work_authors = author_citations[["author_id", "record_id"]].drop_duplicates()
+    mentions = pairs.merge(work_authors, left_on="cited_id", right_on="record_id")[
+        ["citing_id", "author_id"]
+    ].drop_duplicates()
+
+    if min_papers > 1:
+        n_citing = mentions.groupby("author_id")["citing_id"].nunique()
+        keep = set(n_citing[n_citing >= min_papers].index)
+        mentions = mentions[mentions["author_id"].isin(keep)]
+    return mentions
+
+
+def _no_annotations() -> pd.DataFrame:
+    return pd.DataFrame(index=pd.Index([], name="id"))
 
 
 class CitationGraph:
@@ -50,10 +93,17 @@ class CitationGraph:
         edges: pd.DataFrame,
         authors: pd.DataFrame | None = None,
         author_citations: pd.DataFrame | None = None,
+        annotations: pd.DataFrame | None = None,
     ) -> None:
         # Accept both index-by-id (canonical) and id-as-column frames.
         if "id" in works.columns:
             works = works.set_index("id")
+        # Hand-curated columns join onto every ring view at once, so `core`
+        # and `ring(n)` carry them without a second frame to keep in step.
+        # Works nobody annotated keep a missing value; none are dropped.
+        self.annotations = annotations if annotations is not None else _no_annotations()
+        if not self.annotations.empty:
+            works = works.join(self.annotations)
         self.works = works
         self.edges = edges
         # Author tables are optional — the citegraph authors stage may not
@@ -73,7 +123,9 @@ class CitationGraph:
 
         ``authors.csv`` and ``author_citations.csv`` are loaded too when
         present (i.e. after the ``citegraph authors`` stage has run).
-        Their absence is silent — the rest of the API still works.
+        Their absence is silent — the rest of the API still works. So is
+        ``work_annotations.csv``, whose hand-curated columns join onto
+        ``works``; a value it declares but does not satisfy raises.
         """
         layout = OutLayout(Path(out_dir))
         if not layout.works_csv.exists() and (layout.out_dir / "papers.csv").exists():
@@ -106,11 +158,17 @@ class CitationGraph:
 
         authors_df = read_optional(layout.authors_csv, AUTHOR_COLUMNS, "id")
         author_citations_df = read_optional(layout.author_citations_csv, AUTHOR_CITATION_COLUMNS)
+        works_df = pd.read_csv(layout.works_csv, index_col="id")
         return cls(
-            works=pd.read_csv(layout.works_csv, index_col="id"),
+            works=works_df,
             edges=pd.read_csv(layout.graph_csv),
             authors=authors_df,
             author_citations=author_citations_df,
+            annotations=load_annotations(
+                layout.work_annotations_csv,
+                works=works_df,
+                schema_path=layout.annotation_schema_csv,
+            ),
         )
 
     @classmethod
@@ -126,6 +184,11 @@ class CitationGraph:
     # ------------------------------------------------------------------
     # Counts
     # ------------------------------------------------------------------
+    @property
+    def has_annotations(self) -> bool:
+        """Whether hand-curated ``work_annotations.csv`` columns are loaded."""
+        return not self.annotations.empty
+
     @property
     def n_works(self) -> int:
         return len(self.works)
@@ -533,23 +596,15 @@ class CitationGraph:
                 "Install with: pip install networkx"
             ) from exc
 
-        edges = self.edges[["citing_id", "cited_id"]].drop_duplicates()
-        if citing_ids is not None:
-            edges = edges[edges["citing_id"].isin(set(citing_ids))]
-
-        work_authors = self.author_citations[["author_id", "record_id"]].drop_duplicates()
         # One mention per (citing work, cited author): citing three works
         # by the same author is one appearance of that author, not three.
-        mentions = (
-            edges.merge(work_authors, left_on="cited_id", right_on="record_id")[
-                ["citing_id", "author_id"]
-            ]
-            .drop_duplicates()
+        mentions = author_mentions(
+            self.edges,
+            self.author_citations,
+            min_papers=min_papers,
+            citing_ids=citing_ids,
         )
-
-        n_citing_papers = mentions.groupby("author_id")["citing_id"].nunique()
-        keep = n_citing_papers[n_citing_papers >= min_papers]
-        mentions = mentions[mentions["author_id"].isin(set(keep.index))]
+        keep = mentions.groupby("author_id")["citing_id"].nunique()
 
         names = (
             self.authors["display_name"]

@@ -44,7 +44,8 @@ diagram and a bar chart in the same manuscript read as one family.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterable, Iterator, Sequence
+import math
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -54,6 +55,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from matplotlib.figure import Figure
     from matplotlib.lines import Line2D
     from matplotlib.text import Annotation
+    from matplotlib.transforms import Bbox
 
 __all__ = [
     "INK",
@@ -71,6 +73,7 @@ __all__ = [
     "NODE_EDGE",
     "NODE_RADIUS",
     "LABEL_OFFSET",
+    "JUNCTION_RADIUS",
     "EDGE_COLOR",
     "RULE_COLOR",
     "econ_rc",
@@ -95,8 +98,10 @@ __all__ = [
     "node_legend",
     "hairline",
     "arrow_props",
+    "junction_dot",
     "network_axes",
     "separator_rule",
+    "place_node_labels",
 ]
 
 # ----------------------------------------------------------------------
@@ -166,6 +171,11 @@ NODE_RADIUS = 2.5
 
 #: Gap in points between a node centre and its label.
 LABEL_OFFSET = 6.0
+
+#: Radius in points of the mark at a connector junction. Deliberately far below
+#: :data:`NODE_RADIUS`: a junction is punctuation on a connector, and one drawn
+#: anywhere near node size reads as an unlabelled person in the network.
+JUNCTION_RADIUS = 1.15
 
 #: Final printed widths in inches. ``text`` is a US-letter manuscript with
 #: 1-inch margins; ``journal`` approximates an AER/QJE text block; ``column``
@@ -695,6 +705,51 @@ def arrow_props(
     return props
 
 
+def junction_dot(
+    ax: Axes,
+    x: float,
+    y: float,
+    *,
+    color: str = EDGE_COLOR,
+    radius: float = JUNCTION_RADIUS,
+    zorder: float = 2.6,
+    **kwargs: Any,
+) -> Line2D:
+    """Mark a point where connectors *meet*, as opposed to merely cross.
+
+    This is the schematic convention, and a bracket router needs it as soon as
+    the graph it draws stops being a forest. With one parent per node, every
+    bracket owns its own rows and no two ever touch; with several — a doctorate
+    supervised by three people — one bracket's vertical spine has to run past
+    rows that other brackets are using, and a reader has no way to tell the
+    resulting T-junction from an X-crossing. Left unmarked, that is a figure
+    asserting ties nobody recorded: in the paper 4 lineages it joined Martin A.
+    Nowak to Juan Camilo Cárdenas, who share no advisor, no institution and no
+    edge.
+
+    So a filled dot means connected and bare crossing lines mean not connected,
+    and the two become distinguishable. Callers decide which points qualify —
+    the rule is three or more connector directions leaving the same point, since
+    a plain corner or a straight pass-through needs no mark and a figure peppered
+    with dots teaches the reader to ignore them.
+
+    ``radius`` is in points, independent of the axis scale, so the mark stays put
+    on a year axis as readily as in the point space the lineage trees use.
+    """
+    return ax.plot(
+        [x],
+        [y],
+        marker="o",
+        markersize=radius * 2,
+        linestyle="none",
+        markerfacecolor=color,
+        markeredgecolor=color,
+        markeredgewidth=0.0,
+        zorder=zorder,
+        **kwargs,
+    )[0]
+
+
 def draw_node(
     ax: Axes,
     x: float,
@@ -930,6 +985,172 @@ def node_legend(
     }
     opts.update(kwargs)
     return ax.legend(handles=handles, **opts)
+
+
+def _label_anchors(reaches: Sequence[float]) -> tuple[tuple[float, float, str, str], ...]:
+    """Offsets to try for a label, nearest ring first.
+
+    Four sides, then four diagonals, then the same eight further out. One ring
+    is not enough: a force-directed layout routinely pulls five people into a
+    clump, and the fifth name needs somewhere to go that is not on top of the
+    fourth.
+    """
+    directions = (
+        (0.0, 1.0, "center", "bottom"),
+        (0.0, -1.0, "center", "top"),
+        (1.0, 0.0, "left", "center"),
+        (-1.0, 0.0, "right", "center"),
+        (0.75, 0.75, "left", "bottom"),
+        (-0.75, 0.75, "right", "bottom"),
+        (0.75, -0.75, "left", "top"),
+        (-0.75, -0.75, "right", "top"),
+    )
+    return tuple(
+        (dx * reach, dy * reach, ha, va)
+        for reach in reaches
+        for dx, dy, ha, va in directions
+    )
+
+
+def place_node_labels(
+    ax: Axes,
+    labels: Mapping[str, str],
+    positions: Mapping[str, Any],
+    *,
+    node_sizes: Mapping[str, float] | float = NODE_RADIUS * 2,
+    order: Sequence[str] | None = None,
+    fontsize: float | str | None = None,
+    reaches: Sequence[float] = (6.5, 13.0, 21.0),
+    leader_beyond: float = 13.5,
+    padding: tuple[float, float] = (1.08, 1.25),
+    **kwargs: Any,
+) -> dict[str, Annotation]:
+    """Label nodes of a node-link drawing, moving each name off what it would hit.
+
+    A force-directed layout has no idea that its nodes carry names, so the
+    naive "text just above the marker" collides — with another name, or with a
+    marker belonging to somebody else. Each label here is drawn, *measured
+    against the renderer*, and moved to the next anchor around its node when it
+    clashes with a label already placed or with any node's marker. Measuring
+    the rendered text rather than guessing at distances is what makes this hold
+    for a different corpus, or the same corpus one stage later.
+
+    ``positions`` covers **every** node in the drawing, in data coordinates;
+    ``labels`` names only the subset that gets text. The difference matters:
+    an unlabelled node is still an obstacle, and treating it as absent is how a
+    name ends up sitting on a marker. ``node_sizes`` are marker diameters in
+    points, one per node or one for all, and set how wide a berth each marker
+    gets.
+
+    Labels are placed in ``order`` (default: the sorted keys of ``labels``), so
+    the caller decides who keeps the preferred anchor — pass the most prominent
+    nodes first. A fixed order also makes the drawing reproducible, which a set
+    or dict built from graph iteration would not be. When a label has to travel
+    beyond ``leader_beyond`` points it gets a hairline leader back to its node,
+    because a name far from every marker belongs to none of them.
+
+    Returns the annotations, keyed as ``labels`` was.
+    """
+    missing = sorted(key for key in labels if key not in positions)
+    if missing:
+        raise KeyError(f"no position for labelled node(s): {', '.join(missing)}")
+
+    figure = ax.figure
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+
+    def radius(key: str) -> float:
+        size = node_sizes[key] if isinstance(node_sizes, Mapping) else node_sizes
+        return float(size) / 2.0 + 1.5
+
+    obstacles = [
+        (ax.transData.transform(positions[key]), radius(key)) for key in sorted(positions)
+    ]
+    anchors = _label_anchors(reaches)
+    taken: list[Bbox] = []
+    placed: dict[str, Annotation] = {}
+
+    def draw(key: str, anchor: tuple[float, float, str, str], *, leader: bool) -> Annotation:
+        dx, dy, ha, va = anchor
+        opts: dict[str, Any] = {"ha": ha, "va": va, "color": INK, "zorder": 6.0}
+        if fontsize is not None:
+            opts["fontsize"] = fontsize
+        if leader:
+            opts["arrowprops"] = {
+                "arrowstyle": "-",
+                "color": GRAYS[2],
+                "linewidth": 0.4,
+                "shrinkA": 0.0,
+                "shrinkB": 2.0,
+            }
+        opts.update(kwargs)
+        return ax.annotate(
+            labels[key],
+            positions[key],
+            xytext=(dx, dy),
+            textcoords="offset points",
+            **opts,
+        )
+
+    def needs_leader(anchor: tuple[float, float, str, str]) -> bool:
+        return max(abs(anchor[0]), abs(anchor[1])) > leader_beyond
+
+    for key in (sorted(labels) if order is None else order):
+        if key not in labels:
+            continue
+        chosen: Annotation | None = None
+        box: Bbox | None = None
+        least_bad: tuple[float, tuple[float, float, str, str]] | None = None
+        picked: tuple[float, float, str, str] | None = None
+        for anchor in anchors:
+            # Measured without its leader on purpose: an annotation that owns an
+            # arrow reports the arrow inside its extent, so a far anchor would
+            # always measure as a collision and never be chosen at all.
+            text = draw(key, anchor, leader=False)
+            extent = text.get_window_extent(renderer=renderer).expanded(*padding)
+            cost = sum(_overlap_area(extent, other) for other in taken) + sum(
+                _circle_overlap(centre, r, extent) for centre, r in obstacles
+            )
+            if cost == 0.0:
+                chosen, box, picked = text, extent, anchor
+                break
+            text.remove()
+            if least_bad is None or cost < least_bad[0]:
+                least_bad = (cost, anchor)
+        if chosen is None:
+            # Nowhere is clean. Take the least-bad anchor rather than the
+            # preferred one: falling back to "just above the node" every time
+            # stacks a whole crowd's names in one place, which is the exact
+            # collision this function exists to avoid.
+            assert least_bad is not None
+            picked = least_bad[1]
+            chosen = draw(key, picked, leader=False)
+            box = chosen.get_window_extent(renderer=renderer).expanded(*padding)
+        if needs_leader(picked):
+            chosen.remove()
+            chosen = draw(key, picked, leader=True)
+        taken.append(box)
+        placed[key] = chosen
+    return placed
+
+
+def _overlap_area(box: Bbox, other: Bbox) -> float:
+    """Area shared by two display-space boxes, zero when they are disjoint."""
+    width = min(box.x1, other.x1) - max(box.x0, other.x0)
+    height = min(box.y1, other.y1) - max(box.y0, other.y0)
+    return width * height if width > 0 and height > 0 else 0.0
+
+
+def _circle_overlap(centre: Any, radius: float, box: Bbox) -> float:
+    """How deeply a node marker intrudes into a label box, as a penalty area.
+
+    The exact lens area is not worth computing: this only has to order
+    candidate anchors, and squared intrusion depth does that monotonically.
+    """
+    nearest_x = min(max(float(centre[0]), box.x0), box.x1)
+    nearest_y = min(max(float(centre[1]), box.y0), box.y1)
+    gap = math.hypot(float(centre[0]) - nearest_x, float(centre[1]) - nearest_y)
+    return (radius - gap) ** 2 if gap < radius else 0.0
 
 
 def separator_rule(

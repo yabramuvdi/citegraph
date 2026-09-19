@@ -325,6 +325,45 @@ Hand-curated overrides go in `out_dir/author_aliases.csv`
 (`cluster_id,canonical_id` columns, applied last); rerun `citegraph authors`
 after editing it. Low-confidence clusters are flagged in `author_review.json`.
 
+### `core_authors.xlsx` &mdash; one workbook for your own papers' authors
+
+`authors.csv` describes every author in the corpus, most of them met once in
+somebody else's bibliography. `citegraph export-authors` narrows that to the
+authors of your own PDFs and gathers everything known about them into a single
+spreadsheet, keyed on `author_id` throughout:
+
+```bash
+citegraph export-authors --out ./out            # -> ./out/core_authors.xlsx
+citegraph export-authors --out ./out --ring 1   # authors first met one hop out
+```
+
+| Sheet | Content |
+| ----- | ------- |
+| `README` | What each sheet is, its row count, and how many authors it covers |
+| `Authors` | One row per author: identity, external ids, citation metrics, every raw spelling the corpus used, and co-citation centrality when `author_centrality.csv` is present |
+| `Works` | One row per (author, work) &mdash; their cited works as well as your own |
+| `Review_Flags` | The low-confidence clusters among them, from `author_review.json` |
+
+Curated tables kept outside `out_dir` &mdash; hand-collected affiliations,
+career histories, supervision ties &mdash; are added with `--extra-csv`, and
+`--master-column` lifts a headline field onto the `Authors` sheet:
+
+```bash
+citegraph export-authors --out ./out \
+  --extra-csv Careers=../careers.csv \
+  --extra-csv Supervision=../supervision.csv \
+  --master-column Careers=affiliation_institution
+```
+
+A row is kept when any column named `author_id`, or ending in `_author_id`,
+names one of these authors &mdash; so an edge table survives when *either* end
+is somebody you published, which is usually how supervision data is shaped.
+Each added sheet also contributes an `in_<sheet>` flag to `Authors` and a
+coverage count to `README`; hand-collected metadata rarely covers everybody,
+and seeing who it misses is the point.
+
+Writing `.xlsx` needs `openpyxl`: `pip install "citegraph[excel]"`.
+
 ### Querying the graph
 
 For ad-hoc analysis there's a small `CitationGraph` class. Construct it

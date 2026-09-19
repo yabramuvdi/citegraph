@@ -29,6 +29,7 @@ citegraph authors --out ./out             # stage 4b: -> authors.csv, author_cit
 citegraph estimate --out ./out            # pre-flight token/cost estimate (no API calls)
 citegraph status --out ./out              # report which artifacts exist
 citegraph report --out ./out [--open]     # write self-contained report.html QC dashboard
+citegraph export-authors --out ./out      # -> core_authors.xlsx (your papers' authors, one workbook)
 citegraph ui --out ./out [--port 8765]    # serve read-only live monitor on 127.0.0.1
 ```
 
@@ -91,6 +92,75 @@ The cache layout is owned by `OutLayout` in [io.py](src/citegraph/io.py). If you
 
 `citegraph report` ([html_report.py](src/citegraph/html_report.py)) reads whatever artifacts exist under `out_dir` and writes a fully self-contained `report.html` QC dashboard (no network, every file read individually fault-tolerant — corrupt artifacts become findings, not crashes); it is safe to re-run after any stage. `citegraph ui` ([webui.py](src/citegraph/webui.py)) serves the same `collect_report_data` payload as a stdlib-only live monitor on 127.0.0.1 — strictly read-only over `out_dir`, polling clients re-render as artifacts appear; the `/api/markdown` endpoint only serves bare stems that resolve inside `out_dir/markdown/`.
 
+### One workbook for the authors of your own papers
+
+`citegraph export-authors` ([author_export.py](src/citegraph/author_export.py))
+writes `core_authors.xlsx`: every author who appears on a ring-0 work, with
+everything the corpus knows about them, on sheets keyed by `author_id`
+(`README`, `Authors`, `Works`, `Review_Flags`, then any curated sheet). It
+exists because `authors.csv` answers a question nobody asks — it describes
+thousands of authors, almost all of them encountered once in somebody else's
+bibliography — while the manuscript question is *who wrote my papers, and what
+do we know about them?* The answer is spread over half a dozen artifacts and,
+for paper 4, over a hand-collected spreadsheet outside `out_dir` entirely.
+
+The core set is derived by joining `author_citations.csv` to the ring-0 rows of
+`works.csv`, **not** by reading `authors.csv`'s `n_core_works` column. The two
+agree, but the join is what makes `--ring` mean anything, and it keeps working
+on an `out_dir` whose metrics column predates a schema change. `Works` keeps a
+core author's *cited* works too: an author is interesting partly because the
+corpus cites their other work, and restricting the sheet to ring 0 would answer
+a question nobody asked.
+
+Curated tables from outside `out_dir` arrive through `--extra-csv NAME=PATH`
+(library: `ExtraSheet`), because the package cannot know their schemas. One
+filter rule covers every shape they take: **keep a row when any column named
+`author_id` or ending in `_author_id` names a core author**. A per-person table
+keys on the first; an edge table like `supervision.csv` has
+`advisor_author_id` *and* `advisee_author_id`, and a tie is worth keeping when
+either end is somebody you published — the advisor is often outside the corpus.
+A CSV with no such column raises rather than being added unfiltered.
+`--master-column SHEET=COLUMN` lifts a headline field onto the `Authors` sheet
+and insists the source have one row per author, because lifting from a tidy
+per-position table would silently multiply the master's rows.
+
+Every curated sheet also adds an `in_<sheet>` boolean to `Authors` and a
+`Core_authors_covered` cell to `README`. That column is the one to read first:
+hand-collected metadata never covers everybody (paper 4: 58 of 146), and the
+gap is a finding about the corpus, not a fault in the export. `a-willis-cleve`
+— 3 core papers, co-citation degree 418, no institutional row — is exactly what
+it is for.
+
+Group authors on **`affiliation_field`**, never on the raw
+`affiliation_department`: the department is 31 distinct strings over 58 people,
+28 of them singletons, and it spells one place several ways (`Economics` 22 vs
+`Department of Economics` 1, plus `Resource Economics` and `Rasmuson Chair of
+Economics`). `crosswalk_fields.csv` folds those into the 8 categories
+`fig1_affiliation_field` plots, and lifting both columns onto `Authors` lets a
+pivot table there reproduce that figure's counts exactly.
+
+`author_centrality.csv` is joined onto `Authors` when present, and is the one
+input the pipeline never writes: [examples/paper4_figures.ipynb](examples/paper4_figures.ipynb)
+does. So it is read fault-tolerantly and can silently go stale if you re-run
+`citegraph authors` without re-running the notebook. Writing `.xlsx` needs
+`openpyxl`, a lazily-imported `[excel]` extra, so the base install stays light.
+
+Paper 4's workbook is rebuilt from `Dropbox/Consultoria/Maria/paper4/` with:
+
+```bash
+citegraph export-authors --out citegraph_out \
+  --extra-csv Institutional=institutional/out/base_institucional_clean.csv \
+  --extra-csv Career_Positions=institutional/out/career_positions.csv \
+  --extra-csv Supervision=institutional/out/supervision.csv \
+  --master-column Institutional=affiliation_institution \
+  --master-column Institutional=affiliation_department \
+  --master-column Institutional=affiliation_field \
+  --master-column Institutional=affiliation_country \
+  --master-column Institutional=phd_institution \
+  --master-column Institutional=phd_year_end \
+  --master-column Institutional=phd_field
+```
+
 ### `CitationGraph` query view
 
 [graph.py](src/citegraph/graph.py) defines `CitationGraph`, a small read-only wrapper over `works` (indexed by `id`) + `edges` plus the optional author tables. It exists to deliver on the package name — without it, the library produces edges in a CSV but offers nothing to traverse. Two constructors: `CitationGraph.from_out_dir(out_dir)` (loads CSVs; a legacy pre-works out_dir raises `FileNotFoundError` with the exact migration commands) and `CitationGraph.from_pipeline_result(result)`. Core idiom: `g.core` (ring-0 works — the user's papers), `g.ring(n)`, `g.core_citations()` (edges with both ends in the core), `n_core_works` / `n_works` / `n_edges`, `top_cited(n)` (core works cited within the corpus rank here too), `cited_by(work_id)`, `citers_of(work_id)`, `to_networkx()` (node attrs carry `ring`/`source_file`). `networkx` is a *lazy* import so the base install stays light (`pip install "citegraph[graph]"`); the import-error message tells the user how to install.
@@ -98,6 +168,86 @@ The cache layout is owned by `OutLayout` in [io.py](src/citegraph/io.py). If you
 When `authors.csv` and `author_citations.csv` exist in `out_dir`, `from_out_dir` loads them too and `has_authors` becomes `True`, unlocking `top_authors(n, ring=None)` (authors ranked by distinct works authored; `ring=0` answers "who are the most prominent authors of *my* papers?"), `top_cited_authors(n)` (ranked by `n_citations_received`), `find_author(query)` (diacritic-insensitive substring match on surname or display name), `citations_of(author_id)` (every cited work the author appears on), `papers_citing_author(author_id)`, `citation_context_for_author(author_id)`, `citing_papers_by_author(author_id)`, and `source_journals_citing_author(author_id)`. The last three join through `citation_graph.csv` so citing-side journal rollups answer "which journals are doing the citing?" rather than "where were the cited works published?" These methods raise `RuntimeError` with an actionable hint when called on a graph whose author tables aren't loaded, rather than silently returning empty results.
 
 `author_cocitation_network(min_papers=3, citing_ids=None)` is the one method that *builds* a network for analysis rather than exporting one. It returns the weighted, undirected author co-citation projection (White & Griffith 1981): two authors are joined when the same bibliography cites both, and `weight` counts how many bibliographies do. It exists because the work-level graph is one hop deep — only PDF-backed works have outgoing edges, so betweenness/closeness/PageRank over `to_networkx()` would measure the sampling design, not the literature. The projection is a real one-mode network where Freeman/Bonacich centralities are defined. A citing work that cites several works by one author contributes one mention and never a self-loop; `min_papers` prunes the once-cited tail; `citing_ids` restricts the citing side, which is how the self-citation robustness variant is built. Nodes are added in sorted order so seeded layouts are reproducible — don't "simplify" that away. **That guarantee stops at the graph this method returns**: `Graph.subgraph(nodes)` keeps its node filter in a *set*, so any subgraph or `.copy()` of it is ordered by string hashing and therefore varies with `PYTHONHASHSEED` between processes. `nx.spring_layout` seeds initial positions *by node index*, so a fixed `seed=` on a subgraph still redraws differently on every run — this is exactly how the paper 4 ego-network figure became non-reproducible while claiming a fixed seed in its own caption. Anything that draws a *subset* of this network must re-establish the order itself (`add_nodes_from(sorted(...))`, and `add_edges_from(sorted(...))` for paint order); the same trap applies to `sorted(components, key=len)`, whose stable sort leaves same-size components in hash order unless the key carries a name tiebreak. Verify by executing the notebook twice in separate processes and comparing the PNGs byte for byte. Used by section 6 of [examples/paper4_figures.ipynb](examples/paper4_figures.ipynb), which computes the centralities themselves in the notebook so the measure choices stay visible for a methods section.
+
+The projection's atom — one row per *bibliography that cites an author* — is
+`author_mentions(edges, author_citations, ...)`, a module-level function in the
+same file. It exists because two callers derive different structures from the
+same three operations (drop duplicate edges, join the author table, drop
+duplicate mentions), and a second implementation of them would drift: the
+network groups mentions by citing work to build edges, while the tie test below
+needs each author's *set* of citing bibliographies.
+
+### Hand-curated annotations join at read time
+
+[annotations.py](src/citegraph/annotations.py) carries facts a human — or an
+agent — recorded about a work rather than the pipeline: the theme a reviewer
+assigned it, what kind of publication it is. They cannot live in `works.csv`,
+which stage 4 regenerates, so a column typed in there survives exactly until the
+next `citegraph dedup`. They live beside it in `work_annotations.csv`, keyed on
+the work `id`, and `CitationGraph.from_out_dir` joins them onto `works` at load:
+`g.core["Tema"]` just works, `g.has_annotations` says whether anything was
+loaded, `g.annotations` is the curated frame on its own, and works nobody
+annotated keep a missing value instead of dropping out of the frame.
+
+`annotation_schema.csv` (`column,type,allowed,description`) declares what may be
+recorded. Declared `enum` columns are validated on load and a bad value raises
+naming the work, so an agent writing `Maybe` fails immediately; undeclared
+columns are carried untouched, so a reviewer can add a question mid-review
+without a code change. The `description` is the annotator's instruction, which is
+why it is not decoration. Ids resolve through [identity.py](src/citegraph/identity.py)'s
+redirects — an annotation written before a merge still reaches the work it became
+— and an id naming no work raises rather than being silently dropped, the same
+rule a dead journal alias follows. **Columns `works.csv` already has (`Title`,
+`Year`, …) are context**: they are written into the file so a human can read and
+edit it, and are dropped on load rather than joined back over the pipeline's own
+metadata.
+
+Paper 4's `Tema` and `Publication_Type` were imported from `core_papers.xlsx` by
+`paper4/annotations/make_work_annotations.py`: a one-time fuzzy crosswalk of 93
+sheet titles onto the 93 core works, refusing to write unless the assignment is
+one-to-one, audited in `crosswalk_papers.csv`, with each raw spelling mapped onto
+one declared value so a new category cannot arrive silently as a lone bar in a
+figure.
+
+### Does a social tie show up in the citation record?
+
+[cocitation_stats.py](src/citegraph/cocitation_stats.py) answers one question:
+given a documented tie between two authors — paper 4 supplies doctoral
+supervision — are the two co-cited more than a *comparable* pair of strangers?
+`tie_cocitation_test(graph, ties, ...)` scores each pair against a
+degree-matched permutation null and returns per-tie results plus an
+assumption-bound Fisher diagnostic. It lives in the package rather than in a notebook because it is a
+manuscript claim and both paper 4 notebooks are gitignored.
+
+Three design points are load-bearing, and two of them were got wrong first:
+
+- **The null holds prominence fixed.** Advisors and students are prominent, and
+  prominent authors are co-cited with nearly everyone, so beating an *average*
+  pair proves nothing. Each end is replaced by an author cited by a similar
+  number of bibliographies (`degree_tolerance`, with a one-bibliography floor
+  because a 20% band around a threshold of 3 admits only exact matches), and the
+  tie's own members are excluded from both strata.
+- **`exclude_self_citations` defines a universe; it does not filter one side.**
+  The tie's remaining bibliographies become the eligible set, and the null pairs
+  are then counted *and prominence-matched inside that same set*. Filtering only
+  the tie is the intuitive implementation and it is wrong: on the paper 4 corpus
+  485 of 564 co-cited authors wrote none of the 93 bibliographies while one end
+  of a tie wrote all six that cited them, so the tie loses most of its chances and
+  its comparison pairs lose none. That version reported 2 of 16 ties surviving;
+  the conditional version reports 7, against 0.8 expected by chance.
+- **The ties are not independent.** Seven people appear in more than one paper
+  4 tie, so neither Fisher's method nor a binomial count of significant ties is
+  confirmatory evidence. Report the per-tie permutation results and the
+  descriptive `n_significant` against `expected_significant`; use
+  `fisher_p_value` only when the supplied ties are independent.
+
+Each tie seeds its own RNG from its own identity, so results don't depend on the
+order ties arrive in or on how many came with them, and a pair given twice, or
+both ways round, is scored once. `fisher_combined_p` is implemented exactly
+(even-df chi-squared has a closed form) so the package keeps no SciPy dependency.
+A tie touching an author below `min_papers`, or with at least one endpoint
+lacking a degree-matched substitute, is *skipped with a reason* rather than silently
+scored — read `result.skipped` before reporting coverage.
 
 ### Figure styling lives in one module
 
@@ -124,10 +274,39 @@ bar chart read as one family: `network_axes` strips the chrome, `draw_node`
 carries membership in its *fill and nothing else* (`NODE_FILL` inside the
 population described, `NODE_OPEN` outside it, `focus=True` for the one node a
 figure is built around — never a bold label on top of that), `node_legend` names
-those fills, `hairline` / `arrow_props` draw connectors, and `separator_rule`
-divides bands. `hairline` pins a solid line because `econ_style`'s property
-cycle carries *line styles*, so a bare `ax.plot` silently comes out dashed on
-the second call.
+those fills, `hairline` / `arrow_props` draw connectors, `junction_dot`
+punctuates them, and `separator_rule` divides bands. `hairline` pins a solid
+line because `econ_style`'s property cycle carries *line styles*, so a bare
+`ax.plot` silently comes out dashed on the second call.
+
+`junction_dot` marks a point where connectors **meet**, which is what lets bare
+crossing lines mean they don't. A bracket router needs that convention the
+moment the thing it draws stops being a forest: with one parent per node no two
+brackets ever touch, but let a doctorate have three supervisors and one
+bracket's spine has to run past rows other brackets are using, where a
+T-junction is indistinguishable from an X-crossing. Unmarked, that is a figure
+asserting ties nobody recorded — in the paper 4 lineages it read as Martin A.
+Nowak having trained Juan Camilo Cárdenas, who share no advisor and no edge.
+The caller decides which points qualify; the rule the lineage trees use is
+three or more connector directions leaving one point, because a dot on every
+corner is a dot that means nothing. The mark sits far below `NODE_RADIUS` on
+purpose — at anything near node size it reads as an unlabelled person.
+
+`place_node_labels` puts the names on a node-link drawing. A force-directed
+layout has no idea its nodes carry text, so the naive "label just above the
+marker" collides — with another name, or with somebody else's marker. Each
+label is drawn, *measured against the renderer*, and moved to the next anchor
+around its node until it hits neither; measuring rendered text rather than
+guessing distances is what makes it hold for a different corpus. Two details are
+not optional. It takes positions for **every** node but labels for only the
+subset that gets text, because an unlabelled node is still an obstacle. And a
+candidate is measured **without** its leader line: an annotation that owns an
+arrow reports the arrow inside its extent, so a far anchor always measures as a
+collision and is never chosen — the leader is attached after the anchor is
+settled. Placement follows a caller-supplied `order` (prominence, normally), so
+the drawing is reproducible and the caller decides who keeps the best spot;
+where nothing is clean the least-overlapping anchor wins, never the preferred
+one, or a whole clump's names stack in a single place.
 
 `box_node` is `draw_node` with room for a second fact — a name over an
 institution — for a lineage diagram that has to show structure and placement at

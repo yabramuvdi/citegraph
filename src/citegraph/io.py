@@ -166,6 +166,14 @@ class OutLayout:
         return self.out_dir / "journal_aliases.csv"
 
     @property
+    def work_annotations_csv(self) -> Path:
+        return self.out_dir / "work_annotations.csv"
+
+    @property
+    def annotation_schema_csv(self) -> Path:
+        return self.out_dir / "annotation_schema.csv"
+
+    @property
     def author_external_ids_csv(self) -> Path:
         return self.out_dir / "author_external_ids.csv"
 
@@ -208,6 +216,14 @@ class OutLayout:
     @property
     def artifact_manifest_json(self) -> Path:
         return self.out_dir / "artifact_manifest.json"
+
+    @property
+    def author_centrality_csv(self) -> Path:
+        return self.out_dir / "author_centrality.csv"
+
+    @property
+    def core_authors_xlsx(self) -> Path:
+        return self.out_dir / "core_authors.xlsx"
 
     @property
     def report_html(self) -> Path:

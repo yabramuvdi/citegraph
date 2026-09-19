@@ -716,6 +716,104 @@ def report(
         webbrowser.open(path.resolve().as_uri())
 
 
+@app.command("export-authors")
+def export_authors(
+    out: Path = typer.Option(Path("./out"), "--out", "-o"),
+    dest: Path | None = typer.Option(
+        None, "--dest", help="Write the workbook here instead of <out>/core_authors.xlsx."
+    ),
+    ring: int = typer.Option(
+        0, "--ring", help="Discovery ring whose authors to export (0 = your own PDFs)."
+    ),
+    extra_csv: list[str] = typer.Option(
+        None,
+        "--extra-csv",
+        metavar="NAME=PATH",
+        help=(
+            "Add a curated CSV as a sheet, filtered to these authors. Rows are kept "
+            "when any 'author_id' or '*_author_id' column names a core author. Repeatable."
+        ),
+    ),
+    master_column: list[str] = typer.Option(
+        None,
+        "--master-column",
+        metavar="SHEET=COLUMN",
+        help=(
+            "Lift a column from an --extra-csv sheet onto the Authors sheet. "
+            "The sheet must have one row per author. Repeatable."
+        ),
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Write ``core_authors.xlsx`` — everything known about your papers' authors.
+
+    Reads only artifacts already on disk; no LLM or network calls. Needs the
+    author tables, so run ``citegraph authors`` first.
+    """
+    _configure_logging(verbose)
+    if not out.is_dir():
+        typer.secho(
+            f"Output directory does not exist: {out}. "
+            f"Run `citegraph authors --out {out}` first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    from citegraph.author_export import build_core_author_workbook, load_extra_sheet
+
+    try:
+        lifts = _parse_pairs(master_column or [], "--master-column")
+        sources = _parse_pairs(extra_csv or [], "--extra-csv")
+        repeated = sorted(name for name, paths in sources.items() if len(paths) > 1)
+        if repeated:
+            raise ValueError(
+                f"--extra-csv names sheet(s) {repeated} more than once; "
+                "each sheet comes from one file."
+            )
+        sheets = tuple(
+            load_extra_sheet(name, paths[0], master_columns=tuple(lifts.pop(name, [])))
+            for name, paths in sources.items()
+        )
+        if lifts:
+            raise ValueError(
+                f"--master-column names sheet(s) {sorted(lifts)} that no --extra-csv "
+                "provides; check the spelling."
+            )
+        path = build_core_author_workbook(out, dest, extra_sheets=sheets, ring=ring)
+    except (ValueError, ImportError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    import pandas as pd
+
+    n_authors = len(pd.read_excel(path, sheet_name="Authors"))
+    typer.echo(f"Wrote {path} ({n_authors} ring-{ring} author(s)).")
+    for sheet in sheets:
+        covered = sum(
+            1
+            for value in pd.read_excel(path, sheet_name="Authors")[f"in_{sheet.name}"]
+            if bool(value)
+        )
+        if covered < n_authors:
+            typer.secho(
+                f"{sheet.name} covers {covered} of {n_authors} authors — "
+                "the rest have blank columns.",
+                fg=typer.colors.YELLOW,
+            )
+
+
+def _parse_pairs(values: list[str], flag: str) -> dict[str, list[str]]:
+    """Parse repeated ``NAME=VALUE`` options, keeping every value per name."""
+    parsed: dict[str, list[str]] = {}
+    for value in values:
+        name, separator, rest = value.partition("=")
+        if not separator or not name.strip() or not rest.strip():
+            raise ValueError(f"{flag} expects NAME=VALUE, got {value!r}")
+        parsed.setdefault(name.strip(), []).append(rest.strip())
+    return parsed
+
+
 @app.command()
 def ui(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),

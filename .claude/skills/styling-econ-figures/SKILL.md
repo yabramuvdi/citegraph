@@ -71,6 +71,15 @@ Sourced conventions and the rationale for each rule: `references/conventions.md`
    `arrow_props`, band separators `separator_rule`. Never bold a focus label:
    the fill already distinguishes it.
 
+   Where connectors can touch, `junction_dot` marks the points where they
+   **meet** — which is what lets a bare crossing mean they don't. Any router
+   drawing a graph that is not a forest needs this: once a node can have two
+   parents, one connector has to run past rows another is using, and a
+   T-junction reads exactly like an X-crossing. Left unmarked it invents ties —
+   a doctoral-lineage figure here showed two people as advisor and student who
+   share no edge at all. Dot only points with three or more directions leaving
+   them; a dot on every corner trains the reader to ignore dots.
+
 8c. **Boxed nodes and flows.** A node that has to carry a second fact — a name
    over an institution — is `box_node`, and it fills with **`BOX_FILL`, never
    `NODE_FILL`**: a box is orders of magnitude more area than a marker, and at
@@ -103,7 +112,7 @@ Sourced conventions and the rationale for each rule: `references/conventions.md`
 | Overall-mean line | `reference_line(ax, value, label=…)`; `in_legend=True` when bars crowd the label |
 | Sparse bar labels | `value_labels(ax, bars, fmt="{:,.0f}")` |
 | Series encodings | `GRAYS`, `HATCHES`, `LINESTYLES`, `MARKERS`, `OKABE_ITO` |
-| Network marks | `network_axes(ax)` · `draw_node(...)` · `node_legend(...)` · `hairline(...)` · `arrow_props()` |
+| Network marks | `network_axes(ax)` · `draw_node(...)` · `node_legend(...)` · `hairline(...)` · `arrow_props()` · `junction_dot(...)` |
 | Node carrying an attribute | `box_node(ax, x, y, [name, attr], width=…, height=…)` — fills `BOX_FILL`; caller measures |
 | Two-column flow | `flow_band(ax, x0, x1, y_left=…, y_right=…, thickness=…)` |
 | Band separator | `separator_rule(ax, y)` |

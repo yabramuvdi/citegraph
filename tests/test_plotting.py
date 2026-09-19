@@ -352,6 +352,28 @@ def test_separator_rule_is_lighter_than_any_data_mark_and_sits_underneath() -> N
     assert rule.get_linestyle() == "-"
 
 
+def test_junction_dot_is_ink_on_the_connector_not_a_node() -> None:
+    """A junction is punctuation on a hairline. Drawn anywhere near node size it
+    reads as an unlabelled person, which is the opposite of clarifying."""
+    from matplotlib.colors import to_hex
+
+    fig, ax = plt.subplots()
+    dot = plotting.junction_dot(ax, 3.0, 4.0)
+    assert dot.get_xydata().tolist() == [[3.0, 4.0]]
+    assert to_hex(dot.get_markerfacecolor()) == plotting.EDGE_COLOR.lower()
+    assert dot.get_markersize() == pytest.approx(plotting.JUNCTION_RADIUS * 2)
+    assert plotting.JUNCTION_RADIUS < plotting.NODE_RADIUS / 2
+
+
+def test_junction_dot_sits_above_the_connectors_it_punctuates() -> None:
+    """It has to cover the hairlines meeting under it, and stay below the nodes."""
+    fig, ax = plt.subplots()
+    line = plotting.hairline(ax, [0, 1], [0, 0])
+    dot = plotting.junction_dot(ax, 0.5, 0.0)
+    node = plotting.draw_node(ax, 1.0, 0.0)
+    assert line.get_zorder() < dot.get_zorder() < node.get_zorder()
+
+
 def test_draw_node_can_hang_its_label_on_the_left() -> None:
     """The left end of a paired row needs its label outside the pair, not
     running back across the connector."""
@@ -484,3 +506,110 @@ def test_box_node_subtitle_stays_legible_on_both_box_fills() -> None:
     inside_sub, outside_sub = ax.texts[1], ax.texts[3]
     assert to_hex(inside_sub.get_color()) == to_hex(outside_sub.get_color())
     assert to_hex(inside_sub.get_color()) != to_hex(plotting.BOX_FILL)
+
+
+# ----------------------------------------------------------------------
+# Collision-free labels for a node-link drawing
+# ----------------------------------------------------------------------
+def _labelled_axes(positions, labels, **kwargs):
+    fig, ax = plt.subplots()
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    placed = plotting.place_node_labels(ax, labels, positions, **kwargs)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    boxes = {key: text.get_window_extent(renderer=renderer) for key, text in placed.items()}
+    return ax, placed, boxes
+
+
+def test_place_node_labels_labels_every_node_it_was_asked_to() -> None:
+    positions = {"a": (-0.5, 0.0), "b": (0.5, 0.0), "c": (0.0, 0.5)}
+    _, placed, _ = _labelled_axes(positions, {"a": "Alpha", "b": "Beta", "c": "Gamma"})
+
+    assert set(placed) == {"a", "b", "c"}
+    assert {text.get_text() for text in placed.values()} == {"Alpha", "Beta", "Gamma"}
+
+
+def test_place_node_labels_only_labels_the_keys_given() -> None:
+    """Unlabelled nodes still take part: they are obstacles, not absentees."""
+    positions = {"a": (-0.5, 0.0), "b": (0.5, 0.0), "quiet": (0.0, 0.0)}
+    _, placed, _ = _labelled_axes(positions, {"a": "Alpha", "b": "Beta"})
+
+    assert set(placed) == {"a", "b"}
+
+
+def test_place_node_labels_separates_names_of_neighbouring_nodes() -> None:
+    """Two nodes close enough to share a preferred anchor must not overlap."""
+    positions = {"a": (0.0, 0.0), "b": (0.02, 0.0)}
+    _, _, boxes = _labelled_axes(positions, {"a": "Anderson", "b": "Bernal"})
+
+    assert not boxes["a"].overlaps(boxes["b"])
+
+
+def test_place_node_labels_keeps_a_label_off_a_node_marker() -> None:
+    """A big marker directly above a node must push its label elsewhere."""
+    positions = {"a": (0.0, 0.0), "big": (0.0, 0.06)}
+    ax, placed, boxes = _labelled_axes(
+        positions, {"a": "Alpha"}, node_sizes={"a": 6.0, "big": 40.0}
+    )
+
+    centre = ax.transData.transform(positions["big"])
+    box = boxes["a"]
+    nearest_x = min(max(centre[0], box.x0), box.x1)
+    nearest_y = min(max(centre[1], box.y0), box.y1)
+    assert ((centre[0] - nearest_x) ** 2 + (centre[1] - nearest_y) ** 2) ** 0.5 >= 20.0
+
+
+def test_place_node_labels_draws_a_leader_only_when_the_label_travelled() -> None:
+    """A name far from every marker belongs to none of them without a leader."""
+    # More names than the near ring of anchors can hold, so the overflow is
+    # pushed out to the far ring and has to be led back to its node.
+    crowd = {f"n{i:02d}": (0.0, i * 0.002) for i in range(9)}
+    _, placed, _ = _labelled_axes(
+        crowd, {key: "Widename" for key in crowd}, reaches=(6.0, 40.0), leader_beyond=10.0
+    )
+    leaders = {key for key, text in placed.items() if text.arrow_patch is not None}
+
+    assert leaders, "the crowded names had to travel but got no leader"
+    assert len(leaders) < len(crowd), "a name that kept its preferred anchor needs no leader"
+    for key, text in placed.items():
+        travelled = max(abs(text.xyann[0]), abs(text.xyann[1])) > 10.0
+        assert (key in leaders) == travelled
+
+
+def test_place_node_labels_spreads_a_crowd_no_anchor_can_satisfy() -> None:
+    """When nowhere is clean the least-bad anchor wins, not the preferred one —
+    otherwise a whole clump's names stack in a single spot."""
+    crowd = {f"n{i:02d}": (0.0, i * 0.002) for i in range(9)}
+    _, placed, _ = _labelled_axes(crowd, {key: "Verylongsurname" for key in crowd})
+
+    anchors = [text.xyann for text in placed.values()]
+    assert len(set(anchors)) > len(anchors) / 2
+
+
+def test_place_node_labels_follows_the_order_it_is_given() -> None:
+    """Placement is priority-ordered, so the caller decides which name gets the
+    preferred anchor — and the drawing is identical from run to run."""
+    positions = {"a": (0.0, 0.0), "b": (0.015, 0.0)}
+    labels = {"a": "Alpha", "b": "Beta"}
+    _, first, first_boxes = _labelled_axes(positions, labels, order=["a", "b"])
+    _, second, second_boxes = _labelled_axes(positions, labels, order=["b", "a"])
+
+    assert first["a"].xyann != second["a"].xyann
+    assert first_boxes["a"].y0 > first_boxes["b"].y0
+    assert second_boxes["b"].y0 > second_boxes["a"].y0
+
+
+def test_place_node_labels_is_reproducible_for_one_input() -> None:
+    positions = {"a": (0.0, 0.0), "b": (0.02, 0.0), "c": (-0.02, 0.01)}
+    labels = {"a": "Alpha", "b": "Beta", "c": "Gamma"}
+    _, first, _ = _labelled_axes(positions, labels)
+    _, second, _ = _labelled_axes(positions, labels)
+
+    assert {k: v.xyann for k, v in first.items()} == {k: v.xyann for k, v in second.items()}
+
+
+def test_place_node_labels_rejects_a_label_for_a_node_it_has_no_position_for() -> None:
+    fig, ax = plt.subplots()
+    with pytest.raises(KeyError, match="ghost"):
+        plotting.place_node_labels(ax, {"ghost": "Nobody"}, {"a": (0.0, 0.0)})

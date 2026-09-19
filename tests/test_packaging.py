@@ -18,13 +18,13 @@ def test_pdf_conversion_dependency_is_optional() -> None:
     extras = project["optional-dependencies"]
 
     assert not any(dep.startswith("docling") for dep in dependencies)
-    assert any(dep.startswith("docling") for dep in extras["pdf"])
+    assert "docling[easyocr]>=2.0" in extras["pdf"]
 
 
 def test_all_extra_includes_pdf_and_enrichment_dependencies() -> None:
     extras = _pyproject()["project"]["optional-dependencies"]
 
-    assert any(dep.startswith("docling") for dep in extras["all"])
+    assert "docling[easyocr]>=2.0" in extras["all"]
     assert any(dep.startswith("httpx") for dep in extras["all"])
 
 
@@ -71,3 +71,13 @@ def test_readme_links_first_user_and_ui_architecture_guides() -> None:
     for guide in ("docs/USER_GUIDE.md", "docs/UI_ARCHITECTURE.md"):
         assert guide in readme
         assert (ROOT / guide).exists()
+
+
+def test_excel_export_dependency_is_optional() -> None:
+    project = _pyproject()["project"]
+
+    assert not any(dep.startswith("openpyxl") for dep in project["dependencies"])
+    extras = project["optional-dependencies"]
+    assert any(dep.startswith("openpyxl") for dep in extras["excel"])
+    assert any(dep.startswith("openpyxl") for dep in extras["all"])
+    assert any(dep.startswith("openpyxl") for dep in extras["dev"])
