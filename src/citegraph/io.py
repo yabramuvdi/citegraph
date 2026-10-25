@@ -174,6 +174,10 @@ class OutLayout:
         return self.out_dir / "annotation_schema.csv"
 
     @property
+    def jel_codes_csv(self) -> Path:
+        return self.out_dir / "jel_codes.csv"
+
+    @property
     def author_external_ids_csv(self) -> Path:
         return self.out_dir / "author_external_ids.csv"
 

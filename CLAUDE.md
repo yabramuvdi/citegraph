@@ -29,6 +29,7 @@ citegraph authors --out ./out             # stage 4b: -> authors.csv, author_cit
 citegraph estimate --out ./out            # pre-flight token/cost estimate (no API calls)
 citegraph status --out ./out              # report which artifacts exist
 citegraph report --out ./out [--open]     # write self-contained report.html QC dashboard
+citegraph jel --out ./out                 # -> jel_codes.csv (JEL codes of core papers; no API calls)
 citegraph export-authors --out ./out      # -> core_authors.xlsx (your papers' authors, one workbook)
 citegraph ui --out ./out [--port 8765]    # serve read-only live monitor on 127.0.0.1
 ```
@@ -208,6 +209,38 @@ sheet titles onto the 93 core works, refusing to write unless the assignment is
 one-to-one, audited in `crosswalk_papers.csv`, with each raw spelling mapped onto
 one declared value so a new category cannot arrive silently as a lone bar in a
 figure.
+
+### JEL codes: read from the paper, hand-assigned where it prints none
+
+[jel.py](src/citegraph/jel.py) is the one attribute of a core paper the paper
+itself can supply. Most economics articles print their JEL codes on the title
+page and docling carries the line into the markdown, so `extract_jel_codes`
+reads them back with a regex instead of another LLM call: a `JEL_Codes` field on
+`PaperMetadata` would invalidate the metadata cache, and re-extracting every
+paper could shift titles, hence work ids, hence every id-keyed curated file. The
+regex has to survive what docling does to a title page — `/uni00A0·` and `/C1`
+separators, the fi ligature mangled into `classi /uniFB01 cation`, OCR reading
+`O12` as `012`, an Elsevier "Article info" box printing one code per paragraph
+with a space inside each (`Q 52`) — and a thesis prints one block per chapter,
+so every block is read and the codes unioned. A line that says `JEL` and then
+anything other than codes is prose and contributes nothing; that is what keeps
+`doi.org/10.1257/jel.50.2.368` out.
+
+`citegraph jel` writes `jel_codes.csv` (`id, source_file, Title, JEL_Codes,
+JEL_General, JEL_Source`, lists joined by `;`) and prints the headline count —
+**36 of 93 paper 4 core papers print codes**, which is itself a finding about a
+corpus of working papers, chapters and dissertations — then lists the rest. Those
+get codes by hand through a `JEL_Codes` text column in `work_annotations.csv`
+(declared in `annotation_schema.csv`), and a hand-assigned value **overrides**
+extraction, the same precedence `author_external_ids.csv` follows. `JEL_Source`
+(`extracted` / `manual` / `missing`) keeps the two apart so a caption can say
+how many were read and how many assigned. `JEL_General` is the sorted set of
+first letters, the level the `papers_by_jel_category` figure in
+[examples/paper4_figures.ipynb](examples/paper4_figures.ipynb) counts at; a
+paper whose codes span several categories is counted once in each, so those bars
+sum to more than the number of papers. `JEL_GENERAL_CATEGORIES` carries the
+twenty letters and names from the AEA's `classifications.xml`; the full
+three-digit descriptor table is deliberately not vendored.
 
 ### Does a social tie show up in the citation record?
 

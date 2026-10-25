@@ -716,6 +716,37 @@ def report(
         webbrowser.open(path.resolve().as_uri())
 
 
+@app.command()
+def jel(
+    out: Path = typer.Option(Path("./out"), "--out", "-o"),
+) -> None:
+    """Write ``jel_codes.csv``: the JEL codes of every core paper.
+
+    Codes are read from the converted markdown; papers whose PDF carries none
+    take them from the ``JEL_Codes`` column of ``work_annotations.csv``. No
+    LLM or network calls are made.
+    """
+    from citegraph.jel import core_jel_codes, write_jel_codes
+
+    frame = core_jel_codes(out)
+    path = write_jel_codes(out)
+    n_core = len(frame)
+    counts = frame["JEL_Source"].value_counts()
+    typer.echo(f"Wrote {path}.")
+    typer.echo(
+        f"{counts.get('extracted', 0)} of {n_core} core papers carry JEL codes in their "
+        f"text; {counts.get('manual', 0)} hand-coded in work_annotations.csv; "
+        f"{counts.get('missing', 0)} without any."
+    )
+    missing = frame[frame["JEL_Source"] == "missing"]
+    if len(missing):
+        typer.secho(
+            "Add a JEL_Codes column to work_annotations.csv for:", fg=typer.colors.YELLOW
+        )
+        for work_id, row in missing.iterrows():
+            typer.echo(f"  {work_id}  {row['Title']}")
+
+
 @app.command("export-authors")
 def export_authors(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
