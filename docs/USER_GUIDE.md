@@ -188,6 +188,11 @@ For reproducible analysis, archive:
 
 ## 5. Explore results
 
+If a coding agent is driving the run for you, the README's "Using citegraph
+with an AI agent" section has instructions to paste into it: stage by stage,
+cost approval before any model call, sidecar checks after every stage, and
+corrections in the curated files rather than the generated CSVs.
+
 ```python
 from citegraph import CitationGraph
 
@@ -196,7 +201,7 @@ graph = CitationGraph.from_out_dir("/path/to/citegraph-output")
 print(graph)
 print(graph.top_cited(10)[["Title", "Year", "citation_count"]])
 
-paper_id = graph.papers.iloc[0]["id"]
+paper_id = graph.core.index[0]
 print(graph.cited_by(paper_id))
 
 if graph.has_authors:
@@ -209,6 +214,22 @@ if graph.has_authors:
 
 `CitationGraph` is a read-only view. It does not modify the reviewed CSV
 artifacts. `to_networkx()` is available when NetworkX is installed separately.
+
+### Who is read together?
+
+With NetworkX installed (`pip install "citegraph[graph]"`),
+`graph.author_cocitation_network(min_papers=3)` returns the author co-citation
+projection: two authors are joined when the same bibliography cites both, and
+the edge weight counts how many bibliographies do. Unlike the one-hop work
+graph, it is a real one-mode network, so degree, betweenness and eigenvector
+centrality mean what they usually mean.
+
+`citegraph.cocitation_stats.tie_cocitation_test(graph, pairs)` scores
+documented ties between authors (supervision, co-authorship, a shared
+department) against a null that holds each author's prominence fixed, and
+reports the ties it could not score with a reason. The README's
+"Does a documented tie show up in the citation record?" section has the
+worked example and the three caveats to read before reporting the numbers.
 
 ## 6. Interpret the outputs carefully
 

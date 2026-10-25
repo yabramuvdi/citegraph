@@ -3,7 +3,7 @@
 ``authors.csv`` describes every author in the corpus — thousands of them,
 most encountered once in somebody's bibliography. The question a manuscript
 actually asks is narrower: *who wrote my papers, and what do we know about
-them?* That answer is spread over half a dozen artifacts, and for paper 4 it
+them?* That answer is spread over half a dozen artifacts, and often
 reaches outside ``out_dir`` entirely, into hand-collected career metadata.
 
 This module assembles it into a single workbook keyed on ``author_id``.

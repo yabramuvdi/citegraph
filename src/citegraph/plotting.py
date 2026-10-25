@@ -723,9 +723,8 @@ def junction_dot(
     supervised by three people — one bracket's vertical spine has to run past
     rows that other brackets are using, and a reader has no way to tell the
     resulting T-junction from an X-crossing. Left unmarked, that is a figure
-    asserting ties nobody recorded: in the paper 4 lineages it joined Martin A.
-    Nowak to Juan Camilo Cárdenas, who share no advisor, no institution and no
-    edge.
+    asserting ties nobody recorded: in one supervision tree it joined two
+    people who share no advisor, no institution and no edge.
 
     So a filled dot means connected and bare crossing lines mean not connected,
     and the two become distinguishable. Callers decide which points qualify —
