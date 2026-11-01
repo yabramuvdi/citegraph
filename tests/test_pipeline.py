@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from citegraph import __version__
 from citegraph.llm import GeminiClient
 from citegraph.pipeline import Pipeline, StageNotReadyError
 from citegraph.schemas import PaperMetadata, Reference
@@ -130,7 +131,7 @@ def test_pipeline_run_returns_author_tables_and_manifest(
     assert manifest.exists()
     data = json.loads(manifest.read_text(encoding="utf-8"))
     assert data["schema_version"] == 1
-    assert data["package_version"] == "0.1.0"
+    assert data["package_version"] == __version__
     assert "run_summary" in data["artifacts"]
     assert "works" in data["artifacts"]
 

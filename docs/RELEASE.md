@@ -21,9 +21,11 @@ in the repository.
    source-checkout fallback in `src/citegraph/reports.py`. Update
    [CHANGELOG.md](../CHANGELOG.md), including migration instructions and known
    limitations. Replace its unreleased marker with the release date when publishing.
-2. Run local verification:
+2. Refresh the editable install after changing the version so its installed
+   metadata matches the source, then run local verification:
 
    ```bash
+   python -m pip install -e ".[dev]"
    python -m pytest tests/test_*.py -vv
    ruff check .
    python -m build
