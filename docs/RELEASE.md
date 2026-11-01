@@ -17,7 +17,10 @@ in the repository.
 
 ## Before Tagging
 
-1. Update the version in both `pyproject.toml` and `src/citegraph/__init__.py`.
+1. Update the version in `pyproject.toml`, `src/citegraph/__init__.py`, and the
+   source-checkout fallback in `src/citegraph/reports.py`. Update
+   [CHANGELOG.md](../CHANGELOG.md), including migration instructions and known
+   limitations. Replace its unreleased marker with the release date when publishing.
 2. Run local verification:
 
    ```bash
@@ -45,12 +48,14 @@ in the repository.
 Create and push a version tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 The `Publish` workflow builds the package, checks metadata, and publishes to
-PyPI through trusted publishing.
+PyPI through trusted publishing. Push only the intended release tag; an existing
+tag must not be moved to a different commit. The first successful publication
+creates the project from its pending publisher.
 
 ## After Publishing
 

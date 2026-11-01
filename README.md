@@ -777,6 +777,7 @@ flags mirror these knobs: `--enrich-year-penalty`,
 - [UI and application architecture](docs/UI_ARCHITECTURE.md) — proposed
   boundary for a future researcher-facing interface.
 - [Release checklist](docs/RELEASE.md) — packaging and publishing procedure.
+- [Changelog](CHANGELOG.md) — release changes, migration, and known limitations.
 
 ## Development
 
@@ -796,10 +797,9 @@ uses PyPI's [trusted publishing](https://docs.pypi.org/trusted-publishers/),
 so no API token is stored in the repo. See [docs/RELEASE.md](docs/RELEASE.md)
 for the full checklist. To cut a release:
 
-1. Bump the `version` in [`pyproject.toml`](pyproject.toml) and in
-   `src/citegraph/__init__.py`.
+1. Update the version and changelog as described in [docs/RELEASE.md](docs/RELEASE.md).
 2. Commit and push to `main`.
-3. `git tag v0.1.0 && git push --tags` — the workflow then builds an
+3. `git tag v0.2.0 && git push origin v0.2.0` — the workflow then builds an
    sdist + wheel and publishes them to PyPI.
 
 To dry-run against TestPyPI first, build locally and upload manually:

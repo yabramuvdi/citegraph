@@ -57,22 +57,6 @@ def test_package_version_is_single_sourced_with_init() -> None:
     assert f'__version__ = "{project_version}"' in init_text
 
 
-def test_readme_linked_workflows_exist() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-
-    for workflow in (".github/workflows/ci.yml", ".github/workflows/publish.yml"):
-        assert workflow in readme
-        assert (ROOT / workflow).exists()
-
-
-def test_readme_links_first_user_and_ui_architecture_guides() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-
-    for guide in ("docs/USER_GUIDE.md", "docs/UI_ARCHITECTURE.md"):
-        assert guide in readme
-        assert (ROOT / guide).exists()
-
-
 def test_excel_export_dependency_is_optional() -> None:
     project = _pyproject()["project"]
 

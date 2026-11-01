@@ -48,7 +48,10 @@ def served_corpus(tmp_path: Path):
     out = tmp_path / "out"
     _write_corpus(out)
     server = create_server(out, port=0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # Avoid the default half-second shutdown wait for every HTTP test.
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     try:
         yield server.server_address[1], out
@@ -105,7 +108,9 @@ def test_api_data_reflects_corpus(served_corpus) -> None:
 
 def test_api_data_works_before_out_dir_exists(tmp_path: Path) -> None:
     server = create_server(tmp_path / "nope", port=0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     try:
         status, _, body = _get(server.server_address[1], "/api/data")

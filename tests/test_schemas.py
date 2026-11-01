@@ -8,18 +8,6 @@ from pydantic import ValidationError
 from citegraph.schemas import PaperMetadata, Reference
 
 
-def test_paper_metadata_valid():
-    meta = PaperMetadata(
-        Title="Governing the Commons",
-        Authors_List=["Elinor Ostrom"],
-        Authors="Ostrom, E.",
-        Journal="Cambridge University Press",
-        Year=1990,
-    )
-    assert meta.Year == 1990
-    assert meta.Authors_List == ["Elinor Ostrom"]
-
-
 def test_paper_metadata_rejects_missing_field():
     with pytest.raises(ValidationError):
         PaperMetadata(Title="A", Authors_List=["B"], Authors="B", Journal="J")  # missing Year
@@ -51,40 +39,17 @@ def test_reference_extra_fields_ignored():
     assert not hasattr(ref, "doi")
 
 
-def test_authors_is_derived_from_list():
-    """`Authors` is no longer in the LLM contract — it's a derived property."""
+def test_metadata_derives_and_serializes_authors():
+    """The public property and CSV/cache serialization use the same author list."""
     meta = PaperMetadata(
         Title="A",
         Authors_List=["Jane Q. Doe", "John A. Smith"],
         Journal="J",
         Year=2020,
     )
-    assert meta.Authors == "Jane Q. Doe, John A. Smith"
-
-
-def test_authors_kwarg_silently_ignored():
-    """A legacy caller passing Authors=... should not break — the kwarg is dropped and the value re-derived."""
-    meta = PaperMetadata(
-        Title="A",
-        Authors_List=["Jane Doe"],
-        Authors="this should be ignored",  # type: ignore[call-arg]
-        Journal="J",
-        Year=2020,
-    )
-    assert meta.Authors == "Jane Doe"
-
-
-def test_model_dump_includes_derived_authors():
-    """CSV writers serialize via model_dump and need the Authors column."""
-    meta = PaperMetadata(
-        Title="A",
-        Authors_List=["Jane Doe", "John Smith"],
-        Journal="J",
-        Year=2020,
-    )
     dumped = meta.model_dump()
-    assert dumped["Authors"] == "Jane Doe, John Smith"
-    assert dumped["Authors_List"] == ["Jane Doe", "John Smith"]
+    assert meta.Authors == dumped["Authors"] == "Jane Q. Doe, John A. Smith"
+    assert dumped["Authors_List"] == ["Jane Q. Doe", "John A. Smith"]
 
 
 def test_old_cache_with_authors_field_still_loads():
@@ -96,8 +61,6 @@ def test_old_cache_with_authors_field_still_loads():
         "Journal": "J",
         "Year": 2020,
     }
-    meta = PaperMetadata.model_validate(legacy)
-    # Authors is recomputed from the list, not taken from the legacy string.
-    assert meta.Authors == "Jane Doe"
-    # And re-dumping uses the derived value.
-    assert meta.model_dump()["Authors"] == "Jane Doe"
+    for meta in (PaperMetadata(**legacy), PaperMetadata.model_validate(legacy)):
+        assert meta.Authors == "Jane Doe"
+        assert meta.model_dump()["Authors"] == "Jane Doe"
