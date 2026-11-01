@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-11-01
+
+- Describe the library as building and analyzing citation and author networks
+  with LLM-assisted extraction.
+- Make the current Gemini-only extraction support explicit in the README and
+  user guide, with additional LLM providers planned. This release changes
+  documentation and package metadata; it does not add another LLM provider.
+
 ## 0.2.0 — 2026-11-01
 
 Public research beta. This release replaces the earlier papers/references model

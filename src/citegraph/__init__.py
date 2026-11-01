@@ -1,4 +1,6 @@
-"""citegraph: build a deduplicated citation graph from a folder of PDFs.
+"""Build and analyze citation and author networks from academic PDFs.
+
+LLM-assisted metadata and reference extraction currently uses Google Gemini.
 
 See :class:`citegraph.Pipeline` for the high-level entry point::
 
@@ -41,4 +43,4 @@ __all__ = [
     "parse_author",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

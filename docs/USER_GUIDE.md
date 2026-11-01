@@ -4,6 +4,10 @@ This guide walks a researcher from a folder of PDFs to a checked, queryable
 citation graph. It also explains which decisions deserve human review and what
 data leaves the computer during a run.
 
+Metadata and reference extraction currently support Google Gemini only.
+Support for additional LLM providers is planned. PDF conversion, graph queries,
+and network analysis run locally.
+
 ## 1. Install
 
 `citegraph` requires Python 3.11 or newer. Upgrade `pip` before installing the

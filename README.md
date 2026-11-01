@@ -1,17 +1,21 @@
 # citegraph
 
-Turn a folder of academic PDFs into a citation graph you can query, and then
-ask who the literature reads together.
+Build and analyze citation and author networks from academic PDFs with
+LLM-assisted extraction.
 
 `citegraph` is for a researcher who has a corpus of papers — a literature
 review, a field's working papers, a lab's output — and wants to study it
 bibliometrically without hand-coding bibliographies. It converts each PDF to
-text locally, has a large language model extract the paper's metadata and its
+text locally, uses Google Gemini to extract the paper's metadata and its
 full reference list, resolves every bibliographic record into one canonical
 **work**, and clusters author names across the corpus into canonical
 **authors**. On top of those tables it builds the author co-citation network
 and offers a test for whether a documented relationship between two people
 shows up in how the field cites them.
+
+**Current LLM support:** metadata and reference extraction use Google Gemini.
+Support for additional LLM providers is planned. PDF conversion, graph queries,
+and network analysis run locally.
 
 Everything lands as plain CSVs in one output directory, every stage is
 checkpointed, and nothing is sent anywhere until you have seen a cost estimate.
@@ -799,7 +803,7 @@ for the full checklist. To cut a release:
 
 1. Update the version and changelog as described in [docs/RELEASE.md](docs/RELEASE.md).
 2. Commit and push to `main`.
-3. `git tag v0.2.0 && git push origin v0.2.0` — the workflow then builds an
+3. `git tag v0.2.1 && git push origin v0.2.1` — the workflow then builds an
    sdist + wheel and publishes them to PyPI.
 
 To dry-run against TestPyPI first, build locally and upload manually:
