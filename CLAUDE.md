@@ -44,6 +44,11 @@ upstream artifacts raise `StageNotReadyError` with a hint at the prior step.
 
 ## Architecture
 
+**Paper 4 lives elsewhere.** The manuscript's notebooks, curated inputs and frozen
+corpus are a separate replication package (`~/repos/paper4-replication`, which
+pins this library by commit). Mentions of "paper 4" below are the corpus whose
+evidence motivated a design choice, not code in this repository.
+
 `citegraph` turns a folder of academic PDFs into a canonical **works** table plus a citation graph (`works.csv`, `citation_graph.csv`). Every bibliographic record is a *work* with a single role-free `w-` id and two orthogonal stored facts: **`ring`** — discovery depth, where ring 0 is the user's own PDFs (the *core*) and ring n was first discovered in a ring n−1 bibliography — and **`source_file`** — non-empty when we processed a PDF for it. Today ring 0 ⇔ has a source file; snowballing later (processing PDFs of important references) is a data change, not a schema change. The whole flow is orchestrated by `Pipeline.run()` in [pipeline.py](src/citegraph/pipeline.py); everything else is a stage it composes.
 
 **Migrating a pre-works-model out_dir** (one that has `papers.csv`/`references.csv`): the per-stem caches are reused, so re-running `citegraph metadata && citegraph references && citegraph dedup && citegraph authors` (plus `enrich` if used — its per-item cache falls back to the legacy `r-` filenames) rebuilds everything without new docling or Gemini calls. Stale legacy CSVs can then be deleted.
@@ -141,26 +146,13 @@ Economics`). `crosswalk_fields.csv` folds those into the 8 categories
 pivot table there reproduce that figure's counts exactly.
 
 `author_centrality.csv` is joined onto `Authors` when present, and is the one
-input the pipeline never writes: [examples/paper4_figures.ipynb](examples/paper4_figures.ipynb)
-does. So it is read fault-tolerantly and can silently go stale if you re-run
+input the pipeline never writes: the paper 4 figures notebook in the replication
+package does. So it is read fault-tolerantly and can silently go stale if you re-run
 `citegraph authors` without re-running the notebook. Writing `.xlsx` needs
 `openpyxl`, a lazily-imported `[excel]` extra, so the base install stays light.
 
-Paper 4's workbook is rebuilt from `Dropbox/Consultoria/Maria/paper4/` with:
-
-```bash
-citegraph export-authors --out citegraph_out \
-  --extra-csv Institutional=institutional/out/base_institucional_clean.csv \
-  --extra-csv Career_Positions=institutional/out/career_positions.csv \
-  --extra-csv Supervision=institutional/out/supervision.csv \
-  --master-column Institutional=affiliation_institution \
-  --master-column Institutional=affiliation_department \
-  --master-column Institutional=affiliation_field \
-  --master-column Institutional=affiliation_country \
-  --master-column Institutional=phd_institution \
-  --master-column Institutional=phd_year_end \
-  --master-column Institutional=phd_field
-```
+Paper 4's invocation, with its three curated sheets and seven lifted columns, is
+the `workbook` target of the replication package's `Makefile`.
 
 ### `CitationGraph` query view
 
@@ -168,7 +160,7 @@ citegraph export-authors --out citegraph_out \
 
 When `authors.csv` and `author_citations.csv` exist in `out_dir`, `from_out_dir` loads them too and `has_authors` becomes `True`, unlocking `top_authors(n, ring=None)` (authors ranked by distinct works authored; `ring=0` answers "who are the most prominent authors of *my* papers?"), `top_cited_authors(n)` (ranked by `n_citations_received`), `find_author(query)` (diacritic-insensitive substring match on surname or display name), `citations_of(author_id)` (every cited work the author appears on), `papers_citing_author(author_id)`, `citation_context_for_author(author_id)`, `citing_papers_by_author(author_id)`, and `source_journals_citing_author(author_id)`. The last three join through `citation_graph.csv` so citing-side journal rollups answer "which journals are doing the citing?" rather than "where were the cited works published?" These methods raise `RuntimeError` with an actionable hint when called on a graph whose author tables aren't loaded, rather than silently returning empty results.
 
-`author_cocitation_network(min_papers=3, citing_ids=None)` is the one method that *builds* a network for analysis rather than exporting one. It returns the weighted, undirected author co-citation projection (White & Griffith 1981): two authors are joined when the same bibliography cites both, and `weight` counts how many bibliographies do. It exists because the work-level graph is one hop deep — only PDF-backed works have outgoing edges, so betweenness/closeness/PageRank over `to_networkx()` would measure the sampling design, not the literature. The projection is a real one-mode network where Freeman/Bonacich centralities are defined. A citing work that cites several works by one author contributes one mention and never a self-loop; `min_papers` prunes the once-cited tail; `citing_ids` restricts the citing side, which is how the self-citation robustness variant is built. Nodes are added in sorted order so seeded layouts are reproducible — don't "simplify" that away. **That guarantee stops at the graph this method returns**: `Graph.subgraph(nodes)` keeps its node filter in a *set*, so any subgraph or `.copy()` of it is ordered by string hashing and therefore varies with `PYTHONHASHSEED` between processes. `nx.spring_layout` seeds initial positions *by node index*, so a fixed `seed=` on a subgraph still redraws differently on every run — this is exactly how the paper 4 ego-network figure became non-reproducible while claiming a fixed seed in its own caption. Anything that draws a *subset* of this network must re-establish the order itself (`add_nodes_from(sorted(...))`, and `add_edges_from(sorted(...))` for paint order); the same trap applies to `sorted(components, key=len)`, whose stable sort leaves same-size components in hash order unless the key carries a name tiebreak. Verify by executing the notebook twice in separate processes and comparing the PNGs byte for byte. Used by section 6 of [examples/paper4_figures.ipynb](examples/paper4_figures.ipynb), which computes the centralities themselves in the notebook so the measure choices stay visible for a methods section.
+`author_cocitation_network(min_papers=3, citing_ids=None)` is the one method that *builds* a network for analysis rather than exporting one. It returns the weighted, undirected author co-citation projection (White & Griffith 1981): two authors are joined when the same bibliography cites both, and `weight` counts how many bibliographies do. It exists because the work-level graph is one hop deep — only PDF-backed works have outgoing edges, so betweenness/closeness/PageRank over `to_networkx()` would measure the sampling design, not the literature. The projection is a real one-mode network where Freeman/Bonacich centralities are defined. A citing work that cites several works by one author contributes one mention and never a self-loop; `min_papers` prunes the once-cited tail; `citing_ids` restricts the citing side, which is how the self-citation robustness variant is built. Nodes are added in sorted order so seeded layouts are reproducible — don't "simplify" that away. **That guarantee stops at the graph this method returns**: `Graph.subgraph(nodes)` keeps its node filter in a *set*, so any subgraph or `.copy()` of it is ordered by string hashing and therefore varies with `PYTHONHASHSEED` between processes. `nx.spring_layout` seeds initial positions *by node index*, so a fixed `seed=` on a subgraph still redraws differently on every run — this is exactly how the paper 4 ego-network figure became non-reproducible while claiming a fixed seed in its own caption. Anything that draws a *subset* of this network must re-establish the order itself (`add_nodes_from(sorted(...))`, and `add_edges_from(sorted(...))` for paint order); the same trap applies to `sorted(components, key=len)`, whose stable sort leaves same-size components in hash order unless the key carries a name tiebreak. Verify by executing the notebook twice in separate processes and comparing the PNGs byte for byte. Used by section 6 of the paper 4 figures notebook (replication package), which computes the centralities themselves in the notebook so the measure choices stay visible for a methods section.
 
 The projection's atom — one row per *bibliography that cites an author* — is
 `author_mentions(edges, author_citations, ...)`, a module-level function in the
@@ -204,7 +196,7 @@ edit it, and are dropped on load rather than joined back over the pipeline's own
 metadata.
 
 Paper 4's `Tema` and `Publication_Type` were imported from `core_papers.xlsx` by
-`paper4/annotations/make_work_annotations.py`: a one-time fuzzy crosswalk of 93
+`annotations/make_work_annotations.py` in the replication package: a one-time fuzzy crosswalk of 93
 sheet titles onto the 93 core works, refusing to write unless the assignment is
 one-to-one, audited in `crosswalk_papers.csv`, with each raw spelling mapped onto
 one declared value so a new category cannot arrive silently as a lone bar in a
@@ -235,8 +227,8 @@ get codes by hand through a `JEL_Codes` text column in `work_annotations.csv`
 extraction, the same precedence `author_external_ids.csv` follows. `JEL_Source`
 (`extracted` / `manual` / `missing`) keeps the two apart so a caption can say
 how many were read and how many assigned. `JEL_General` is the sorted set of
-first letters, the level the `papers_by_jel_category` figure in
-[examples/paper4_figures.ipynb](examples/paper4_figures.ipynb) counts at; a
+first letters, the level the paper 4 `papers_by_jel_category` figure counts
+at; a
 paper whose codes span several categories is counted once in each, so those bars
 sum to more than the number of papers. `JEL_GENERAL_CATEGORIES` carries the
 twenty letters and names from the AEA's `classifications.xml`; the full
@@ -250,7 +242,7 @@ supervision — are the two co-cited more than a *comparable* pair of strangers?
 `tie_cocitation_test(graph, ties, ...)` scores each pair against a
 degree-matched permutation null and returns per-tie results plus an
 assumption-bound Fisher diagnostic. It lives in the package rather than in a notebook because it is a
-manuscript claim and both paper 4 notebooks are gitignored.
+manuscript claim and the paper 4 notebooks live outside this repository.
 
 Three design points are load-bearing, and two of them were got wrong first:
 
@@ -286,9 +278,8 @@ scored — read `result.skipped` before reporting coverage.
 
 [plotting.py](src/citegraph/plotting.py) is the single definition of the
 economics-journal figure conventions, and **every** manuscript figure goes
-through it — both paper 4 notebooks (`examples/paper4_figures.ipynb` over
-`citegraph_out/`, `examples/paper4_institutional_figures.ipynb` over
-`institutional/out/`) import the same helpers so the two figure sets share one
+through it — both paper 4 figure notebooks in the replication package (one over
+`citegraph_out/`, one over `institutional/out/`) import the same helpers so the two figure sets share one
 visual language by construction. Rules and rationale: the `styling-econ-figures`
 skill in `.claude/skills/`.
 
@@ -367,8 +358,8 @@ now held in Switzerland gets drawn and counted as somebody who never moved.
 proof under `<figures>/gray/`, so the "legible without colour" check leaves
 evidence on disk for both corpora without either notebook remembering to ask.
 `show_caption` renders the same caption block in the notebook, so display and
-sidecar cannot drift. Both notebooks are gitignored; regenerating them is
-documented in the paper 4 figure-regeneration notes.
+sidecar cannot drift. Both notebooks live in the paper 4 replication package,
+where `make figures` regenerates every figure.
 
 ### Per-paper failure isolation and warning files
 
