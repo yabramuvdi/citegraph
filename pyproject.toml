@@ -92,6 +92,7 @@ exclude = [
   "/CLAUDE.md",
   "/PROJECT_OVERVIEW.html",
   "/research",
+  "/examples/demo_out",
 ]
 
 [tool.ruff]

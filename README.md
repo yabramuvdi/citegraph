@@ -122,6 +122,32 @@ result.graph        # (citing_id, cited_id) edges
 
 Re-running skips work already done, so an interrupted run wastes no API calls.
 
+### Try it without a key
+
+A finished run ships in the repository under
+[`examples/demo_out/`](examples/demo_out/): one experimental economist's 93
+papers and everything they cite, as the five generated tables. From a checkout:
+
+```bash
+git clone https://github.com/yabramuvdi/citegraph && cd citegraph
+pip install "citegraph[graph]"
+citegraph report --out examples/demo_out --open
+```
+
+```python
+from citegraph import CitationGraph
+
+g = CitationGraph.from_out_dir("examples/demo_out")
+g                                   # <CitationGraph: 93 core works, 3277 works, 4532 edges, 4738 authors>
+g.top_cited(5)[["Title", "Year", "citation_count"]]
+g.top_cited_authors(5)[["display_name", "n_citations_received"]]
+
+G = g.author_cocitation_network(min_papers=3)
+G["a-ostrom-elinor"]["a-cardenas-juan-camilo"]["weight"]   # 53 bibliographies cite both
+```
+
+Every example below runs against it.
+
 ## Using citegraph with an AI agent
 
 The pipeline is deliberately shaped so a coding agent can drive it: every
@@ -164,17 +190,17 @@ today) or from a freshly returned `PipelineResult`:
 ```python
 from citegraph import CitationGraph
 
-g = CitationGraph.from_out_dir("./out")
+g = CitationGraph.from_out_dir("examples/demo_out")   # or "./out"
 # or: g = CitationGraph.from_pipeline_result(pipe.run())
 
-g                                  # <CitationGraph: 25 core works, 457 works, 678 edges>
+g                                  # <CitationGraph: 93 core works, 3277 works, 4532 edges, 4738 authors>
 g.n_core_works, g.n_works, g.n_edges
 
 g.core                             # your own papers (ring 0)
 g.core_citations()                 # who among your papers cites whom
 g.top_cited(n=10)                  # most-cited works (your own papers rank too)
-g.cited_by("w-doe-2020-some-paper")
-g.citers_of("w-hardin-1968-tragedy-of-the-commons")
+g.citers_of("w-ostrom-1994-rules-games-and-common-pool-resources")   # 29 of the core papers
+g.cited_by(g.core.index[0])                                           # one core paper's bibliography
 ```
 
 When `authors.csv` and `author_citations.csv` exist, author-level queries
