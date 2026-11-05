@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from click import unstyle
 from pydantic import ValidationError
 from tenacity import wait_none
 
@@ -346,7 +347,7 @@ def test_cli_missing_provider_model_is_an_actionable_usage_error(tmp_path, monke
     monkeypatch.delenv("CITEGRAPH_MODEL", raising=False)
     result = CliRunner().invoke(app, ["estimate", "--out", str(tmp_path), "--provider", "openai"])
     assert result.exit_code == 2
-    assert "--model" in result.output
+    assert "--model" in unstyle(result.output)
 
 
 def test_changed_output_budget_refreshes_metadata_cache(tmp_path):
