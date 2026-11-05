@@ -14,8 +14,8 @@ and offers a test for whether a documented relationship between two people
 shows up in how the field cites them.
 
 **LLM support:** Gemini (the default), OpenAI, and Anthropic. PDF conversion,
-graph queries, and network analysis run locally. OpenAI and Anthropic support is
-available on the development branch; install from a checkout until the next release.
+graph queries, and network analysis run locally. OpenAI and Anthropic support
+is available starting with version 0.3.0.
 
 Everything lands as plain CSVs in one output directory, every stage is
 checkpointed, and the staged workflow lets you review a cost estimate before
@@ -84,10 +84,10 @@ The base install is enough to load a finished run with `CitationGraph`; the
 ### Choose an LLM provider
 
 Gemini keeps working with the existing install and `GOOGLE_API_KEY`. For OpenAI
-or Anthropic, install the corresponding optional SDK from this checkout:
+or Anthropic, install the corresponding optional SDK:
 
 ```bash
-pip install -e ".[pdf,openai]"         # or ".[pdf,anthropic]"; ".[all]" installs both
+pip install "citegraph[pdf,openai]"   # or "citegraph[pdf,anthropic]"; "citegraph[all]" installs both
 ```
 
 | Provider | CLI flag | API key | Model |
@@ -856,7 +856,7 @@ for the full checklist. To cut a release:
 
 1. Update the version and changelog as described in [docs/RELEASE.md](docs/RELEASE.md).
 2. Commit and push to `main`.
-3. `git tag v0.2.1 && git push origin v0.2.1` — the workflow then builds an
+3. `git tag v0.3.0 && git push origin v0.3.0` — the workflow then builds an
    sdist + wheel and publishes them to PyPI.
 
 To dry-run against TestPyPI first, build locally and upload manually:

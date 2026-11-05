@@ -23,7 +23,7 @@ def _package_version() -> str:
     try:
         return version("citegraph")
     except PackageNotFoundError:
-        return "0.2.1"
+        return "0.3.0"
 
 
 def write_artifact_manifest(

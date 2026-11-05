@@ -5,7 +5,7 @@ citation graph. It also explains which decisions deserve human review and what
 data leaves the computer during a run.
 
 Metadata and reference extraction support Gemini (the default), OpenAI, and
-Anthropic. OpenAI and Anthropic support is unreleased; install from a checkout.
+Anthropic. OpenAI and Anthropic support is available starting with version 0.3.0.
 PDF conversion, graph queries, and network analysis run locally.
 
 ## 1. Install
@@ -32,8 +32,8 @@ For the default Gemini backend, set its API key in the environment or in a
 export GOOGLE_API_KEY="your-key-here"
 ```
 
-To use OpenAI or Anthropic from a checkout, install `pip install -e ".[pdf,openai]"`
-or `pip install -e ".[pdf,anthropic]"`. Set `CITEGRAPH_PROVIDER=openai` or
+To use OpenAI or Anthropic, install `pip install "citegraph[pdf,openai]"`
+or `pip install "citegraph[pdf,anthropic]"`. Set `CITEGRAPH_PROVIDER=openai` or
 `CITEGRAPH_PROVIDER=anthropic`, choose a structured-output model with
 `CITEGRAPH_MODEL`, and set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. The same
 selection is available via `--provider` and `--model` on LLM commands and

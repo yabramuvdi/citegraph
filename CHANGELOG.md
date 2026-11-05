@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-05
 
 - Add OpenAI Responses and Anthropic Messages adapters with optional SDK extras,
   provider selection in Python/CLI/environment settings, and a common client contract.
