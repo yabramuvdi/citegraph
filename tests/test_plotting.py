@@ -613,3 +613,19 @@ def test_place_node_labels_rejects_a_label_for_a_node_it_has_no_position_for() -
     fig, ax = plt.subplots()
     with pytest.raises(KeyError, match="ghost"):
         plotting.place_node_labels(ax, {"ghost": "Nobody"}, {"a": (0.0, 0.0)})
+
+
+def test_box_node_puts_names_on_one_baseline_whatever_their_accents() -> None:
+    """A capital accent ('Ñ', 'Á') makes the line taller than 'Nopo'; centring
+    on that height would drop the accented name toward the line below it."""
+    fig, ax = plt.subplots()
+    ax.set_xlim(0, 100)
+    ax.set_ylim(-10, 10)
+    plotting.box_node(ax, 0, 0, ["Hugo Nopo", "Northwestern"], width=40, height=12)
+    plotting.box_node(ax, 50, 0, ["Hugo Ñopo", "Northwestern"], width=40, height=12)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    plain, plain_sub, accented, accented_sub = (t.get_window_extent(renderer) for t in ax.texts)
+    assert accented.y0 == pytest.approx(plain.y0, abs=0.5)
+    assert accented_sub.y0 == pytest.approx(plain_sub.y0, abs=0.5)

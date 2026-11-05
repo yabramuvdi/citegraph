@@ -842,6 +842,7 @@ def box_node(
     widths before any axes exist.
     """
     from matplotlib.patches import Rectangle
+    from matplotlib.transforms import offset_copy
 
     facecolor = INK if focus else (BOX_FILL if inside else NODE_OPEN)
     patch = Rectangle(
@@ -861,17 +862,32 @@ def box_node(
     head_color, sub_color = ("white", GRAYS[3]) if focus else (INK, GRAYS[1])
     step = height / (len(lines) + 1)
     for i, line in enumerate(lines):
+        size = base if i == 0 else sub
+        # Set on the baseline, dropped from the slot centre by a fixed 'lp' metric:
+        # va="center" centres each line's own height, so a capital accent ('Ñ',
+        # 'Á') pushed that name down into the line below it.
         ax.text(
             x + width / 2,
             y + height / 2 - (i + 1) * step,
             line,
             ha="center",
-            va="center",
+            va="baseline",
             color=head_color if i == 0 else sub_color,
-            fontsize=base if i == 0 else sub,
+            fontsize=size,
             zorder=zorder + 1,
+            transform=offset_copy(ax.transData, fig=ax.figure, y=-_baseline_drop(size),
+                                  units="points"),
         )
     return patch
+
+
+def _baseline_drop(fontsize: float) -> float:
+    """Points from a centred line's middle down to its baseline, for any text."""
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.textpath import TextPath
+
+    extents = TextPath((0, 0), "lp", size=fontsize, prop=FontProperties()).get_extents()
+    return (extents.y0 + extents.y1) / 2
 
 
 def flow_band(
