@@ -4,9 +4,9 @@ This guide walks a researcher from a folder of PDFs to a checked, queryable
 citation graph. It also explains which decisions deserve human review and what
 data leaves the computer during a run.
 
-Metadata and reference extraction currently support Google Gemini only.
-Support for additional LLM providers is planned. PDF conversion, graph queries,
-and network analysis run locally.
+Metadata and reference extraction support Gemini (the default), OpenAI, and
+Anthropic. OpenAI and Anthropic support is unreleased; install from a checkout.
+PDF conversion, graph queries, and network analysis run locally.
 
 ## 1. Install
 
@@ -25,12 +25,21 @@ Use the complete extra if you also want CrossRef and OpenAlex enrichment:
 python -m pip install "citegraph[all]"
 ```
 
-Set a Gemini API key in the environment or in a `.env` file in the directory
-where you run the command:
+For the default Gemini backend, set its API key in the environment or in a
+`.env` file in the directory where you run the command:
 
 ```bash
 export GOOGLE_API_KEY="your-key-here"
 ```
+
+To use OpenAI or Anthropic from a checkout, install `pip install -e ".[pdf,openai]"`
+or `pip install -e ".[pdf,anthropic]"`. Set `CITEGRAPH_PROVIDER=openai` or
+`CITEGRAPH_PROVIDER=anthropic`, choose a structured-output model with
+`CITEGRAPH_MODEL`, and set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. The same
+selection is available via `--provider` and `--model` on LLM commands and
+`Pipeline(provider=..., model=...)`. No Google key is needed for those providers.
+See the README's [provider configuration](../README.md#choose-an-llm-provider)
+for output budgets, timeout settings, cache behavior, and examples.
 
 Keep `.env` out of version control. The repository's `.gitignore` already does
 this for a source checkout.
@@ -75,7 +84,7 @@ Before continuing:
 Use `--ocr` instead of `--ocr-auto` only when every PDF should receive
 full-page OCR.
 
-### Estimate Gemini usage
+### Estimate LLM usage
 
 ```bash
 citegraph estimate --out "$OUT_DIR"
@@ -106,13 +115,13 @@ citegraph references --out "$OUT_DIR" --llm-concurrency 4
 ```
 
 The command prints a fresh estimate and asks for confirmation before making
-Gemini calls. Pass `--yes` only in automation where cost approval has already
+LLM calls. Pass `--yes` only in automation where cost approval has already
 happened.
 
 Review `citations_raw.csv` and these optional sidecars:
 
 - `references_failures.jsonl`: papers that failed extraction;
-- `papers_no_references.json`: successfully processed papers for which Gemini
+- `papers_no_references.json`: successfully processed papers for which the model
   returned no references.
 
 An absent warning sidecar means that check was clean.
@@ -186,7 +195,7 @@ For reproducible analysis, archive:
 
 - the exact input corpus or an immutable reference to it;
 - the entire output directory, including caches and review sidecars;
-- the citegraph version and Gemini model;
+- the citegraph version, LLM provider, and model;
 - any `author_aliases.csv` decisions;
 - the analysis code or notebook used after extraction.
 
@@ -263,8 +272,8 @@ The stages have different data boundaries:
 | Stage | Service | Data sent externally |
 | --- | --- | --- |
 | PDF conversion | Docling, local | None by citegraph; Docling may download model files |
-| Metadata extraction | Google Gemini | A bounded portion of converted paper text |
-| Reference extraction | Google Gemini | The detected bibliography section, or full markdown when no section is found |
+| Metadata extraction | Your chosen LLM provider | A bounded portion of converted paper text |
+| Reference extraction | Your chosen LLM provider | The detected bibliography section, or full markdown when no section is found |
 | Deduplication | Local | None |
 | Enrichment | CrossRef and OpenAlex | Extracted titles, authors, and query parameters |
 | Author normalization | Local | None |
@@ -283,7 +292,7 @@ directories, screenshots, or committed configuration.
 | --- | --- | --- |
 | Installing `[pdf]` or `[all]` spends a long time resolving | Docling's large dependency graph and citegraph's CLI compatibility pins | Upgrade pip, allow several minutes, and retry in a new virtual environment if resolution was interrupted |
 | `PDF conversion requires the 'pdf' extra` | Base package installed without Docling | Install `citegraph[pdf]` or `citegraph[all]` |
-| Gemini authentication error | Missing or invalid `GOOGLE_API_KEY` | Set the environment variable or correct `.env` |
+| LLM authentication error | Missing or invalid key for the selected provider | Set `GOOGLE_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` as appropriate |
 | `conversion_warnings.json` exists | PDF produced too little substantive text | Inspect markdown and rerun with `--ocr-auto` or `--ocr` |
 | A paper has no extracted references | Image-only input, unusual bibliography heading, or empty model response | Inspect markdown and `papers_no_references.json`; retry after correcting conversion |
 | One paper fails but the run continues | Per-paper failure isolation is working | Inspect the relevant failures JSONL and rerun; failed items are not cached |

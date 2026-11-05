@@ -1,4 +1,4 @@
-"""Extract the reference list of a paper using Gemini structured output."""
+"""Extract a paper's reference list using a structured LLM client."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 import re
 from pathlib import Path
 
-from citegraph.llm import GeminiClient, parse_structured_response, response_was_truncated
+from citegraph.llm import LLMClient, parse_structured_response, response_was_truncated
 from citegraph.schemas import Reference
 
 # Long bibliographies sometimes hit ``max_output_tokens``. When that happens we
@@ -243,7 +243,7 @@ Take into account the following:
 def extract_references_from_markdown(
     markdown_path: Path | str,
     *,
-    client: GeminiClient,
+    client: LLMClient,
     max_output_tokens: int | None = None,
     slice_to_references: bool = True,
 ) -> list[Reference]:
@@ -306,7 +306,7 @@ def extract_references_from_markdown(
 
 
 def _extract_section(
-    *, client: GeminiClient, section: str, label: str, initial_cap: int
+    *, client: LLMClient, section: str, label: str, initial_cap: int
 ) -> list[Reference]:
     """Run the extraction call for one references section, with truncation retry."""
     prompt = _build_prompt(section)
@@ -323,7 +323,8 @@ def _extract_section(
 
     if response_was_truncated(response):
         retry_cap = min(
-            initial_cap * _TRUNCATION_RETRY_MULTIPLIER, _TRUNCATION_HARD_CAP_TOKENS
+            initial_cap * _TRUNCATION_RETRY_MULTIPLIER,
+            getattr(client, "max_retry_output_tokens", _TRUNCATION_HARD_CAP_TOKENS),
         )
         if retry_cap > initial_cap:
             logger.warning(

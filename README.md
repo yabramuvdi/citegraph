@@ -6,19 +6,21 @@ LLM-assisted extraction.
 `citegraph` is for a researcher who has a corpus of papers — a literature
 review, a field's working papers, a lab's output — and wants to study it
 bibliometrically without hand-coding bibliographies. It converts each PDF to
-text locally, uses Google Gemini to extract the paper's metadata and its
+text locally, uses your chosen LLM provider to extract the paper's metadata and its
 full reference list, resolves every bibliographic record into one canonical
 **work**, and clusters author names across the corpus into canonical
 **authors**. On top of those tables it builds the author co-citation network
 and offers a test for whether a documented relationship between two people
 shows up in how the field cites them.
 
-**Current LLM support:** metadata and reference extraction use Google Gemini.
-Support for additional LLM providers is planned. PDF conversion, graph queries,
-and network analysis run locally.
+**LLM support:** Gemini (the default), OpenAI, and Anthropic. PDF conversion,
+graph queries, and network analysis run locally. OpenAI and Anthropic support is
+available on the development branch; install from a checkout until the next release.
 
 Everything lands as plain CSVs in one output directory, every stage is
-checkpointed, and nothing is sent anywhere until you have seen a cost estimate.
+checkpointed, and the staged workflow lets you review a cost estimate before
+extraction. `run` and `references` prompt for confirmation; `metadata` and the
+Python API do not.
 
 ## What you get
 
@@ -42,12 +44,10 @@ prominence fixed.
 ## What you need
 
 - **Python 3.11 or newer.**
-- **A Google Gemini API key.** The extraction stages call Gemini and nothing
-  else; there is no offline or alternative-provider path yet. Set
-  `GOOGLE_API_KEY` in the environment or in a `.env` file. The default model
-  is a lite tier; `citegraph estimate` prints the token count and dollar cost
-  for your corpus before any call is made, and the pipeline asks for
-  confirmation.
+- **An API key for your chosen provider:** `GOOGLE_API_KEY`, `OPENAI_API_KEY`,
+  or `ANTHROPIC_API_KEY`, set in the environment or a `.env` file. Gemini is
+  the default. OpenAI and Anthropic require an explicit model that supports
+  structured outputs. There is no local-model extraction backend yet.
 - **Disk and patience for the PDF extra.** PDF conversion uses
   [`docling`](https://github.com/DS4SD/docling), which pulls in a large machine
   learning stack. Install it once in a fresh virtual environment.
@@ -61,8 +61,8 @@ What leaves your computer:
 | Stage | Service | Data sent externally |
 | --- | --- | --- |
 | PDF conversion | Docling, local | None by citegraph; Docling may download model files |
-| Metadata extraction | Google Gemini | A bounded portion of each paper's converted text |
-| Reference extraction | Google Gemini | The detected bibliography section, or the full text when none is found |
+| Metadata extraction | Your chosen LLM provider | A bounded portion of each paper's converted text |
+| Reference extraction | Your chosen LLM provider | The detected bibliography section, or the full text when none is found |
 | Canonicalization, authors, co-citation | Local | None |
 | Enrichment (optional) | CrossRef and OpenAlex | Extracted titles, authors, and query parameters |
 
@@ -73,13 +73,65 @@ their disclosure to those services has been approved.
 
 ```bash
 pip install "citegraph[pdf]"           # PDF-to-graph pipeline
-pip install "citegraph[all]"           # + CrossRef/OpenAlex enrichment, networkx, plots, Excel export
+pip install "citegraph[all]"           # all providers, enrichment, networks, plots, Excel
 pip install citegraph                  # lightweight core for querying an existing output directory
 ```
 
 The base install is enough to load a finished run with `CitationGraph`; the
 `[pdf]` or `[all]` extra is required to start from PDFs. Install `[graph]` (or
 `[all]`) for the co-citation network, which returns a `networkx` graph.
+
+### Choose an LLM provider
+
+Gemini keeps working with the existing install and `GOOGLE_API_KEY`. For OpenAI
+or Anthropic, install the corresponding optional SDK from this checkout:
+
+```bash
+pip install -e ".[pdf,openai]"         # or ".[pdf,anthropic]"; ".[all]" installs both
+```
+
+| Provider | CLI flag | API key | Model |
+| --- | --- | --- | --- |
+| Gemini | `--provider gemini` | `GOOGLE_API_KEY` | Defaults to `gemini-3.1-flash-lite` |
+| OpenAI | `--provider openai` | `OPENAI_API_KEY` | Choose explicitly with `--model` |
+| Anthropic | `--provider anthropic` | `ANTHROPIC_API_KEY` | Choose explicitly with `--model` |
+
+`run`, `metadata`, `references`, and `estimate` accept both flags. You can also
+set `CITEGRAPH_PROVIDER` and `CITEGRAPH_MODEL` in the environment or `.env`:
+
+```bash
+export CITEGRAPH_PROVIDER=openai
+export CITEGRAPH_MODEL=gpt-4.1-mini    # choose a model available to your account
+export OPENAI_API_KEY="your-key-here"
+citegraph estimate --out ./out
+citegraph metadata --out ./out
+citegraph references --out ./out
+```
+
+For Anthropic, set `CITEGRAPH_PROVIDER=anthropic`, choose a compatible Claude
+model (for example `claude-sonnet-5-5`), and set `ANTHROPIC_API_KEY`.
+In Python, use `Pipeline(..., provider="openai", model="gpt-4.1-mini")`, or
+inject any client implementing `LLMClient`. Each stage sends text only to the
+selected LLM provider; it never falls back to a different provider.
+
+The adapters use OpenAI's [Responses API structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+and Anthropic's [Messages API structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+OpenAI responses are requested with `store=False`.
+
+New-provider reference budgets default to 8,000 output tokens, with one retry
+up to 16,000; metadata defaults to 4,096. Gemini retains 40,000 / 80,000 for
+references and 500 for metadata. Override these with `CITEGRAPH_MAX_OUTPUT_TOKENS`,
+`CITEGRAPH_MAX_RETRY_OUTPUT_TOKENS`, and `CITEGRAPH_METADATA_MAX_OUTPUT_TOKENS`,
+keeping each budget within your chosen model's supported output limit. Reasoning
+models may need a larger metadata budget. `CITEGRAPH_REQUEST_TIMEOUT_S` applies
+to all three adapters.
+
+Caches record the provider, model, and non-default output budgets. Changing
+these invalidates the affected extraction cache and can incur new charges;
+unlabelled legacy caches are treated as Gemini. Use separate output directories
+to compare providers without overwriting their extraction caches. Cost estimates
+show approximate tokens for every provider; dollar estimates are currently
+available only for known Gemini models. Unknown prices are reported as unknown.
 
 ## Quickstart
 
@@ -688,12 +740,13 @@ from your own corpus before trusting any extraction rate.
 | -------- | ------- | ------- |
 | `pdf_dir` | required | folder of input PDFs (`None` is allowed when resuming from a previous run's cache) |
 | `out_dir` | required | where outputs and checkpoints are written |
-| `model` | `gemini-3.1-flash-lite` | Gemini model id (or set `CITEGRAPH_MODEL`) |
+| `provider` | `gemini` | `gemini`, `openai`, or `anthropic` (or set `CITEGRAPH_PROVIDER`) |
+| `model` | `gemini-3.1-flash-lite` for Gemini | provider model id (or set `CITEGRAPH_MODEL`); required for OpenAI and Anthropic |
 | `enrich` | `False` | run a CrossRef/OpenAlex pass over the deduplicated references (requires the `[crossref]` or `[all]` extra) |
 | `enrich_config` | `EnrichConfig()` | tune the enrichment pass — see below |
 | `dedup_config` | `DedupConfig()` | tune the fuzzy dedup — see below |
 | `author_config` | `AuthorClusterConfig()` | tune author clustering — see below |
-| `llm_concurrency` | `4` | maximum concurrent Gemini extraction calls for metadata/references (or set `CITEGRAPH_LLM_CONCURRENCY`). CLI flag on LLM stages: `--llm-concurrency` |
+| `llm_concurrency` | `4` | maximum concurrent LLM extraction calls for metadata/references (or set `CITEGRAPH_LLM_CONCURRENCY`). CLI flag on LLM stages: `--llm-concurrency` |
 | `overwrite_markdown` | `False` | re-run docling even when a cached `.md` exists (PDF conversion requires the `[pdf]` or `[all]` extra) |
 | `recursive` | `False` | walk subdirectories of `pdf_dir`. Cache filenames are disambiguated by relative path (e.g. `journal_X/foo.pdf` → `journal_X__foo.md`); a clear error is raised if two PDFs would still collide. CLI flag: `--recursive` / `-r` |
 | `ocr` | `False` | OCR mode: `False` disables OCR, `"auto"` retries image-only outputs with OCR, and `True` forces full-page OCR for every PDF. CLI flags: `--ocr-auto` / `--ocr` |

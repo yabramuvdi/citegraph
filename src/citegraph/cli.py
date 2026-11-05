@@ -22,7 +22,7 @@ import typer
 from rich.logging import RichHandler
 
 from citegraph.authors import AuthorClusterConfig
-from citegraph.config import get_settings
+from citegraph.config import LLMProvider, get_settings, resolve_model
 from citegraph.dedup import DedupConfig
 from citegraph.enrich import EnrichConfig
 from citegraph.io import CITATION_COLUMNS, OutLayout, read_stage_csv
@@ -49,6 +49,14 @@ def _configure_logging(verbose: bool) -> None:
 # Typer option defaults come from the config dataclass so the CLI and the
 # library surface can't drift apart.
 _DEDUP_DEFAULTS = DedupConfig()
+
+
+def _selected_model(provider: LLMProvider | None, model: str | None) -> str:
+    settings = get_settings()
+    try:
+        return resolve_model(provider or settings.citegraph_provider, model, settings)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--model") from exc
 
 
 def _dedup_config(
@@ -207,7 +215,8 @@ def run(
         "--openalex-api-key",
         help="OpenAlex API key (default: OPENALEX_API_KEY env var / .env).",
     ),
-    model: str | None = typer.Option(None, "--model", help="Gemini model id."),
+    model: str | None = typer.Option(None, "--model", help="Model id for the selected LLM provider."),
+    provider: LLMProvider | None = typer.Option(None, "--provider", help="LLM provider (default: CITEGRAPH_PROVIDER or gemini)."),
     threshold: float = typer.Option(
         _DEDUP_DEFAULTS.threshold, "--threshold", help="Dedup similarity threshold."
     ),
@@ -219,7 +228,7 @@ def run(
         None,
         "--llm-concurrency",
         min=1,
-        help="Maximum concurrent Gemini extraction calls (default: CITEGRAPH_LLM_CONCURRENCY or 4).",
+        help="Maximum concurrent LLM extraction calls (default: CITEGRAPH_LLM_CONCURRENCY or 4).",
     ),
     overwrite_markdown: bool = typer.Option(
         False, "--overwrite-markdown", help="Re-run docling even if cached."
@@ -262,7 +271,8 @@ def run(
     pipeline = Pipeline(
         pdf_dir=pdf_dir,
         out_dir=out,
-        model=model,
+        model=_selected_model(provider, model),
+        provider=provider,
         enrich=enrich,
         enrich_config=ecfg,
         dedup_config=cfg,
@@ -330,7 +340,8 @@ def run(
 @app.command()
 def estimate(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
-    model: str | None = typer.Option(None, "--model", help="Gemini model id."),
+    model: str | None = typer.Option(None, "--model", help="Model id for the selected LLM provider."),
+    provider: LLMProvider | None = typer.Option(None, "--provider", help="LLM provider (default: CITEGRAPH_PROVIDER or gemini)."),
 ) -> None:
     """Estimate the LLM token cost of extracting metadata and references.
 
@@ -338,7 +349,7 @@ def estimate(
     ``citegraph convert`` first) and reports how many tokens stages 2 and 3
     would consume, broken down by cached vs. uncached files.
     """
-    pipeline = Pipeline(pdf_dir=None, out_dir=out, model=model)
+    pipeline = Pipeline(pdf_dir=None, out_dir=out, model=_selected_model(provider, model), provider=provider)
     try:
         est = pipeline.estimate_extraction_cost()
     except StageNotReadyError as e:
@@ -393,11 +404,12 @@ def convert(
 def metadata(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
     model: str | None = typer.Option(None, "--model"),
+    provider: LLMProvider | None = typer.Option(None, "--provider", help="LLM provider (default: CITEGRAPH_PROVIDER or gemini)."),
     llm_concurrency: int | None = typer.Option(
         None,
         "--llm-concurrency",
         min=1,
-        help="Maximum concurrent Gemini metadata extraction calls.",
+        help="Maximum concurrent LLM metadata extraction calls.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -406,7 +418,8 @@ def metadata(
     pipeline = Pipeline(
         pdf_dir=None,
         out_dir=out,
-        model=model,
+        model=_selected_model(provider, model),
+        provider=provider,
         llm_concurrency=llm_concurrency,
     )
 
@@ -432,11 +445,12 @@ def metadata(
 def references(
     out: Path = typer.Option(Path("./out"), "--out", "-o"),
     model: str | None = typer.Option(None, "--model"),
+    provider: LLMProvider | None = typer.Option(None, "--provider", help="LLM provider (default: CITEGRAPH_PROVIDER or gemini)."),
     llm_concurrency: int | None = typer.Option(
         None,
         "--llm-concurrency",
         min=1,
-        help="Maximum concurrent Gemini reference extraction calls.",
+        help="Maximum concurrent LLM reference extraction calls.",
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip cost-estimate confirmation."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
@@ -446,7 +460,8 @@ def references(
     pipeline = Pipeline(
         pdf_dir=None,
         out_dir=out,
-        model=model,
+        model=_selected_model(provider, model),
+        provider=provider,
         llm_concurrency=llm_concurrency,
     )
 

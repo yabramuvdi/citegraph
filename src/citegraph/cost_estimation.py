@@ -1,6 +1,6 @@
 """Pre-flight cost estimation for the LLM extraction stages.
 
-Reads the on-disk markdown files (stage-1 output) and estimates Gemini token
+Reads the on-disk markdown files (stage-1 output) and estimates LLM token
 usage for stages 2 (metadata) and 3 (references) before making any API calls.
 Already-cached files are excluded from the estimate.
 
@@ -77,6 +77,7 @@ class ExtractionEstimate:
 
     model: str
     files: list[FileEstimate] = field(default_factory=list)
+    provider: str = "gemini"
 
     @property
     def n_files(self) -> int:
@@ -106,7 +107,7 @@ class ExtractionEstimate:
 
     def cost_usd(self) -> tuple[float, float] | None:
         """Return ``(input_cost_usd, output_cost_usd)``, or ``None`` for unknown models."""
-        pricing = _PRICING.get(self.model)
+        pricing = _PRICING.get(self.model) if self.provider == "gemini" else None
         if pricing is None:
             return None
         in_price, out_price = pricing
@@ -128,13 +129,14 @@ class ExtractionEstimate:
         )
 
         lines = [
+            f"Provider:              {self.provider}",
             f"Model:                 {self.model}",
             f"Files to process:      {self.n_references_to_process}{cached_str}",
             f"Est. input tokens:     ~{refs_input:,}",
             f"Est. output tokens:    ~{refs_output:,}",
         ]
 
-        pricing = _PRICING.get(self.model)
+        pricing = _PRICING.get(self.model) if self.provider == "gemini" else None
         if pricing is not None:
             in_price, out_price = pricing
             in_cost = refs_input * in_price / 1_000_000
@@ -160,6 +162,7 @@ class ExtractionEstimate:
             return f"  ({n} cached)" if n else ""
 
         lines = [
+            f"Provider:              {self.provider}",
             f"Model:                 {self.model}",
             f"Files found:           {self.n_files}",
             f"Metadata to process:   {self.n_metadata_to_process}{_cached(n_meta_cached)}",
@@ -188,6 +191,7 @@ def estimate_extraction_cost(
     layout: OutLayout,
     model: str,
     max_input_chars_metadata: int = DEFAULT_METADATA_INPUT_CHARS,
+    *, provider: str = "gemini", budgets: dict[str, int] | None = None,
 ) -> ExtractionEstimate:
     """Estimate LLM token usage for stages 2 and 3 without making any API calls.
 
@@ -207,9 +211,9 @@ def estimate_extraction_cost(
         )
 
     file_estimates: list[FileEstimate] = []
-    metadata_recipe = extraction_recipe(model)
+    metadata_recipe = extraction_recipe(model, provider=provider, budgets=budgets)
     metadata_recipe['max_input_chars'] = max_input_chars_metadata
-    references_recipe = extraction_recipe(model, references=True)
+    references_recipe = extraction_recipe(model, references=True, provider=provider, budgets=budgets)
     for md in md_paths:
         metadata_cache = layout.metadata_dir / f"{md.stem}.json"
         references_cache = layout.references_dir / f"{md.stem}.json"
@@ -256,4 +260,4 @@ def estimate_extraction_cost(
             )
         )
 
-    return ExtractionEstimate(model=model, files=file_estimates)
+    return ExtractionEstimate(model=model, files=file_estimates, provider=provider)

@@ -39,7 +39,7 @@ from citegraph.authors import (
     load_external_ids,
     normalize_authors,
 )
-from citegraph.config import get_settings
+from citegraph.config import LLMProvider, get_settings, output_budgets, resolve_model
 from citegraph.dedup import DedupConfig, canonicalize_works
 from citegraph.enrich import EnrichConfig
 from citegraph.extract_metadata import extract_metadata_from_markdown, metadata_to_record
@@ -74,7 +74,7 @@ from citegraph.io import (
     write_pydantic,
     write_pydantic_list,
 )
-from citegraph.llm import GeminiClient
+from citegraph.llm import LLMClient, create_llm_client
 from citegraph.pdf_to_markdown import OCRMode, convert_directory
 from citegraph.reports import (
     check_conversion_quality,
@@ -117,17 +117,29 @@ class StageNotReadyError(RuntimeError):
     """Raised when a stage is invoked but its upstream artifact is missing."""
 
 
-def extraction_recipe(model: str, *, references: bool = False) -> dict:
+def extraction_recipe(
+    model: str, *, references: bool = False, provider: str = "gemini",
+    budgets: dict[str, int] | None = None,
+) -> dict:
     """Shared cache contract for execution and estimates; bump version for slicer changes."""
     from citegraph import extract_metadata, extract_references
 
     module = extract_references if references else extract_metadata
     schema = Reference if references else PaperMetadata
-    return {
-        'version': 1, 'model': model, 'schema': schema.model_json_schema(),
+    recipe = {
+        'version': 1, 'provider': provider, 'model': model, 'schema': schema.model_json_schema(),
         'prompt': module._build_prompt(''), 'system_instruction': module.SYSTEM_INSTRUCTION,
         'max_input_chars': None if references else extract_metadata.DEFAULT_METADATA_INPUT_CHARS,
     }
+    budgets = budgets or output_budgets(provider, get_settings())
+    generation = (
+        {"max_output_tokens": budgets["references"], "max_retry_output_tokens": budgets["retry"]}
+        if references else {"max_output_tokens": budgets["metadata"]}
+    )
+    legacy = {"max_output_tokens": 40_000, "max_retry_output_tokens": 80_000} if references else {"max_output_tokens": 500}
+    if provider != "gemini" or generation != legacy:
+        recipe["generation"] = generation
+    return recipe
 
 
 @dataclass
@@ -151,7 +163,8 @@ class Pipeline:
         Folder where outputs and checkpoints will be written. Created if
         it doesn't exist.
     model:
-        Gemini model identifier. Defaults to the value in settings.
+        Model identifier for the selected provider. Gemini has a default;
+        OpenAI and Anthropic require an explicit model for LLM stages.
     enrich:
         If ``True`` and the ``[crossref]`` extra is installed, run a
         CrossRef/OpenAlex enrichment pass over all canonical works.
@@ -164,7 +177,10 @@ class Pipeline:
         If ``True`` (default), render a rich progress bar during the
         PDF -> markdown stage. Disable for non-interactive runs.
     client:
-        Optional pre-built :class:`GeminiClient` (useful for tests).
+        Optional pre-built client implementing :class:`citegraph.llm.LLMClient`.
+    provider:
+        ``gemini`` (default), ``openai``, or ``anthropic``. Non-Gemini providers
+        require an explicit model. Also configurable via ``CITEGRAPH_PROVIDER``.
     """
 
     def __init__(
@@ -173,6 +189,7 @@ class Pipeline:
         out_dir: str | Path,
         *,
         model: str | None = None,
+        provider: str | None = None,
         enrich: bool = False,
         enrich_config: EnrichConfig | None = None,
         dedup_config: DedupConfig | None = None,
@@ -182,7 +199,7 @@ class Pipeline:
         ocr: OCRMode = False,
         llm_concurrency: int | None = None,
         show_progress: bool = True,
-        client: GeminiClient | None = None,
+        client: LLMClient | None = None,
     ) -> None:
         self.pdf_dir = Path(pdf_dir) if pdf_dir is not None else None
         self.layout = OutLayout(Path(out_dir))
@@ -202,22 +219,49 @@ class Pipeline:
         if self.llm_concurrency < 1:
             raise ValueError("llm_concurrency must be >= 1")
         self.show_progress = show_progress
-        self._client_kwargs = {"model": model} if model else {}
+        settings = get_settings()
+        if client is not None:
+            selected = getattr(client, "provider", "gemini")
+            if provider is not None and provider != selected:
+                raise ValueError("provider must match the supplied client's provider.")
+            selected_model = client.model
+        else:
+            selected = LLMProvider(provider or settings.citegraph_provider).value
+            selected_model = model or settings.citegraph_model
+        self._client_kwargs = {"provider": selected, "model": selected_model}
         self._client = client
         # Filled by deduplicate(); read by run() for the run summary.
         self._canonicalize_stats: dict = {}
 
     @property
-    def client(self) -> GeminiClient:
+    def client(self) -> LLMClient:
         if self._client is None:
-            self._client = GeminiClient(**self._client_kwargs)
+            self._client = create_llm_client(**self._client_kwargs)
         return self._client
+
+    @property
+    def provider(self) -> str:
+        if self._client is not None:
+            return getattr(self._client, "provider", "gemini")
+        return self._client_kwargs["provider"]
+
+    @property
+    def _output_budgets(self) -> dict[str, int]:
+        budgets = output_budgets(self.provider, get_settings())
+        if self._client is not None:
+            # Match extractor fallbacks for third-party clients exposing only the protocol.
+            budgets = {
+                "references": self._client.default_max_output_tokens,
+                "retry": getattr(self._client, "max_retry_output_tokens", 80_000),
+                "metadata": getattr(self._client, "metadata_max_output_tokens", 500),
+            }
+        return budgets
 
     @property
     def model(self) -> str:
         if self._client is not None:
             return self._client.model
-        return self._client_kwargs.get("model") or get_settings().citegraph_model
+        return resolve_model(self.provider, self._client_kwargs["model"], get_settings())
 
     # ------------------------------------------------------------------
     # Disk loaders (used by stages when called with no in-memory input)
@@ -287,7 +331,7 @@ class Pipeline:
         if markdown_paths is None:
             markdown_paths = self._load_markdown_paths()
 
-        recipe = extraction_recipe(self.model)
+        recipe = extraction_recipe(self.model, provider=self.provider, budgets=self._output_budgets)
 
         def _process_one(md: Path) -> tuple[dict | None, PaperFailure | None]:
             cache = self.layout.metadata_dir / f"{md.stem}.json"
@@ -410,7 +454,7 @@ class Pipeline:
                 continue
             valid_items.append((idx, md, citing_id))
 
-        recipe = extraction_recipe(self.model, references=True)
+        recipe = extraction_recipe(self.model, references=True, provider=self.provider, budgets=self._output_budgets)
 
         def _process_one(md: Path, citing_id: str) -> tuple[list[dict], PaperFailure | None]:
             cache = self.layout.references_dir / f"{md.stem}.json"
@@ -919,7 +963,7 @@ class Pipeline:
         """
         from citegraph.cost_estimation import estimate_extraction_cost as _estimate
 
-        return _estimate(layout=self.layout, model=self.model)
+        return _estimate(layout=self.layout, model=self.model, provider=self.provider, budgets=self._output_budgets)
 
     # ------------------------------------------------------------------
     # Top level
@@ -963,6 +1007,7 @@ class Pipeline:
             "n_journal_alias_warnings": count_journal_alias_warnings(
                 self.layout.journal_alias_warnings_json
             ),
+            "provider": self.provider,
             "model": self.model,
             "enrich": self.enrich,
             "dedup_config": self.dedup_config.__dict__,
@@ -983,6 +1028,7 @@ class Pipeline:
                 "run_summary": run_summary_path,
             },
             config={
+                "provider": self.provider,
                 "model": self.model,
                 "enrich": self.enrich,
                 "dedup_config": self.dedup_config.__dict__,
