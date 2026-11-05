@@ -11,6 +11,8 @@
   budgets change. Retain existing Gemini caches and default behavior.
 - Report unknown dollar costs explicitly for OpenAI and Anthropic. New adapters
   are covered by offline SDK/HTTP tests; live extraction accuracy is not yet evaluated.
+- `box_node` sets each line on a fixed baseline, so a name with a capital accent
+  ('Ñ', 'Á') no longer drops toward the line below it.
 
 ## 0.2.1 — 2026-11-01
 
