@@ -293,6 +293,20 @@ def _cache_provenance(path: Path) -> dict[str, Any] | None:
     return data
 
 
+def _recipes_match(saved: Any, requested: dict[str, Any] | None) -> bool:
+    if requested is None:
+        return True
+    if saved is None:
+        return requested.get("provider", "gemini") == "gemini"
+    if not isinstance(saved, dict):
+        return False
+    # Extraction caches written before provider selection were all Gemini.
+    return (
+        {**saved, "provider": saved.get("provider", "gemini")}
+        == {**requested, "provider": requested.get("provider", "gemini")}
+    )
+
+
 def cache_is_current(
     path: Path, input_path: Path, *, recipe: dict[str, Any] | None = None
 ) -> bool:
@@ -300,18 +314,16 @@ def cache_is_current(
     if not path.exists():
         return False
     sidecar = path.with_suffix(path.suffix + ".sha256")
+    provenance = _cache_provenance(path)
+    if recipe and recipe.get("provider", "gemini") != "gemini" and provenance is None:
+        return False
     if not sidecar.exists():
         return True
-    provenance = _cache_provenance(path)
     if provenance is not None:
         return (
             provenance["input_sha256"] == cache_input_fingerprint(input_path)
             and provenance["output_sha256"] == cache_input_fingerprint(path)
-            and (
-                recipe is None
-                or "recipe" not in provenance
-                or provenance["recipe"] == recipe
-            )
+            and _recipes_match(provenance.get("recipe"), recipe)
         )
     try:
         return (
@@ -383,7 +395,7 @@ def read_pydantic_cache(
         if (
             provenance is None
             or provenance["input_sha256"] != input_hash
-            or (recipe is not None and provenance.get("recipe") != recipe)
+            or not _recipes_match(provenance.get("recipe"), recipe)
         ):
             continue
         try:

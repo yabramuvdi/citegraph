@@ -1,6 +1,6 @@
 """Build and analyze citation and author networks from academic PDFs.
 
-LLM-assisted metadata and reference extraction currently uses Google Gemini.
+LLM-assisted extraction supports Gemini, OpenAI, and Anthropic.
 
 See :class:`citegraph.Pipeline` for the high-level entry point::
 
@@ -21,6 +21,7 @@ from citegraph.authors import (
 )
 from citegraph.cost_estimation import ExtractionEstimate
 from citegraph.graph import CitationGraph
+from citegraph.llm import AnthropicClient, GeminiClient, LLMClient, LLMResponse, OpenAIClient
 from citegraph.pipeline import Pipeline
 from citegraph.schemas import (
     CitationLink,
@@ -41,6 +42,11 @@ __all__ = [
     "ParsedAuthor",
     "normalize_authors",
     "parse_author",
+    "LLMClient",
+    "LLMResponse",
+    "GeminiClient",
+    "OpenAIClient",
+    "AnthropicClient",
 ]
 
 __version__ = "0.2.1"

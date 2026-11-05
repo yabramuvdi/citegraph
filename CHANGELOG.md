@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Add OpenAI Responses and Anthropic Messages adapters with optional SDK extras,
+  provider selection in Python/CLI/environment settings, and a common client contract.
+- Normalize structured outputs, refusals, truncated responses, and transient-error
+  retries; apply request timeouts to Gemini as well as the new providers. Require
+  `google-genai>=1.50` for the timeout and retry options.
+- Record provider/model provenance and invalidate caches when providers or output
+  budgets change. Retain existing Gemini caches and default behavior.
+- Report unknown dollar costs explicitly for OpenAI and Anthropic. New adapters
+  are covered by offline SDK/HTTP tests; live extraction accuracy is not yet evaluated.
+
 ## 0.2.1 — 2026-11-01
 
 - Describe the library as building and analyzing citation and author networks

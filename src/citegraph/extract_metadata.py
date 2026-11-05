@@ -1,4 +1,4 @@
-"""Extract bibliographic metadata of source papers using Gemini."""
+"""Extract bibliographic metadata of source papers using a structured LLM client."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from citegraph.ids import make_work_id
-from citegraph.llm import GeminiClient, LLMError, parse_structured_response
+from citegraph.llm import LLMClient, LLMError, parse_structured_response, response_was_truncated
 from citegraph.schemas import PaperMetadata
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ Here is the paper content:
 def extract_metadata_from_markdown(
     markdown_path: Path | str,
     *,
-    client: GeminiClient,
+    client: LLMClient,
     max_input_chars: int = DEFAULT_METADATA_INPUT_CHARS,
 ) -> PaperMetadata:
     """Extract :class:`PaperMetadata` from a single markdown-rendered paper.
@@ -63,8 +63,10 @@ def extract_metadata_from_markdown(
         prompt=_build_prompt(content),
         response_schema=PaperMetadata,
         system_instruction=SYSTEM_INSTRUCTION,
-        max_output_tokens=500,
+        max_output_tokens=getattr(client, "metadata_max_output_tokens", 500),
     )
+    if response_was_truncated(response):
+        raise LLMError(f"Metadata response for {markdown_path.name} was truncated; increase the metadata output budget.")
     parsed = parse_structured_response(response, schema=PaperMetadata)
     if not isinstance(parsed, PaperMetadata):
         raise LLMError(

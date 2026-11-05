@@ -3,7 +3,11 @@ set -euo pipefail
 
 PDF_DIR="${1:-${PDF_DIR:-}}"
 OUT_DIR="${OUT_DIR:-/tmp/citegraph_smoke_out}"
-MODEL="${MODEL:-gemini-3.1-flash-lite}"
+PROVIDER="${PROVIDER:-${CITEGRAPH_PROVIDER:-}}"
+MODEL="${MODEL:-${CITEGRAPH_MODEL:-}}"
+LLM_ARGS=(--out "$OUT_DIR")
+if [[ -n "$PROVIDER" ]]; then LLM_ARGS+=(--provider "$PROVIDER"); fi
+if [[ -n "$MODEL" ]]; then LLM_ARGS+=(--model "$MODEL"); fi
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-4}"
 ENRICH_CONTACT="${ENRICH_CONTACT:-}"
 ENRICH_MAX_WORKERS="${ENRICH_MAX_WORKERS:-2}"
@@ -15,6 +19,7 @@ Usage: scripts/smoke_test.sh /path/to/pdf-folder
 
 Environment overrides:
   OUT_DIR=/tmp/citegraph_smoke_out
+  PROVIDER=gemini  # or openai / anthropic, with an explicit MODEL
   MODEL=gemini-3.1-flash-lite
   LLM_CONCURRENCY=4
   ENRICH_CONTACT=you@example.com
@@ -49,12 +54,13 @@ fi
 
 printf 'Smoke test input:  %s\n' "$PDF_DIR"
 printf 'Smoke test output: %s\n' "$OUT_DIR"
-printf 'Model:             %s\n' "$MODEL"
+printf 'Provider:          %s\n' "${PROVIDER:-from citegraph settings}"
+printf 'Model:             %s\n' "${MODEL:-from citegraph settings}"
 
 run_step citegraph convert "$PDF_DIR" --out "$OUT_DIR" --recursive --ocr-auto --verbose
-run_step citegraph estimate --out "$OUT_DIR" --model "$MODEL"
-run_step citegraph metadata --out "$OUT_DIR" --model "$MODEL" --llm-concurrency "$LLM_CONCURRENCY"
-run_step citegraph references --out "$OUT_DIR" --model "$MODEL" --llm-concurrency "$LLM_CONCURRENCY" --yes
+run_step citegraph estimate "${LLM_ARGS[@]}"
+run_step citegraph metadata "${LLM_ARGS[@]}" --llm-concurrency "$LLM_CONCURRENCY"
+run_step citegraph references "${LLM_ARGS[@]}" --llm-concurrency "$LLM_CONCURRENCY" --yes
 run_step citegraph dedup --out "$OUT_DIR"
 run_step citegraph enrich --out "$OUT_DIR" \
   --enrich-contact "$ENRICH_CONTACT" \
